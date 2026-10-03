@@ -1,0 +1,11 @@
+{
+  "name": "NW OS — Company Operating System",
+  "description": "Internal operating system for Malaysian construction, carpentry, manufacturing, renovation, and project management with exception-based Owner management, drawing revision control, and AI workflow intelligence.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

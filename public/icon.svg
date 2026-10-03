@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)"/>
+  
+  <!-- Subtle Architectural Grid Pattern -->
+  <path d="M64 128 H448 M64 192 H448 M64 256 H448 M64 320 H448 M64 384 H448" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 8" opacity="0.4"/>
+  <path d="M128 64 V448 M192 64 V448 M256 64 V448 M320 64 V448 M384 64 V448" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 8" opacity="0.4"/>
+  
+  <!-- Outer Structural Precision Hexagon Frame -->
+  <polygon points="256,92 396,172 396,340 256,420 116,340 116,172" fill="none" stroke="#475569" stroke-width="6" stroke-linejoin="round"/>
+  
+  <!-- NW Stylized Modern Joinery Monogram -->
+  <!-- Left Leg 'N' -->
+  <path d="M164 336 V180 H204 L276 304 V180 H308" fill="none" stroke="url(#goldGrad)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Overlapping 'W' Interlock -->
+  <path d="M228 336 L276 216 L324 336 L372 216" fill="none" stroke="url(#cyanGrad)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Precision Caliper / Measurement Node -->
+  <circle cx="256" cy="92" r="9" fill="#f59e0b" />
+  <circle cx="396" cy="340" r="9" fill="#38bdf8" />
+  <circle cx="116" cy="340" r="9" fill="#f59e0b" />
+  
+  <!-- Baseline Brand Label -->
+  <text x="256" y="465" text-anchor="middle" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="700" letter-spacing="6">NW OS</text>
+</svg>

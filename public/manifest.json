@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "NW OS — Company Operating System",
+  "short_name": "NW OS",
+  "description": "Internal operating system for Malaysian construction, carpentry, manufacturing, and renovation with exception management.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
