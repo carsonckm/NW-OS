@@ -526,7 +526,7 @@ const ProfitabilitySection: React.FC<{
           </div>
 
           <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-300">
-            <span className="text-xs font-bold text-amber-900 block">Net Expected Gross Profit</span>
+            <span className="text-xs font-bold text-amber-900 block">Expected Project Gross Profit</span>
             {canSeeMargins ? (
               <>
                 <div className="text-lg font-black text-slate-950 mt-1">
