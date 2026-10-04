@@ -49,6 +49,10 @@ const EXECUTION_FIELDS = new Set([
   'photos',
   'item_photos',
   'production_status',
+  // Site execution states, set by the delivery receiving and installation screens. The
+  // server still refuses completion while a site QC failure is open.
+  'delivery_status',
+  'installation_status',
   'updated_at',
 ]);
 const FINANCIAL_FIELDS: Partial<Record<CoreCollection, string[]>> = { projects: ['contract_value'] };

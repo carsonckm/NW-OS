@@ -204,11 +204,19 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       expect(item.source_drawing_revision_id).toBe('rev-3');
     });
 
-    it('needs drawings.approve to approve a revision', async () => {
+    it('lets uploaders record the client issue, but only drawings.approve releases an NW drawing for production', async () => {
       const drawing = (await owner().get('/api/drawings/dwg-2').expect(200)).body;
       const approve = { ...drawing, revisions: drawing.revisions.map((r: Row) => (r.id === 'rev-202' ? { ...r, approved_status: 'Approved' } : r)) };
-      expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(403);
-      expect((await owner().post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(200);
+      expect((await as['Site Supervisor'].post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(403);
+      expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(200);
+      const nw = { id: 'nwd-202', drawing_number: 'A-104-NW', revision: 'Rev 1', title: 'NW A-104', linked_client_drawing_id: 'dwg-2', linked_client_revision: 'Rev 2', status: 'Draft', approved_for_production: false };
+      const withNw = (n: Row) => ({ ...approve, nw_production_drawings: [n] });
+      expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [withNw({ ...nw, status: 'Approved', approved_for_production: true })] } })).status).toBe(403);
+      await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [withNw(nw)] } }).expect(200);
+      expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [withNw({ ...nw, status: 'Approved', approved_for_production: true })] } })).status).toBe(403);
+      await owner().post('/api/data/sync').send({ upserts: { drawings: [withNw({ ...nw, status: 'Approved', approved_for_production: true })] } }).expect(200);
+      const stored = (await db.pool.query(`SELECT approval_status, approved_for_production, linked_client_revision_id FROM drawing_revisions WHERE id = 'nwd-202'`)).rows[0];
+      expect(stored).toEqual({ approval_status: 'Approved', approved_for_production: true, linked_client_revision_id: 'rev-202' });
     });
   });
 

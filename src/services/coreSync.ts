@@ -168,6 +168,10 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     setState((s) => ({ ...s, status: 'syncing' }));
     try {
       const failures = await write(changes, next);
+      // A refused change must not stay pending and slip through on a later save (e.g. once a
+      // blocking rule no longer applies): show the database's state again, unless the user
+      // has edited since this save started (the next save will then run anyway).
+      if (failures.length && diffCoreData(next, latest.current).count === 0) apply(await dataApi.snapshot());
       setState((s) =>
         failures.length
           ? { ...s, status: 'error', message: `${failures.length} change(s) not saved: ${failures[0]}` }

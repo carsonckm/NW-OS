@@ -33,7 +33,7 @@ overwritten with the signed-in user.
 
 Within scope, each action still needs its permission, e.g. `projects.create`,
 `work_items.edit`. A user with only `work_items.complete` (site supervisor, contractor) may
-change status, progress, notes and photos of work items, nothing else. Contract values are
+change status, progress, delivery and installation status, notes and photos of work items, nothing else. Contract values are
 removed from responses (and ignored on writes) for roles that may not see project
 financials. Records outside a user's scope answer **404**, so their existence isn't revealed;
 a missing permission answers **403**; no session answers **401**.

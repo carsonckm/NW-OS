@@ -264,6 +264,9 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       const current = (await contractor().get('/api/work-items/item-2')).body;
       const res = await contractor().post('/api/core/sync').send({ upserts: { workItems: [{ ...current, progress_percent: 55 }] } });
       expect(res.status).toBe(200);
+      const site = await contractor().patch('/api/work-items/item-2').send({ installation_status: 'In Progress', delivery_status: 'Received / Confirmed' });
+      expect(site.status).toBe(200);
+      expect((await contractor().patch('/api/work-items/item-2').send({ drawing_revision: 'Rev 9' })).status).toBe(403);
     });
   });
 

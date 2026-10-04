@@ -1673,8 +1673,8 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
           ? {
               ...v,
               status: approvedByClient ? 'Approved' : 'Client Approval',
-              approved_by_owner: currentUser.name,
-              approved_by_client: approvedByClient ? 'Michelle Tan (Client)' : undefined,
+              approved_by_owner: approvedByClient ? v.approved_by_owner : currentUser.name,
+              approved_by_client: approvedByClient ? currentUser.name : undefined,
             }
           : v
       )

@@ -73,6 +73,15 @@ function statusOfNw(rev: Row) {
   return String(rev.status ?? 'Draft');
 }
 
+/**
+ * A client revision's "Approved" status records the issue the client/designer released, so
+ * whoever may upload client drawings may record it. Approving an NW production drawing
+ * (what releases work to production) needs drawings.approve.
+ */
+const approvePermission = (isClient: boolean) => (isClient ? 'drawings.upload' : 'drawings.approve');
+const canApprove = (h: HookContext, isClient: boolean) =>
+  h.ctx.can('drawings.approve') || (isClient && h.ctx.can('drawings.upload'));
+
 async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' | 'nw_production', rev: Row) {
   if (typeof rev.id !== 'string' || !rev.id) throw new ValidationError('Drawing revision needs an id');
   const isClient = kind === 'client';
@@ -87,8 +96,8 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
     if (!importing) {
       if (isClient && !h.ctx.can('drawings.upload')) throw new ForbiddenError('Missing permission: drawings.upload');
       if (!isClient && !h.ctx.can('drawings.create_production')) throw new ForbiddenError('Missing permission: drawings.create_production');
-      if ((status === 'Approved' || approvedForProduction) && !h.ctx.can('drawings.approve')) {
-        throw new ForbiddenError('A new revision cannot be uploaded as approved without drawings.approve');
+      if ((status === 'Approved' || approvedForProduction) && !canApprove(h, isClient)) {
+        throw new ForbiddenError(`A new revision cannot be uploaded as approved without ${approvePermission(isClient)}`);
       }
     }
     let linked: string | null = null;
@@ -123,7 +132,7 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
   }
   const approving =
     (status === 'Approved' && existing.approval_status !== 'Approved') || (approvedForProduction && !existing.approved_for_production);
-  if (approving && !importing && !h.ctx.can('drawings.approve')) throw new ForbiddenError('Missing permission: drawings.approve');
+  if (approving && !importing && !canApprove(h, isClient)) throw new ForbiddenError(`Missing permission: ${approvePermission(isClient)}`);
   if (existing.approval_status === 'Superseded' && status !== 'Superseded') {
     throw new ForbiddenError(`Revision ${rev.id} is superseded and cannot be reinstated`);
   }

@@ -187,5 +187,7 @@ describe('useCoreDatabaseSync', () => {
     );
     expect(singleItemWrite).toBeDefined();
     expect(hook.result.current.message).toMatch(/1 change\(s\) not saved: delete clients/);
+    // The refused delete isn't left pending: the database's state is loaded again.
+    expect(calls.filter((c) => c.url === '/api/data/snapshot')).toHaveLength(2);
   });
 });
