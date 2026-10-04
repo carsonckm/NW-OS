@@ -15,7 +15,9 @@
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/db-migrate.ts",
     "db:status": "tsx scripts/db-migrate.ts --status",
-    "db:import-demo": "tsx scripts/db-import-demo.ts"
+    "db:import-demo": "tsx scripts/db-import-demo.ts",
+    "auth:create-user": "tsx scripts/auth-create-user.ts",
+    "auth:seed-dev": "tsx scripts/auth-seed-dev.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -3,6 +3,7 @@
  * Clients -> Projects -> Work Packages -> Work Items.
  */
 import type { Client, Project, WorkItem, WorkPackage } from '../types';
+import { UNAUTHORIZED_EVENT } from './authApi';
 
 export interface CoreData {
   clients: Client[];
@@ -20,7 +21,9 @@ export interface CoreStatus {
   connected: boolean;
   dataSource: 'local' | 'database';
   pendingMigrations: string[];
-  counts?: Record<CoreCollection, number>;
+  authEnabled?: boolean;
+  /** Only reported to signed-in users. */
+  databaseEmpty?: boolean;
   error?: string;
 }
 
@@ -52,6 +55,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
+  if (res.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => undefined);
   if (!res.ok) {

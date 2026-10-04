@@ -23,6 +23,7 @@ import {
   Wifi,
   ClipboardCheck,
   Users,
+  LogOut,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -34,6 +35,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setActiveTab }) => {
   const {
     currentUser,
+    authMode,
+    signOut,
     switchRole,
     switchUser,
     availableUsers,
@@ -275,11 +278,22 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
                   roleColors[currentUser.role]?.border || 'border-slate-300'
                 }`}
               >
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.name}
-                  className="w-7 h-7 rounded-full object-cover border border-slate-300 shadow-2xs"
-                />
+                {currentUser.avatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.name}
+                    className="w-7 h-7 rounded-full object-cover border border-slate-300 shadow-2xs"
+                  />
+                ) : (
+                  <span className="w-7 h-7 rounded-full bg-slate-800 text-amber-400 text-[11px] font-black flex items-center justify-center border border-slate-300 shadow-2xs">
+                    {currentUser.name
+                      .split(/\s+/)
+                      .map((w) => w[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase()}
+                  </span>
+                )}
                 <div className="text-left hidden sm:block">
                   <div className="text-xs font-bold text-slate-900 flex items-center space-x-1">
                     <span className="max-w-[110px] truncate">{currentUser.name}</span>
@@ -291,7 +305,36 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
                 <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
               </button>
 
-              {showRoleDropdown && (
+              {showRoleDropdown && authMode && (
+                <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
+                  <div className="px-3.5 py-2 border-b border-slate-100">
+                    <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Signed in as</div>
+                    <div className="text-xs font-bold text-slate-900 mt-1 truncate">{currentUser.name}</div>
+                    <div className="text-[11px] text-slate-500 truncate">{currentUser.email}</div>
+                    <span
+                      className={`inline-block mt-1.5 text-[10px] font-semibold px-1.5 py-0.2 rounded border ${
+                        roleColors[currentUser.role]?.badge || 'text-slate-600'
+                      }`}
+                    >
+                      {currentUser.role}
+                    </span>
+                  </div>
+                  <div className="pt-1.5 px-3">
+                    <button
+                      onClick={() => {
+                        setShowRoleDropdown(false);
+                        signOut();
+                      }}
+                      className="w-full flex items-center justify-center space-x-1.5 py-1.5 text-xs text-slate-600 hover:text-red-600 font-bold transition-colors"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Sign out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showRoleDropdown && !authMode && (
                 <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
                   <div className="px-3.5 py-2 border-b border-slate-100">
                     <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">

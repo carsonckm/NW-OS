@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { readDatabaseSettings } from './server/db/config';
 import { createPool } from './server/db/pool';
-import { createCoreRouter } from './server/core/routes';
+import { mountSecureApi } from './server/app';
 
 dotenv.config();
 
@@ -13,16 +13,13 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '20mb' }));
 
-// Core-chain database API (Clients -> Projects -> Work Packages -> Work Items).
-// Inactive unless DATABASE_URL is set; the browser keeps using localStorage otherwise.
+// Database, authentication and the core-chain API; also puts /api/ai and /api/gateway
+// behind sign-in. Without DATABASE_URL the app runs in demo mode (no sign-in, localStorage).
 const dbSettings = readDatabaseSettings();
-app.use(
-  '/api',
-  createCoreRouter({
-    pool: dbSettings.pool ? createPool(dbSettings.pool) : undefined,
-    dataSource: dbSettings.dataSource,
-  })
-);
+mountSecureApi(app, {
+  pool: dbSettings.pool ? createPool(dbSettings.pool) : undefined,
+  dataSource: dbSettings.dataSource,
+});
 
 // Lazy Gemini client helper
 function getGeminiClient(): GoogleGenAI | null {

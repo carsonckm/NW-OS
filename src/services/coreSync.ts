@@ -65,7 +65,12 @@ function patchSnapshot(snapshot: CoreData, c: CoreCollection, id: string, record
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-export function useCoreDatabaseSync(data: CoreData, setters: Setters) {
+export interface CoreSyncOptions {
+  /** Whether this user may import local data into an empty database (settings.manage). */
+  canImport?: boolean;
+}
+
+export function useCoreDatabaseSync(data: CoreData, setters: Setters, { canImport = true }: CoreSyncOptions = {}) {
   const [state, setState] = useState<CoreSyncState>({ mode: 'checking', status: 'idle' });
   const latest = useRef(data);
   latest.current = data;
@@ -85,9 +90,12 @@ export function useCoreDatabaseSync(data: CoreData, setters: Setters) {
     [setters]
   );
 
-  const hydrate = useCallback(async () => {
+  const hydrate = useCallback(async (databaseEmpty?: boolean) => {
     let snap = await coreApi.snapshot();
-    if (isEmpty(snap)) {
+    // With sign-in, the snapshot only holds what this user may see, so "empty" must come
+    // from the server; and only users allowed to import may seed the database.
+    const empty = databaseEmpty ?? isEmpty(snap);
+    if (empty && canImport) {
       const local = latest.current;
       const check = await coreApi.importData(local, { dryRun: true });
       if (!check.ok) {
@@ -100,12 +108,12 @@ export function useCoreDatabaseSync(data: CoreData, setters: Setters) {
       }
       await coreApi.importData(local);
       snap = await coreApi.snapshot();
-    } else if (diffCoreData(snap, latest.current).count > 0) {
+    } else if (!empty && diffCoreData(snap, latest.current).count > 0) {
       backupLocal(latest.current);
     }
     apply(snap);
     setState({ mode: 'database', status: 'synced', lastSyncedAt: new Date().toISOString() });
-  }, [apply]);
+  }, [apply, canImport]);
 
   /** Writes the batch; if it is rejected, retries record by record so one bad change can't block the rest. */
   const write = useCallback(async (changes: CoreChanges, next: CoreData) => {
@@ -180,7 +188,7 @@ export function useCoreDatabaseSync(data: CoreData, setters: Setters) {
           setState({ mode: 'local', status: 'idle' });
           return;
         }
-        await hydrate();
+        await hydrate(status.databaseEmpty);
       } catch (err) {
         if (!cancelled) setState({ mode: 'local', status: 'error', message: `Database unavailable: ${errorText(err)}` });
       }

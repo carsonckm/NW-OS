@@ -213,6 +213,7 @@ import {
 } from '../data/managementInitialData';
 import { canAccessProject } from '../utils/permissions';
 import { useCoreDatabaseSync, type CoreSyncState } from '../services/coreSync';
+import { clearCoreCache } from '../services/authApi';
 
 interface NWContextType {
   currentUser: UserProfile;
@@ -372,6 +373,9 @@ interface NWContextType {
   resetToDemoData: () => void;
   /** Where core-chain data (clients → work items) is stored, and its sync status. */
   coreDataSync: CoreSyncState & { reloadFromDatabase: () => Promise<void> };
+  /** True when signed in through the server (sign-in replaces the demo role switcher). */
+  authMode: boolean;
+  signOut: () => void;
 
   // AI Communication & Contractor Assistant (Module 10)
   messages: ChatMessage[];
@@ -582,10 +586,27 @@ function saveStorage<T>(key: string, data: T) {
   }
 }
 
-export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserProfile>(() =>
-    loadOrInitial('currentUser', DEMO_USERS[0])
+interface NWProviderProps {
+  children: ReactNode;
+  /**
+   * The signed-in user from the server session. When set, the app runs in authenticated
+   * mode: currentUser is pinned to this user and role/user switching is disabled. The
+   * server still checks every request; the UI permission checks are only for display.
+   */
+  authUser?: UserProfile;
+  /** Whether the signed-in user may import local data into an empty database. */
+  canImportCoreData?: boolean;
+  onSignOut?: () => void;
+}
+
+export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canImportCoreData = true, onSignOut }) => {
+  const [storedUser, setStoredUser] = useState<UserProfile>(() =>
+    authUser ?? loadOrInitial('currentUser', DEMO_USERS[0])
   );
+  const currentUser = authUser ?? storedUser;
+  const setCurrentUser = (user: UserProfile) => {
+    if (!authUser) setStoredUser(user);
+  };
   const [language, setLanguage] = useState<'en' | 'ms' | 'zh'>('en');
 
   const [projects, setProjects] = useState<Project[]>(() =>
@@ -876,7 +897,15 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     () => ({ clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems }),
     []
   );
-  const coreDataSync = useCoreDatabaseSync({ clients, projects, workPackages, workItems }, coreSetters);
+  const coreDataSync = useCoreDatabaseSync({ clients, projects, workPackages, workItems }, coreSetters, {
+    canImport: canImportCoreData,
+  });
+
+  const signOut = () => {
+    // In database mode the cached core data belongs to this user's view; drop it.
+    if (coreDataSync.mode === 'database') clearCoreCache();
+    onSignOut?.();
+  };
   useEffect(() => saveStorage('drawings', drawings), [drawings]);
   useEffect(() => saveStorage('knowledge', knowledge), [knowledge]);
   useEffect(() => saveStorage('issues', issues), [issues]);
@@ -926,6 +955,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   };
 
   const switchRole = (role: UserRole) => {
+    if (authUser) return; // identity comes from the server session
     const match = availableUsers.find((u) => u.role === role);
     if (match) {
       setCurrentUser(match);
@@ -934,6 +964,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   };
 
   const switchUser = (userId: string) => {
+    if (authUser) return; // identity comes from the server session
     const match = availableUsers.find((u) => u.id === userId);
     if (match) {
       const prev = currentUser;
@@ -5830,6 +5861,8 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         clearAllNotifications,
         resetToDemoData,
         coreDataSync,
+        authMode: Boolean(authUser),
+        signOut,
         gatewayContacts,
         gatewayMessages,
         conversationThreads,
