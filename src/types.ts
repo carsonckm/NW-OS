@@ -682,11 +682,11 @@ export interface NotificationItem {
   target_user_id?: string;
   title: string;
   message: string;
-  type: 'issue' | 'escalation' | 'qc' | 'delivery' | 'drawing' | 'variation' | 'overdue';
+  type: 'issue' | 'escalation' | 'qc' | 'delivery' | 'drawing' | 'variation' | 'overdue' | 'work_item';
   priority: 'normal' | 'urgent';
   is_read: boolean;
   project_id?: string;
-  link_type?: 'issue' | 'work_item' | 'drawing' | 'variation';
+  link_type?: 'issue' | 'work_item' | 'drawing' | 'variation' | 'project';
   link_id?: string;
   created_at: string;
 }

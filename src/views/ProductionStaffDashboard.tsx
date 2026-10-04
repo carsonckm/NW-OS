@@ -32,6 +32,7 @@ export const ProductionStaffDashboard: React.FC = () => {
     updateWorkItemStatus,
     addWorkItemPhoto,
     createIssue,
+    qcRecords,
   } = useNW();
 
   const [searchCode, setSearchCode] = useState('');
@@ -63,6 +64,12 @@ export const ProductionStaffDashboard: React.FC = () => {
   });
 
   const activeWorkItem = selectedItem || assignedItems[0] || workItems[0];
+  // Latest QC result for the active item (WorkItem itself carries no QC status field)
+  const activeQCResult = activeWorkItem
+    ? qcRecords
+        .filter((q) => q.work_item_id === activeWorkItem.id)
+        .sort((a, b) => b.inspection_date.localeCompare(a.inspection_date))[0]?.result
+    : undefined;
 
   const handleAdvanceStage = (nextStage: 'Cutting' | 'Assembly' | 'Ready for QC') => {
     if (!activeWorkItem) return;
@@ -100,10 +107,10 @@ export const ProductionStaffDashboard: React.FC = () => {
       title: issueTitle,
       description: issueDesc,
       work_item_id: activeWorkItem.id,
-      issue_type: 'Technical Clash',
-      severity: 'Medium',
-      status: 'Open',
-      action_needed: 'Factory supervisor assistance required',
+      category: 'Production',
+      priority: 'Medium',
+      status: 'Reported',
+      action_required: 'Factory supervisor assistance required',
     });
 
     setShowIssueModal(false);
@@ -224,19 +231,19 @@ export const ProductionStaffDashboard: React.FC = () => {
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Material & Substrate</span>
-                    <span className="font-semibold text-slate-800">{activeWorkItem.material_finish}</span>
+                    <span className="font-semibold text-slate-800">{[activeWorkItem.material, activeWorkItem.finish].filter(Boolean).join(' / ')}</span>
                   </div>
                 </div>
 
                 <div className="space-y-2">
                   <div>
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Drawing Reference</span>
-                    <span className="font-mono font-bold text-slate-800">{activeWorkItem.drawing_ref || 'DWG-001 (Rev B)'}</span>
+                    <span className="font-mono font-bold text-slate-800">{activeWorkItem.drawing_revision || 'DWG-001 (Rev B)'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">QC Inspection Status</span>
-                    <span className={`font-bold ${activeWorkItem.qc_status === 'Passed' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {activeWorkItem.qc_status}
+                    <span className={`font-bold ${activeQCResult === 'Passed' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {activeQCResult || 'Not Inspected'}
                     </span>
                   </div>
                 </div>

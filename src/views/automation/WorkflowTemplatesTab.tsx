@@ -28,7 +28,7 @@ export const WorkflowTemplatesTab: React.FC = () => {
     const res = applyWorkflowTemplate(selectedTemplate.code, targetProjectId);
     const proj = projects.find((p) => p.id === targetProjectId);
     setApplyResult(
-      `✓ Successfully initialized "${selectedTemplate.name}" for ${proj?.name}. Generated ${res.tasksCreated} sequential tasks in My Tasks inbox.`
+      `✓ Successfully initialized "${selectedTemplate.name}" for ${proj?.project_name}. Generated ${res.tasksCreated} sequential tasks in My Tasks inbox.`
     );
     setTimeout(() => setApplyResult(null), 6000);
   };
@@ -118,7 +118,7 @@ export const WorkflowTemplatesTab: React.FC = () => {
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.code} • {p.name}
+                        {p.project_number} • {p.project_name}
                       </option>
                     ))}
                   </select>

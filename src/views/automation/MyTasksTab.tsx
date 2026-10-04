@@ -159,7 +159,7 @@ export const MyTasksTab: React.FC = () => {
       title: newTaskData.title,
       description: newTaskData.description,
       project_id: proj.id,
-      project_name: proj.name,
+      project_name: proj.project_name,
       source_event: 'task.manual_created',
       source_module: 'PM',
       source_reason: `Created manually by ${currentUser.name} (${currentUser.role})`,
@@ -300,7 +300,7 @@ export const MyTasksTab: React.FC = () => {
               <option value="all">All Projects</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.code} • {p.name}
+                  {p.project_number} • {p.project_name}
                 </option>
               ))}
             </select>
@@ -765,7 +765,7 @@ export const MyTasksTab: React.FC = () => {
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.code} • {p.name}
+                        {p.project_number} • {p.project_name}
                       </option>
                     ))}
                   </select>

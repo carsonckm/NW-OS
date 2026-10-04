@@ -609,7 +609,7 @@ export const ContractorDetailView: React.FC<ContractorDetailViewProps> = ({
                         </td>
                         <td className="py-3 px-4">
                           <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                            {item.category}
+                            {workPackages.find((wp) => wp.id === item.work_package_id)?.category || '—'}
                           </span>
                         </td>
                         <td className="py-3 px-4">

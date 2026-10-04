@@ -683,7 +683,7 @@ export const WorkItemDetailModal: React.FC<WorkItemDetailModalProps> = ({
                       </span>
                       <div className="space-y-1.5">
                         {drawing.revisions.map((rev) => {
-                          const isBound = rev.revision_code === currentItem.drawing_revision;
+                          const isBound = rev.revision === currentItem.drawing_revision;
                           return (
                             <div
                               key={rev.id}
@@ -694,7 +694,7 @@ export const WorkItemDetailModal: React.FC<WorkItemDetailModalProps> = ({
                               }`}
                             >
                               <div className="flex items-center space-x-2">
-                                <span className="font-mono font-bold">{rev.revision_code}</span>
+                                <span className="font-mono font-bold">{rev.revision}</span>
                                 <span
                                   className={`text-[10px] px-2 py-0.5 rounded uppercase font-bold ${
                                     rev.approved_status === 'Approved'

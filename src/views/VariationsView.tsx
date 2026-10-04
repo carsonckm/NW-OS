@@ -95,7 +95,7 @@ export const VariationsView: React.FC = () => {
 
                 <div className="pt-2 flex flex-wrap gap-4 text-xs text-slate-400">
                   <span>Requested By: <strong className="text-slate-200">{vo.requested_by}</strong></span>
-                  <span>Date: <strong className="text-slate-200">{vo.date_requested}</strong></span>
+                  <span>Date: <strong className="text-slate-200">{vo.created_at?.split('T')[0]}</strong></span>
                   <span>Schedule Impact: <strong className="text-amber-400 font-mono">+{vo.schedule_impact_days} Days</strong></span>
                 </div>
               </div>

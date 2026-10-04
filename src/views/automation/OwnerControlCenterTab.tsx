@@ -242,7 +242,7 @@ export const OwnerControlCenterTab: React.FC = () => {
               blockedProduction.map((p) => (
                 <div key={p.id} className="p-2.5 bg-orange-50 border border-orange-200 rounded-lg space-y-0.5">
                   <div className="font-bold text-orange-950">{p.order_number} ({p.work_item_code})</div>
-                  <div className="text-[11px] text-orange-800">{p.blocking_reason || 'Pending drawing revision check'}</div>
+                  <div className="text-[11px] text-orange-800">{p.revision_alert?.message || 'Pending drawing revision check'}</div>
                 </div>
               ))
             )}
