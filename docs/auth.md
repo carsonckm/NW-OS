@@ -38,6 +38,40 @@ removed from responses (and ignored on writes) for roles that may not see projec
 financials. Records outside a user's scope answer **404**, so their existence isn't revealed;
 a missing permission answers **403**; no session answers **401**.
 
+## Operational modules (Phase 3)
+
+Every module route runs the same checks: session, active user, the module's permission
+(`server/modules/registry.ts`), and scope. Records belong to a project (or a production
+order, which belongs to a project) and are only visible inside the user's project scope.
+Contractors additionally only see records tied to their own contractor id, work items or
+packages (drawings and documents of their projects excepted). Clients only see their own
+projects, and never purchasing, cost, production or internal costing records.
+Production Staff and Site Supervisors have no access to purchase orders, cost ledger,
+quotations, price database or profitability.
+
+Rules enforced on the server, whatever the browser sends:
+
+- **Drawings:** a revision is never overwritten; uploading needs `drawings.upload`
+  (or `drawings.create_production` for NW drawings), approving needs `drawings.approve`.
+- **Production:** an order must reference an approved, current client revision and an
+  approved NW production drawing linked to it. Orders on a superseded or unapproved revision
+  are rejected; existing ones are flagged and can be parked (Blocked / Cancelled) but not
+  advanced.
+- **Delivery:** defaults to contractor-arranged. Recording receipt needs `delivery.receive`,
+  stores an append-only receipt with the signed-in receiver, and never starts installation.
+- **Site QC:** the inspector is the signed-in user. A Fail creates (or links) a
+  rectification issue, and the work item / installation can't be completed until a later
+  inspection passes.
+- **Approvals:** requester and decider come from the session; nobody approves their own
+  request; only Owner, `approvals.decide`, the assigned user or approver role may decide;
+  decisions are final.
+- **Variations:** Identified → Costing → Internal Approval → Client Approval → Approved →
+  Implemented → Closed, one step at a time (Costing may be skipped), each gated by
+  permission; amounts freeze once approved. Only approved variations change the current
+  contract value; the original contract value never changes.
+- **Audit:** logins, user changes, every create/update/delete and each workflow step are
+  written to `audit_logs`, which nobody can edit or delete.
+
 ## Accounts
 
 - **First real account (production):**
@@ -52,8 +86,9 @@ a missing permission answers **403**; no session answers **401**.
 
 ## Known limits
 
-- Only the core chain (clients → work items) is server data. Every other module is still
-  browser-side demo data shipped in the JavaScript bundle; hiding its tabs is not security.
+- Users, notifications, automation rules and a few settings screens are still browser-side
+  (see the Phase 3 report). Demo data for the server is shipped in the JavaScript bundle
+  for demo mode; in database mode the server only returns what the user may see.
 - The login rate limit is in memory, per server process.
 - The User Management screen still edits browser-side demo users; real accounts are managed
   through the API or the CLI.

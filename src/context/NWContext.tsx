@@ -211,7 +211,8 @@ import {
   INITIAL_MANAGEMENT_KPIS,
   INITIAL_MANAGEMENT_ALERTS,
 } from '../data/managementInitialData';
-import { canAccessProject } from '../utils/permissions';
+import { canAccessProject, hasPermission } from '../utils/permissions';
+import { dataApi } from '../services/coreApi';
 import { useCoreDatabaseSync, type CoreSyncState } from '../services/coreSync';
 import { clearCoreCache } from '../services/authApi';
 
@@ -893,13 +894,67 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   useEffect(() => saveStorage('workItems', workItems), [workItems]);
 
   // Database sync for the core chain; a no-op unless the server runs with CORE_DATA_SOURCE=database.
-  const coreSetters = useMemo(
-    () => ({ clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems }),
+  // Collections backed by PostgreSQL in database mode (see services/syncedCollections.ts).
+  const syncedData = {
+    clients, projects, workPackages, workItems,
+    drawings, documents, issues, tasks, escalations, approvals, variations, clientChangeRequests, qcRecords,
+    siteMeasurements, productionOrders, productionParts, cncJobs, assemblyJobs, finishingJobs, factoryQCInspections,
+    packingPackages, productionIssues, cncFileVersions, productionMaterials, deliveryRecords, installationJobs,
+    siteQCInspections, handoverRecords, clientEnquiries, commercialTenders, commercialQuotations, priceDatabase,
+    commercialBaselines, suppliers, purchaseOrders, goodsReceived, materialRequests, projectCostLedger,
+    commercialInvoices, costLeakAlerts, cashflowEntries, financialClaims, payments,
+  } as unknown as Record<string, Record<string, unknown>[]>;
+  const syncedSetters = useMemo(
+    () =>
+      ({
+        clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems,
+        drawings: setDrawings, documents: setDocuments, issues: setIssues, tasks: setTasks, escalations: setEscalations,
+        approvals: setApprovals, variations: setVariations, clientChangeRequests: setClientChangeRequests,
+        qcRecords: setQcRecords, siteMeasurements: setSiteMeasurements, productionOrders: setProductionOrders,
+        productionParts: setProductionParts, cncJobs: setCncJobs, assemblyJobs: setAssemblyJobs,
+        finishingJobs: setFinishingJobs, factoryQCInspections: setFactoryQCInspections, packingPackages: setPackingPackages,
+        productionIssues: setProductionIssues, cncFileVersions: setCncFileVersions, productionMaterials: setProductionMaterials,
+        deliveryRecords: setDeliveryRecords, installationJobs: setInstallationJobs, siteQCInspections: setSiteQCInspections,
+        handoverRecords: setHandoverRecords, clientEnquiries: setClientEnquiries, commercialTenders: setCommercialTenders,
+        commercialQuotations: setCommercialQuotations, priceDatabase: setPriceDatabase, commercialBaselines: setCommercialBaselines,
+        suppliers: setSuppliers, purchaseOrders: setPurchaseOrders, goodsReceived: setGoodsReceived,
+        materialRequests: setMaterialRequests, projectCostLedger: setProjectCostLedger, commercialInvoices: setCommercialInvoices,
+        costLeakAlerts: setCostLeakAlerts, cashflowEntries: setCashflowEntries, financialClaims: setFinancialClaims,
+        payments: setPayments,
+      }) as unknown as Record<string, (rows: never[]) => void>,
     []
   );
-  const coreDataSync = useCoreDatabaseSync({ clients, projects, workPackages, workItems }, coreSetters, {
-    canImport: canImportCoreData,
-  });
+  const coreDataSync = useCoreDatabaseSync(syncedData, syncedSetters, { canImport: canImportCoreData });
+
+  // In database mode the audit trail comes from the server (append-only, read-only here).
+  useEffect(() => {
+    if (coreDataSync.mode !== 'database' || !hasPermission(currentUser, 'audit.view')) return;
+    let cancelled = false;
+    dataApi
+      .auditLogs()
+      .then((rows) => {
+        if (cancelled) return;
+        setAuditLogs(
+          rows.map((r) => ({
+            id: `srv-${String(r.id)}`,
+            user_id: String(r.actor_id ?? ''),
+            user_name: String(r.actor_name ?? 'System'),
+            user_role: String(r.actor_role ?? ''),
+            action: String(r.action),
+            object_type: String(r.entity_type),
+            object_id: String(r.entity_id ?? ''),
+            entity_id: r.entity_id ? String(r.entity_id) : undefined,
+            details: r.details ? String(r.details) : r.after ? JSON.stringify(r.after).slice(0, 300) : undefined,
+            timestamp: String(r.occurred_at),
+          }))
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coreDataSync.mode, coreDataSync.lastSyncedAt]);
 
   const signOut = () => {
     // In database mode the cached core data belongs to this user's view; drop it.
@@ -2806,31 +2861,32 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
 
   const resetToDemoData = () => {
     localStorage.clear();
-    if (coreDataSync.mode === 'database') {
-      // The database is shared: resetting the demo must not wipe it. Reload core data from it instead.
-      void coreDataSync.reloadFromDatabase();
-    } else {
+    // In database mode the database is shared and authoritative: resetting the demo must not
+    // touch database-backed collections (it reloads them instead); only local-only data resets.
+    const local = coreDataSync.mode !== 'database';
+    if (!local) void coreDataSync.reloadFromDatabase();
+    if (local) {
       setProjects(INITIAL_PROJECTS);
       setClients(INITIAL_CLIENTS);
       setWorkPackages(INITIAL_WORK_PACKAGES);
       setWorkItems(INITIAL_WORK_ITEMS);
     }
     setContractors(INITIAL_CONTRACTORS);
-    setDrawings(INITIAL_DRAWINGS);
+    if (local) setDrawings(INITIAL_DRAWINGS);
     setKnowledge(INITIAL_KNOWLEDGE);
-    setIssues(INITIAL_ISSUES);
-    setVariations(INITIAL_VARIATIONS);
-    setDocuments(INITIAL_DOCUMENTS);
+    if (local) setIssues(INITIAL_ISSUES);
+    if (local) setVariations(INITIAL_VARIATIONS);
+    if (local) setDocuments(INITIAL_DOCUMENTS);
     setNotifications(INITIAL_NOTIFICATIONS);
     setAuditLogs(INITIAL_AUDIT_LOGS);
-    setQcRecords(INITIAL_QC_RECORDS);
+    if (local) setQcRecords(INITIAL_QC_RECORDS);
     setAvailableUsers(DEMO_USERS);
-    setApprovals(INITIAL_APPROVALS);
-    setSuppliers(INITIAL_SUPPLIERS);
-    setPurchaseOrders(INITIAL_PURCHASE_ORDERS);
-    setMaterialRequests(INITIAL_MATERIAL_REQUESTS);
-    setFinancialClaims(INITIAL_CLAIMS);
-    setPayments(INITIAL_PAYMENTS);
+    if (local) setApprovals(INITIAL_APPROVALS);
+    if (local) setSuppliers(INITIAL_SUPPLIERS);
+    if (local) setPurchaseOrders(INITIAL_PURCHASE_ORDERS);
+    if (local) setMaterialRequests(INITIAL_MATERIAL_REQUESTS);
+    if (local) setFinancialClaims(INITIAL_CLAIMS);
+    if (local) setPayments(INITIAL_PAYMENTS);
     setGatewayContacts(INITIAL_COMMUNICATION_CONTACTS);
     setGatewayMessages(INITIAL_GATEWAY_MESSAGES);
     setConversationThreads(INITIAL_CONVERSATION_THREADS);
@@ -2838,38 +2894,38 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     setAiActionRequests(INITIAL_AI_ACTION_REQUESTS);
     setGatewaySettings(INITIAL_GATEWAY_SETTINGS);
     setSecurityTestCases(INITIAL_SECURITY_TEST_CASES);
-    setClientEnquiries(INITIAL_CLIENT_ENQUIRIES);
-    setCommercialTenders(INITIAL_COMMERCIAL_TENDERS);
-    setCommercialQuotations(INITIAL_COMMERCIAL_QUOTATIONS);
-    setPriceDatabase(INITIAL_PRICE_DATABASE);
-    setCommercialBaselines(INITIAL_PROJECT_COMMERCIAL_BASELINES);
-    setProjectCostLedger(INITIAL_PROJECT_COST_LEDGER);
-    setGoodsReceived(INITIAL_GOODS_RECEIVED);
-    setCommercialInvoices(INITIAL_COMMERCIAL_INVOICES);
-    setCostLeakAlerts(INITIAL_COST_LEAK_ALERTS);
-    setCashflowEntries(INITIAL_CASHFLOW_ENTRIES);
-    setProductionOrders(INITIAL_PRODUCTION_ORDERS);
-    setProductionParts(INITIAL_PRODUCTION_PARTS);
-    setProductionMaterials(INITIAL_PRODUCTION_MATERIALS);
-    setCncJobs(INITIAL_CNC_JOBS);
-    setCncFileVersions(INITIAL_CNC_FILE_VERSIONS);
-    setAssemblyJobs(INITIAL_ASSEMBLY_JOBS);
-    setFinishingJobs(INITIAL_FINISHING_JOBS);
-    setFactoryQCInspections(INITIAL_FACTORY_QC_INSPECTIONS);
-    setPackingPackages(INITIAL_PACKING_PACKAGES);
-    setProductionIssues(INITIAL_PRODUCTION_ISSUES);
-    setDeliveryRecords(INITIAL_DELIVERY_RECORDS);
-    setInstallationJobs(INITIAL_INSTALLATION_JOBS);
-    setSiteQCInspections(INITIAL_SITE_QC_INSPECTIONS);
-    setHandoverRecords(INITIAL_HANDOVER_RECORDS);
-    setSiteMeasurements(INITIAL_SITE_MEASUREMENTS);
-    setClientChangeRequests(INITIAL_CLIENT_CHANGE_REQUESTS);
-    setTasks(INITIAL_TASKS);
+    if (local) setClientEnquiries(INITIAL_CLIENT_ENQUIRIES);
+    if (local) setCommercialTenders(INITIAL_COMMERCIAL_TENDERS);
+    if (local) setCommercialQuotations(INITIAL_COMMERCIAL_QUOTATIONS);
+    if (local) setPriceDatabase(INITIAL_PRICE_DATABASE);
+    if (local) setCommercialBaselines(INITIAL_PROJECT_COMMERCIAL_BASELINES);
+    if (local) setProjectCostLedger(INITIAL_PROJECT_COST_LEDGER);
+    if (local) setGoodsReceived(INITIAL_GOODS_RECEIVED);
+    if (local) setCommercialInvoices(INITIAL_COMMERCIAL_INVOICES);
+    if (local) setCostLeakAlerts(INITIAL_COST_LEAK_ALERTS);
+    if (local) setCashflowEntries(INITIAL_CASHFLOW_ENTRIES);
+    if (local) setProductionOrders(INITIAL_PRODUCTION_ORDERS);
+    if (local) setProductionParts(INITIAL_PRODUCTION_PARTS);
+    if (local) setProductionMaterials(INITIAL_PRODUCTION_MATERIALS);
+    if (local) setCncJobs(INITIAL_CNC_JOBS);
+    if (local) setCncFileVersions(INITIAL_CNC_FILE_VERSIONS);
+    if (local) setAssemblyJobs(INITIAL_ASSEMBLY_JOBS);
+    if (local) setFinishingJobs(INITIAL_FINISHING_JOBS);
+    if (local) setFactoryQCInspections(INITIAL_FACTORY_QC_INSPECTIONS);
+    if (local) setPackingPackages(INITIAL_PACKING_PACKAGES);
+    if (local) setProductionIssues(INITIAL_PRODUCTION_ISSUES);
+    if (local) setDeliveryRecords(INITIAL_DELIVERY_RECORDS);
+    if (local) setInstallationJobs(INITIAL_INSTALLATION_JOBS);
+    if (local) setSiteQCInspections(INITIAL_SITE_QC_INSPECTIONS);
+    if (local) setHandoverRecords(INITIAL_HANDOVER_RECORDS);
+    if (local) setSiteMeasurements(INITIAL_SITE_MEASUREMENTS);
+    if (local) setClientChangeRequests(INITIAL_CLIENT_CHANGE_REQUESTS);
+    if (local) setTasks(INITIAL_TASKS);
     setAutomationRules(INITIAL_AUTOMATION_RULES);
     setAutomationEvents(INITIAL_AUTOMATION_EVENTS);
     setAutomationRuns(INITIAL_AUTOMATION_RUNS);
     setFailedAutomations(INITIAL_FAILED_AUTOMATIONS);
-    setEscalations(INITIAL_ESCALATIONS);
+    if (local) setEscalations(INITIAL_ESCALATIONS);
     setUserNotificationPreferences(INITIAL_USER_NOTIFICATION_PREFERENCES);
     setDailyBriefings(INITIAL_DAILY_BRIEFINGS);
     setWorkflowTemplates(INITIAL_WORKFLOW_TEMPLATES);

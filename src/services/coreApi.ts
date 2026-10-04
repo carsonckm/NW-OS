@@ -79,6 +79,38 @@ function resource<T extends { id: string }>(path: string) {
   };
 }
 
+/** Any synced collection's records, keyed by collection (see syncedCollections.ts). */
+export type SyncData = Record<string, Record<string, unknown>[]>;
+
+export interface SyncChanges {
+  upserts: Record<string, Record<string, unknown>[]>;
+  deletes: Record<string, string[]>;
+}
+
+export interface DataImportResult {
+  ok: boolean;
+  dryRun: boolean;
+  imported: boolean;
+  summary: Record<string, { received: number; new: number; skippedExisting: number }>;
+  problems: string[];
+}
+
+/** Unified data API (core chain + Phase 3 modules), one transaction per sync. */
+export const dataApi = {
+  status: () => request<{ databaseEmpty: boolean }>('/data/status'),
+  snapshot: () => request<SyncData>('/data/snapshot'),
+  sync: (changes: SyncChanges) => request<{ upserted: number; deleted: number }>('/data/sync', json('POST', changes)),
+  importData: async (data: SyncData, { dryRun = false } = {}): Promise<DataImportResult> => {
+    try {
+      return await request<DataImportResult>(`/data/import${dryRun ? '?dryRun=true' : ''}`, json('POST', data));
+    } catch (err) {
+      if (err instanceof CoreApiError && err.status === 422) return err.body as DataImportResult;
+      throw err;
+    }
+  },
+  auditLogs: (limit = 300) => request<Record<string, unknown>[]>(`/audit-logs?limit=${limit}`),
+};
+
 export const coreApi = {
   status: () => request<CoreStatus>('/core/status'),
   snapshot: () => request<CoreData>('/core/snapshot'),

@@ -13,6 +13,9 @@ import {
 } from './middleware';
 import { SESSION_COOKIE, type AuthStore, type AuthUser } from './store';
 import { apiErrorHandler } from '../http/errors';
+import { writeAudit, type AuditActor } from '../audit';
+
+const actorOf = (req: Request): AuditActor => ({ id: req.auth!.user.id, name: req.auth!.user.name, role: req.auth!.user.role, ip: req.ip });
 
 const GENERIC_LOGIN_ERROR = { error: 'invalid_credentials', message: 'Email or password is incorrect' };
 
@@ -26,7 +29,7 @@ const wrap =
     fn(req, res).catch(next);
 
 /** /api/auth: login, logout, current session. */
-export function createAuthRouter({ store }: { pool: Pool; store: AuthStore }) {
+export function createAuthRouter({ pool, store }: { pool: Pool; store: AuthStore }) {
   const router = express.Router();
   const limiter = new AttemptLimiter();
   router.use(csrfGuard, attachUser(store));
@@ -54,10 +57,12 @@ export function createAuthRouter({ store }: { pool: Pool; store: AuthStore }) {
       const ok = await verifyPassword(password, user?.password_hash ?? (await dummyPasswordHash()));
       if (!user || !ok) {
         limiter.fail(key);
+        await writeAudit(pool, { ip: req.ip }, { action: 'login.failed', entityType: 'user', entityId: user?.id ?? null, details: email.trim().toLowerCase() });
         return res.status(401).json(GENERIC_LOGIN_ERROR);
       }
       if (!user.is_active) {
         limiter.fail(key);
+        await writeAudit(pool, { ip: req.ip }, { action: 'login.refused_inactive', entityType: 'user', entityId: user.id });
         return res.status(403).json({ error: 'account_disabled', message: 'This account has been deactivated' });
       }
       if (user.is_dev_seed && isProduction()) {
@@ -70,6 +75,7 @@ export function createAuthRouter({ store }: { pool: Pool; store: AuthStore }) {
       const session = await store.createSession(user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
       await store.recordLogin(user.id);
       res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(session.expiresAt));
+      await writeAudit(pool, { id: user.id, name: user.name, role: user.role, ip: req.ip }, { action: 'login', entityType: 'user', entityId: user.id });
       res.json({ authEnabled: true, user: await sessionPayload(store, safeUser) });
     })
   );
@@ -77,7 +83,11 @@ export function createAuthRouter({ store }: { pool: Pool; store: AuthStore }) {
   router.post(
     '/logout',
     wrap(async (req, res) => {
-      if (req.auth) await store.revokeSession(req.auth.token);
+      if (req.auth) {
+        await store.revokeSession(req.auth.token);
+        const u = req.auth.user;
+        await writeAudit(pool, { id: u.id, name: u.name, role: u.role, ip: req.ip }, { action: 'logout', entityType: 'user', entityId: u.id });
+      }
       res.clearCookie(SESSION_COOKIE, sessionCookieOptions());
       res.status(204).end();
     })
@@ -90,7 +100,7 @@ export function createAuthRouter({ store }: { pool: Pool; store: AuthStore }) {
 const USER_FIELDS = ['name', 'email', 'role', 'is_active', 'client_id', 'contractor_id', 'phone', 'department', 'title'] as const;
 
 /** /api/users: account administration (users.view / users.manage). */
-export function createUsersRouter({ store }: { pool: Pool; store: AuthStore }) {
+export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStore }) {
   const router = express.Router();
   router.use(csrfGuard, attachUser(store), requireUser);
 
@@ -132,6 +142,7 @@ export function createUsersRouter({ store }: { pool: Pool; store: AuthStore }) {
         department: body.department ?? null,
         title: body.title ?? null,
       });
+      await writeAudit(pool, actorOf(req), { action: 'user.create', entityType: 'user', entityId: created.id, after: { email: created.email, role: created.role } });
       res.status(201).json(await store.toPublic(created));
     })
   );
@@ -157,6 +168,14 @@ export function createUsersRouter({ store }: { pool: Pool; store: AuthStore }) {
       for (const f of USER_FIELDS) if (f in body) patch[f] = body[f];
       if (body.password) patch.password = body.password;
       const updated = await store.updateUser(target.id, patch);
+      const { password: _pw, ...auditPatch } = patch;
+      await writeAudit(pool, actorOf(req), {
+        action: patch.is_active === false ? 'user.deactivate' : patch.role ? 'user.role_change' : 'user.update',
+        entityType: 'user',
+        entityId: target.id,
+        before: Object.fromEntries(Object.keys(auditPatch).map((k) => [k, (target as unknown as Record<string, unknown>)[k]])),
+        after: { ...auditPatch, ...(patch.password ? { password: '(changed)' } : {}) },
+      });
       res.json(await store.toPublic(updated!));
     })
   );
@@ -172,7 +191,9 @@ export function createUsersRouter({ store }: { pool: Pool; store: AuthStore }) {
       if (!Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) {
         return res.status(400).json({ error: 'validation_error', message: 'project_ids must be a list of ids' });
       }
+      const before = await store.assignedProjectIds(target.id);
       await store.setAssignments(target.id, ids);
+      await writeAudit(pool, actorOf(req), { action: 'user.assignments', entityType: 'user', entityId: target.id, before, after: ids });
       res.json(await store.toPublic(target));
     })
   );

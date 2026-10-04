@@ -7,6 +7,7 @@ import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import type { CoreCollection } from './schema';
 import { CoreService } from './service';
+import { writeAudit } from '../audit';
 
 interface CoreRouterOptions {
   pool?: Pool;
@@ -47,6 +48,14 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
   }
 
   const service = CoreService.forPool(pool);
+  const audit = (req: Request, action: string, collection: CoreCollection, record: Record<string, unknown>, patch?: unknown) =>
+    writeAudit(pool, { id: req.auth!.user.id, name: req.auth!.user.name, role: req.auth!.user.role, ip: req.ip }, {
+      action,
+      entityType: collection,
+      entityId: String(record.id),
+      projectId: (collection === 'projects' ? record.id : record.project_id) as string | undefined,
+      after: patch ?? (action === 'delete' ? undefined : record),
+    });
   let schemaReady = false;
   const checkSchema = async () => {
     if (!schemaReady) schemaReady = (await pendingMigrations(pool)).length === 0;
@@ -126,17 +135,26 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
     );
     router.post(
       `/${path}`,
-      wrap(async (req, res) => res.status(201).json(await service.create(req.access!, collection, req.body ?? {})))
+      wrap(async (req, res) => {
+        const created = await service.create(req.access!, collection, req.body ?? {});
+        await audit(req, 'create', collection, created);
+        res.status(201).json(created);
+      })
     );
     router.get(`/${path}/:id`, wrap(async (req, res) => res.json(await service.get(req.access!, collection, req.params.id))));
     router.patch(
       `/${path}/:id`,
-      wrap(async (req, res) => res.json(await service.update(req.access!, collection, req.params.id, req.body ?? {})))
+      wrap(async (req, res) => {
+        const updated = await service.update(req.access!, collection, req.params.id, req.body ?? {});
+        await audit(req, 'update', collection, updated, req.body);
+        res.json(updated);
+      })
     );
     router.delete(
       `/${path}/:id`,
       wrap(async (req, res) => {
         await service.remove(req.access!, collection, req.params.id);
+        await audit(req, 'delete', collection, { id: req.params.id });
         res.status(204).end();
       })
     );

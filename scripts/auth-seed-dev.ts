@@ -7,8 +7,10 @@
 // accounts use @dev.nwos.local emails and are flagged is_dev_seed, and the server refuses
 // to sign those accounts in when NODE_ENV=production.
 import dotenv from 'dotenv';
-import { DEMO_USERS, INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../src/data/initialData';
-import { CoreRepository } from '../server/core/repository';
+import { DEMO_USERS } from '../src/data/initialData';
+import { AccessContext } from '../server/auth/access';
+import { demoData } from '../server/modules/demo';
+import { DataService } from '../server/modules/service';
 import { passwordProblem } from '../server/auth/password';
 import { AuthStore } from '../server/auth/store';
 import { readDatabaseSettings } from '../server/db/config';
@@ -16,6 +18,12 @@ import { pendingMigrations } from '../server/db/migrate';
 import { createPool } from '../server/db/pool';
 
 dotenv.config();
+
+// The demo import runs as a system Owner inside this CLI only.
+const DEMO_SYSTEM_USER = {
+  id: 'system-import', name: 'System import', email: 'system@nwos.local', role: 'Owner / CEO' as const, is_active: true,
+  is_dev_seed: false, client_id: null, contractor_id: null, phone: null, department: null, title: null, last_login: null,
+};
 
 const slug = (role: string) => role.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
 
@@ -33,11 +41,9 @@ async function main() {
     if (pending.length) throw new Error(`Run npm run db:migrate first (pending: ${pending.join(', ')})`);
 
     if (process.argv.includes('--with-demo-data')) {
-      const result = await new CoreRepository(pool).importData({
-        clients: INITIAL_CLIENTS,
-        projects: INITIAL_PROJECTS,
-        workPackages: INITIAL_WORK_PACKAGES,
-        workItems: INITIAL_WORK_ITEMS,
+      const system = { ...DEMO_SYSTEM_USER, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const result = await new DataService(pool).importData(await AccessContext.load(pool, system), demoData(), {}, {
+        id: system.id, name: system.name, role: system.role,
       });
       if (!result.ok) throw new Error(`Demo data import failed: ${result.problems.join('; ')}`);
     }
