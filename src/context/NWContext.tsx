@@ -2,7 +2,7 @@
  * NW OS — Central State Engine & Business Logic Automation
  */
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import {
   UserProfile,
   UserRole,
@@ -212,6 +212,7 @@ import {
   INITIAL_MANAGEMENT_ALERTS,
 } from '../data/managementInitialData';
 import { canAccessProject } from '../utils/permissions';
+import { useCoreDatabaseSync, type CoreSyncState } from '../services/coreSync';
 
 interface NWContextType {
   currentUser: UserProfile;
@@ -369,6 +370,8 @@ interface NWContextType {
   markNotificationRead: (id: string) => void;
   clearAllNotifications: () => void;
   resetToDemoData: () => void;
+  /** Where core-chain data (clients → work items) is stored, and its sync status. */
+  coreDataSync: CoreSyncState & { reloadFromDatabase: () => Promise<void> };
 
   // AI Communication & Contractor Assistant (Module 10)
   messages: ChatMessage[];
@@ -867,6 +870,13 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   useEffect(() => saveStorage('contractors', contractors), [contractors]);
   useEffect(() => saveStorage('workPackages', workPackages), [workPackages]);
   useEffect(() => saveStorage('workItems', workItems), [workItems]);
+
+  // Database sync for the core chain; a no-op unless the server runs with CORE_DATA_SOURCE=database.
+  const coreSetters = useMemo(
+    () => ({ clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems }),
+    []
+  );
+  const coreDataSync = useCoreDatabaseSync({ clients, projects, workPackages, workItems }, coreSetters);
   useEffect(() => saveStorage('drawings', drawings), [drawings]);
   useEffect(() => saveStorage('knowledge', knowledge), [knowledge]);
   useEffect(() => saveStorage('issues', issues), [issues]);
@@ -2765,11 +2775,16 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
 
   const resetToDemoData = () => {
     localStorage.clear();
-    setProjects(INITIAL_PROJECTS);
-    setClients(INITIAL_CLIENTS);
+    if (coreDataSync.mode === 'database') {
+      // The database is shared: resetting the demo must not wipe it. Reload core data from it instead.
+      void coreDataSync.reloadFromDatabase();
+    } else {
+      setProjects(INITIAL_PROJECTS);
+      setClients(INITIAL_CLIENTS);
+      setWorkPackages(INITIAL_WORK_PACKAGES);
+      setWorkItems(INITIAL_WORK_ITEMS);
+    }
     setContractors(INITIAL_CONTRACTORS);
-    setWorkPackages(INITIAL_WORK_PACKAGES);
-    setWorkItems(INITIAL_WORK_ITEMS);
     setDrawings(INITIAL_DRAWINGS);
     setKnowledge(INITIAL_KNOWLEDGE);
     setIssues(INITIAL_ISSUES);
@@ -5814,6 +5829,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         markNotificationRead,
         clearAllNotifications,
         resetToDemoData,
+        coreDataSync,
         gatewayContacts,
         gatewayMessages,
         conversationThreads,

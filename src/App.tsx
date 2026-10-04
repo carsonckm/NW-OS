@@ -38,7 +38,7 @@ import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { Sparkles, ShieldCheck, Wifi } from 'lucide-react';
 
 const NWAppContent: React.FC = () => {
-  const { currentUser } = useNW();
+  const { currentUser, coreDataSync } = useNW();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [showAIAssistant, setShowAIAssistant] = useState(false);
 
@@ -145,6 +145,26 @@ const NWAppContent: React.FC = () => {
             </span>
             <span>•</span>
             <span className="text-slate-600 font-medium">Manage By Exception</span>
+            {coreDataSync.mode === 'database' && (
+              <>
+                <span>•</span>
+                <span
+                  data-testid="core-sync-status"
+                  title={coreDataSync.message || coreDataSync.lastSyncedAt}
+                  className={coreDataSync.status === 'error' ? 'text-rose-600 font-medium' : 'text-slate-600 font-medium'}
+                >
+                  Core data: Database ({coreDataSync.status})
+                </span>
+              </>
+            )}
+            {coreDataSync.mode === 'local' && coreDataSync.status === 'error' && (
+              <>
+                <span>•</span>
+                <span data-testid="core-sync-status" title={coreDataSync.message} className="text-rose-600 font-medium">
+                  Core data: Local (database unavailable)
+                </span>
+              </>
+            )}
           </div>
         </div>
       </footer>
