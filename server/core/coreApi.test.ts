@@ -4,16 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../../src/data/initialData';
 import type { Client, Project, WorkItem, WorkPackage } from '../../src/types';
 import { createPool } from '../db/pool';
+import { buildApp, seedUsers, signIn } from '../test/app';
 import { createTestDb, TEST_DATABASE_URL, truncateCore, type TestDb } from '../test/db';
-import { createCoreRouter } from './routes';
 import { ENTITIES } from './schema';
 
-const makeApp = (db?: TestDb) => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api', createCoreRouter({ pool: db?.pool, dataSource: 'database' }));
-  return app;
-};
+// These tests cover data behaviour as an Owner; authorisation is covered in server/auth.
+const OWNER = { id: 'user-owner', role: 'Owner / CEO' as const, email: 'owner@test.local' };
 
 const clientInput = {
   client_type: 'Retail',
@@ -77,22 +73,24 @@ const itemInput = (work_package_id: string) => ({
 
 describe('core API without a database', () => {
   it('reports local mode and answers 503 only on core routes', async () => {
-    const app = makeApp();
+    const app = buildApp();
     app.get('/api/health', (_req, res) => res.json({ ok: true }));
     const status = await request(app).get('/api/core/status');
-    expect(status.body).toMatchObject({ configured: false, dataSource: 'local' });
+    expect(status.body).toMatchObject({ configured: false, dataSource: 'local', authEnabled: false });
     expect((await request(app).get('/api/clients')).status).toBe(503);
     expect((await request(app).get('/api/health')).status).toBe(200);
+    expect((await request(app).get('/api/auth/session')).body).toEqual({ authEnabled: false, user: null });
   });
 });
 
 describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
   let db: TestDb;
-  let app: express.Express;
+  let app: request.Agent;
 
   beforeAll(async () => {
     db = await createTestDb();
-    app = makeApp(db);
+    await seedUsers(db.pool, [OWNER]);
+    app = await signIn(buildApp(db.pool), OWNER.email);
   });
   afterAll(async () => {
     await db?.close();
@@ -102,10 +100,10 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
   });
 
   const createChain = async () => {
-    const client = (await request(app).post('/api/clients').send(clientInput).expect(201)).body as Client;
-    const project = (await request(app).post('/api/projects').send(projectInput(client.id)).expect(201)).body as Project;
-    const wp = (await request(app).post('/api/work-packages').send(packageInput(project.id)).expect(201)).body as WorkPackage;
-    const item = (await request(app).post('/api/work-items').send(itemInput(wp.id)).expect(201)).body as WorkItem;
+    const client = (await app.post('/api/clients').send(clientInput).expect(201)).body as Client;
+    const project = (await app.post('/api/projects').send(projectInput(client.id)).expect(201)).body as Project;
+    const wp = (await app.post('/api/work-packages').send(packageInput(project.id)).expect(201)).body as WorkPackage;
+    const item = (await app.post('/api/work-items').send(itemInput(wp.id)).expect(201)).body as WorkItem;
     return { client, project, wp, item };
   };
 
@@ -135,7 +133,7 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
     expect(item.photos).toEqual([]);
     expect('notes' in item).toBe(false); // NULL optional fields are omitted
 
-    const tree = (await request(app).get(`/api/clients/${client.id}/tree`).expect(200)).body;
+    const tree = (await app.get(`/api/clients/${client.id}/tree`).expect(200)).body;
     expect(tree.id).toBe(client.id);
     expect(tree.projects).toHaveLength(1);
     expect(tree.projects[0].id).toBe(project.id);
@@ -143,7 +141,7 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
     expect(tree.projects[0].work_packages[0].work_items.map((w: WorkItem) => w.id)).toEqual([item.id]);
 
     const updated = (
-      await request(app)
+      await app
         .patch(`/api/work-items/${item.id}`)
         .send({ status: 'In Progress', progress_percent: 35, notes: 'Carcass assembled' })
         .expect(200)
@@ -154,8 +152,8 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
     // A brand-new pool (like a server restart) sees the persisted change.
     const fresh = createPool({ connectionString: TEST_DATABASE_URL, options: `-c search_path=${db.schema}` });
     try {
-      const freshApp = makeApp({ ...db, pool: fresh });
-      const reread = (await request(freshApp).get(`/api/work-items/${item.id}`).expect(200)).body as WorkItem;
+      const freshApp = await signIn(buildApp(fresh), OWNER.email);
+      const reread = (await freshApp.get(`/api/work-items/${item.id}`).expect(200)).body as WorkItem;
       expect(reread).toMatchObject({ status: 'In Progress', progress_percent: 35, notes: 'Carcass assembled' });
     } finally {
       await fresh.end();
@@ -164,59 +162,59 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
 
   it('lists children filtered by parent', async () => {
     const { project, wp, item } = await createChain();
-    expect((await request(app).get(`/api/projects?client_id=nope`)).body).toEqual([]);
-    expect((await request(app).get(`/api/work-packages?project_id=${project.id}`)).body.map((w: WorkPackage) => w.id)).toEqual([wp.id]);
-    expect((await request(app).get(`/api/work-items?work_package_id=${wp.id}`)).body.map((w: WorkItem) => w.id)).toEqual([item.id]);
+    expect((await app.get(`/api/projects?client_id=nope`)).body).toEqual([]);
+    expect((await app.get(`/api/work-packages?project_id=${project.id}`)).body.map((w: WorkPackage) => w.id)).toEqual([wp.id]);
+    expect((await app.get(`/api/work-items?work_package_id=${wp.id}`)).body.map((w: WorkItem) => w.id)).toEqual([item.id]);
   });
 
   describe('relationships', () => {
     it('rejects a project for a missing client', async () => {
-      const res = await request(app).post('/api/projects').send(projectInput('client-missing'));
+      const res = await app.post('/api/projects').send(projectInput('client-missing'));
       expect(res.status).toBe(409);
       expect(res.body.error).toBe('foreign_key_violation');
     });
 
     it('rejects a work item whose project differs from its package', async () => {
       const { client, wp } = await createChain();
-      const other = (await request(app).post('/api/projects').send({ ...projectInput(client.id), project_number: 'NW-2026-902' })).body;
-      const res = await request(app).post('/api/work-items').send({ ...itemInput(wp.id), project_id: other.id });
+      const other = (await app.post('/api/projects').send({ ...projectInput(client.id), project_number: 'NW-2026-902' })).body;
+      const res = await app.post('/api/work-items').send({ ...itemInput(wp.id), project_id: other.id });
       expect(res.status).toBe(409);
     });
 
     it('rejects a work item for a missing work package', async () => {
-      const res = await request(app).post('/api/work-items').send(itemInput('wp-missing'));
+      const res = await app.post('/api/work-items').send(itemInput('wp-missing'));
       expect(res.status).toBe(400);
     });
 
     it('refuses to delete a parent that still has children, then deletes leaf-first', async () => {
       const { client, project, wp, item } = await createChain();
-      expect((await request(app).delete(`/api/clients/${client.id}`)).status).toBe(409);
-      expect((await request(app).delete(`/api/work-packages/${wp.id}`)).status).toBe(409);
-      await request(app).delete(`/api/work-items/${item.id}`).expect(204);
-      await request(app).delete(`/api/work-packages/${wp.id}`).expect(204);
-      await request(app).delete(`/api/projects/${project.id}`).expect(204);
-      await request(app).delete(`/api/clients/${client.id}`).expect(204);
-      expect((await request(app).get(`/api/clients/${client.id}`)).status).toBe(404);
+      expect((await app.delete(`/api/clients/${client.id}`)).status).toBe(409);
+      expect((await app.delete(`/api/work-packages/${wp.id}`)).status).toBe(409);
+      await app.delete(`/api/work-items/${item.id}`).expect(204);
+      await app.delete(`/api/work-packages/${wp.id}`).expect(204);
+      await app.delete(`/api/projects/${project.id}`).expect(204);
+      await app.delete(`/api/clients/${client.id}`).expect(204);
+      expect((await app.get(`/api/clients/${client.id}`)).status).toBe(404);
     });
   });
 
   describe('validation', () => {
     it('rejects statuses outside the TypeScript unions', async () => {
       const { item } = await createChain();
-      const res = await request(app).patch(`/api/work-items/${item.id}`).send({ status: 'Teleported' });
+      const res = await app.patch(`/api/work-items/${item.id}`).send({ status: 'Teleported' });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('check_violation');
     });
 
     it('rejects missing required fields and changing ids', async () => {
       const { client } = await createChain();
-      expect((await request(app).post('/api/clients').send({ company_name: 'No type' })).status).toBe(400);
-      expect((await request(app).patch(`/api/clients/${client.id}`).send({ id: 'other' })).status).toBe(400);
+      expect((await app.post('/api/clients').send({ company_name: 'No type' })).status).toBe(400);
+      expect((await app.patch(`/api/clients/${client.id}`).send({ id: 'other' })).status).toBe(400);
     });
 
     it('returns 404 for unknown ids', async () => {
-      expect((await request(app).get('/api/projects/nope')).status).toBe(404);
-      expect((await request(app).patch('/api/projects/nope').send({ project_name: 'x' })).status).toBe(404);
+      expect((await app.get('/api/projects/nope')).status).toBe(404);
+      expect((await app.patch('/api/projects/nope').send({ project_name: 'x' })).status).toBe(404);
     });
   });
 
@@ -229,13 +227,13 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
     };
 
     it('dry-runs without writing, then imports the demo data losslessly', async () => {
-      const dry = (await request(app).post('/api/core/import?dryRun=true').send(demo).expect(200)).body;
+      const dry = (await app.post('/api/core/import?dryRun=true').send(demo).expect(200)).body;
       expect(dry).toMatchObject({ ok: true, imported: false });
-      expect((await request(app).get('/api/clients')).body).toHaveLength(0);
+      expect((await app.get('/api/clients')).body).toHaveLength(0);
 
-      const res = (await request(app).post('/api/core/import').send(demo).expect(200)).body;
+      const res = (await app.post('/api/core/import').send(demo).expect(200)).body;
       expect(res.imported).toBe(true);
-      const snap = (await request(app).get('/api/core/snapshot')).body;
+      const snap = (await app.get('/api/core/snapshot')).body;
       expect(snap.workItems).toHaveLength(INITIAL_WORK_ITEMS.length);
 
       // Every field the app had survives the round trip (timestamps compared as instants).
@@ -254,22 +252,22 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
     });
 
     it('never overwrites rows that already exist', async () => {
-      await request(app).post('/api/core/import').send(demo).expect(200);
+      await app.post('/api/core/import').send(demo).expect(200);
       const target = INITIAL_CLIENTS[0];
-      await request(app).patch(`/api/clients/${target.id}`).send({ company_name: 'Changed in DB' }).expect(200);
+      await app.patch(`/api/clients/${target.id}`).send({ company_name: 'Changed in DB' }).expect(200);
 
-      const again = (await request(app).post('/api/core/import').send(demo).expect(200)).body;
+      const again = (await app.post('/api/core/import').send(demo).expect(200)).body;
       expect(again.summary.clients).toMatchObject({ new: 0, skippedExisting: INITIAL_CLIENTS.length });
-      expect((await request(app).get(`/api/clients/${target.id}`)).body.company_name).toBe('Changed in DB');
+      expect((await app.get(`/api/clients/${target.id}`)).body.company_name).toBe('Changed in DB');
     });
 
     it('rejects orphaned records and writes nothing', async () => {
-      const res = await request(app)
+      const res = await app
         .post('/api/core/import')
         .send({ ...demo, projects: [...INITIAL_PROJECTS, { ...INITIAL_PROJECTS[0], id: 'proj-orphan', client_id: 'client-ghost' }] });
       expect(res.status).toBe(422);
       expect(res.body.problems).toEqual(['projects proj-orphan: client_id "client-ghost" not found']);
-      expect((await request(app).get('/api/clients')).body).toHaveLength(0);
+      expect((await app.get('/api/clients')).body).toHaveLength(0);
     });
   });
 
@@ -278,7 +276,7 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
       const client = { ...INITIAL_CLIENTS[0] };
       const project = { ...INITIAL_PROJECTS.find((p) => p.client_id === client.id)! };
       const wp = { ...INITIAL_WORK_PACKAGES.find((w) => w.project_id === project.id)! };
-      const res = await request(app)
+      const res = await app
         .post('/api/core/sync')
         .send({ upserts: { workPackages: [wp], projects: [project], clients: [client] } })
         .expect(200);
@@ -287,11 +285,11 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
 
     it('rolls back the whole batch when it would leave an orphan', async () => {
       const { client, project } = await createChain();
-      const res = await request(app)
+      const res = await app
         .post('/api/core/sync')
         .send({ upserts: { projects: [{ ...project, project_name: 'Renamed' }] }, deletes: { clients: [client.id] } });
       expect(res.status).toBe(409);
-      expect((await request(app).get(`/api/projects/${project.id}`)).body.project_name).toBe('Vitest Flagship');
+      expect((await app.get(`/api/projects/${project.id}`)).body.project_name).toBe('Vitest Flagship');
     });
   });
 });

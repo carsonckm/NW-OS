@@ -105,6 +105,16 @@ export class CoreRepository {
     return fromRow<T>(def, res.rows[0]);
   }
 
+  /** The stored row (app shape) or undefined; locks it when called inside a transaction. */
+  async find<T>(collection: CoreCollection, id: string, db: Queryable = this.pool, lock = false): Promise<T | undefined> {
+    const def = ENTITIES[collection];
+    const res = await db.query(
+      `SELECT ${columnsOf(def)} FROM ${q(def.table)} WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
+      [id]
+    );
+    return res.rows[0] ? fromRow<T>(def, res.rows[0]) : undefined;
+  }
+
   async remove(collection: CoreCollection, id: string): Promise<void> {
     const def = ENTITIES[collection];
     const res = await this.pool.query(`DELETE FROM ${q(def.table)} WHERE id = $1`, [id]);
@@ -166,23 +176,37 @@ export class CoreRepository {
    * deferred to commit, so order within the batch doesn't matter but the end state must
    * be consistent (e.g. deleting a client that still has projects fails the whole batch).
    */
-  async applyChanges(changes: {
-    upserts?: Partial<Record<CoreCollection, Row[]>>;
-    deletes?: Partial<Record<CoreCollection, string[]>>;
-  }) {
+  async applyChanges(
+    changes: {
+      upserts?: Partial<Record<CoreCollection, Row[]>>;
+      deletes?: Partial<Record<CoreCollection, string[]>>;
+    },
+    /**
+     * Called for every record before it is written, with the stored row locked
+     * (undefined when new) and the incoming values (undefined for a delete). Returns the
+     * values to write, or throws to abort the whole batch.
+     */
+    authorize?: (collection: CoreCollection, existing: Row | undefined, incoming: Row | undefined) => Row | undefined
+  ) {
     const counts = { upserted: 0, deleted: 0 };
     await withTransaction(this.pool, async (client) => {
       await client.query('SET CONSTRAINTS ALL DEFERRED');
       for (const collection of [...COLLECTION_ORDER].reverse()) {
-        const ids = changes.deletes?.[collection] ?? [];
-        if (!ids.length) continue;
-        const res = await client.query(`DELETE FROM ${q(ENTITIES[collection].table)} WHERE id = ANY($1)`, [ids]);
-        counts.deleted += res.rowCount ?? 0;
+        for (const id of changes.deletes?.[collection] ?? []) {
+          if (typeof id !== 'string') throw new ValidationError(`${collection} delete without id`);
+          const existing = await this.find<Row>(collection, id, client, true);
+          if (!existing) continue;
+          authorize?.(collection, existing, undefined);
+          const res = await client.query(`DELETE FROM ${q(ENTITIES[collection].table)} WHERE id = $1`, [id]);
+          counts.deleted += res.rowCount ?? 0;
+        }
       }
       for (const collection of COLLECTION_ORDER) {
         for (const record of changes.upserts?.[collection] ?? []) {
           if (typeof record.id !== 'string' || !record.id) throw new ValidationError(`${collection} record without id`);
-          await insertRow(client, ENTITIES[collection], toRow(ENTITIES[collection], record), 'update');
+          const existing = authorize ? await this.find<Row>(collection, record.id, client, true) : undefined;
+          const values = authorize ? { ...authorize(collection, existing, record), id: record.id } : record;
+          await insertRow(client, ENTITIES[collection], toRow(ENTITIES[collection], values), 'update');
           counts.upserted++;
         }
       }

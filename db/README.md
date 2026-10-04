@@ -8,7 +8,9 @@ Phase 1 moves **Clients → Projects → Work Packages → Work Items** into Pos
 1. Create a database and set `DATABASE_URL` in `.env` (see `.env.example`).
    For Supabase, use the pooler connection string; TLS is handled by `DATABASE_SSL`.
 2. Apply migrations: `npm run db:migrate` (check with `npm run db:status`).
-3. Set `CORE_DATA_SOURCE=database` and restart the server.
+3. Create the first account: `NEW_USER_PASSWORD='…' npm run auth:create-user -- --email … --name … --role "Owner / CEO"`
+   (development: `DEV_SEED_PASSWORD='…' npm run auth:seed-dev -- --with-demo-data`).
+4. Set `CORE_DATA_SOURCE=database` and restart the server.
 
 The browser asks `GET /api/core/status` on load. It only switches to the database when
 the server is configured, connected, has no pending migrations and `CORE_DATA_SOURCE=database`.
@@ -16,7 +18,8 @@ Otherwise it keeps using localStorage, exactly as before.
 
 ## Moving existing data in
 
-- **From a browser's localStorage:** open the app once with the database empty. The
+- **From a browser's localStorage:** sign in as a user with `settings.manage` (Owner) with
+  the database empty. The
   browser validates its data (`POST /api/core/import?dryRun=true`) and imports it. If any
   record references a missing parent, nothing is imported and the app stays in local mode
   with the reason in the footer tooltip.
@@ -56,4 +59,5 @@ localStorage still holds a copy of everything.
 | GET, POST | `/clients`, `/projects`, `/work-packages`, `/work-items` | List (filter by parent id) / create |
 | GET, PATCH, DELETE | `/<resource>/:id` | Read / update / delete |
 
-There is no authentication yet: anyone who can reach the server can use this API.
+Every route except `/core/status` requires a signed-in, active user and is checked against
+that user's permissions and project scope. See [docs/auth.md](../docs/auth.md).

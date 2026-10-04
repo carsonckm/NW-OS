@@ -3,7 +3,7 @@
  * Root Application Component
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { NWProvider, useNW } from './context/NWContext';
 import { Header } from './components/Header';
 import { OwnerDashboard } from './views/OwnerDashboard';
@@ -35,6 +35,14 @@ import { ProductionView } from './views/ProductionView';
 import { DeliveryView } from './views/DeliveryView';
 import { AutomationView } from './views/AutomationView';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
+import { LoginScreen } from './components/LoginScreen';
+import {
+  authApi,
+  claimCoreCache,
+  toUserProfile,
+  UNAUTHORIZED_EVENT,
+  type SessionUser,
+} from './services/authApi';
 import { Sparkles, ShieldCheck, Wifi } from 'lucide-react';
 
 const NWAppContent: React.FC = () => {
@@ -172,7 +180,58 @@ const NWAppContent: React.FC = () => {
   );
 };
 
+type AuthState =
+  | { phase: 'checking' }
+  | { phase: 'demo' } // no database on the server: demo mode, local data, role switcher
+  | { phase: 'signed-out'; notice?: string }
+  | { phase: 'signed-in'; user: SessionUser };
+
 export default function App() {
+  const [auth, setAuth] = useState<AuthState>({ phase: 'checking' });
+
+  const signedIn = useCallback((user: SessionUser) => {
+    claimCoreCache(user.id); // drop another user's cached core data on this browser
+    setAuth({ phase: 'signed-in', user });
+  }, []);
+
+  useEffect(() => {
+    authApi
+      .session()
+      .then((s) => {
+        if (!s.authEnabled) setAuth({ phase: 'demo' });
+        else if (s.user) signedIn(s.user);
+        else setAuth({ phase: 'signed-out' });
+      })
+      .catch(() => setAuth({ phase: 'signed-out', notice: 'Cannot reach the NW OS server. Check your connection.' }));
+  }, [signedIn]);
+
+  // Any API call answering 401 (expired session, deactivated account) returns to sign-in.
+  useEffect(() => {
+    const onUnauthorized = () =>
+      setAuth((a) => (a.phase === 'signed-in' ? { phase: 'signed-out', notice: 'Your session has ended. Please sign in again.' } : a));
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
+
+  if (auth.phase === 'checking') return <div className="min-h-screen bg-slate-50" />;
+  if (auth.phase === 'signed-out') return <LoginScreen onSignedIn={signedIn} notice={auth.notice} />;
+
+  if (auth.phase === 'signed-in') {
+    const { user } = auth;
+    return (
+      <NWProvider
+        key={user.id}
+        authUser={toUserProfile(user)}
+        canImportCoreData={user.permissions.includes('settings.manage')}
+        onSignOut={() => {
+          void authApi.logout().finally(() => setAuth({ phase: 'signed-out' }));
+        }}
+      >
+        <NWAppContent />
+      </NWProvider>
+    );
+  }
+
   return (
     <NWProvider>
       <NWAppContent />

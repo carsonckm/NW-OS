@@ -39,6 +39,9 @@ export async function createTestDb(): Promise<TestDb> {
   };
 }
 
+/** Empties the core chain but keeps users (deletes, since users/assignments reference these tables). */
 export async function truncateCore(pool: Pool) {
-  await pool.query('TRUNCATE work_items, work_packages, projects, clients');
+  await pool.query(
+    'DELETE FROM project_assignments; DELETE FROM work_items; DELETE FROM work_packages; DELETE FROM projects; DELETE FROM clients'
+  );
 }

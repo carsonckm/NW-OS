@@ -106,6 +106,26 @@ describe('useCoreDatabaseSync', () => {
     expect(importCalls.map((c) => c.url)).toEqual(['/api/core/import?dryRun=true', '/api/core/import']);
   });
 
+  it('does not import when the database has data the user simply cannot see', async () => {
+    routes['/api/core/status'] = () => ({ body: { dataSource: 'database', databaseEmpty: false } });
+    routes['/api/core/snapshot'] = () => ({ body: empty() }); // scoped view, e.g. a Contractor
+
+    const { hook, setters } = setup(demo());
+    await waitFor(() => expect(hook.result.current.mode).toBe('database'));
+    expect(calls.some((c) => c.url.startsWith('/api/core/import'))).toBe(false);
+    expect(setters.workItems).toHaveBeenCalledWith([]);
+  });
+
+  it('never imports for a user without the import permission', async () => {
+    routes['/api/core/status'] = () => ({ body: { dataSource: 'database', databaseEmpty: true } });
+    routes['/api/core/snapshot'] = () => ({ body: empty() });
+    const setters = { clients: vi.fn(), projects: vi.fn(), workPackages: vi.fn(), workItems: vi.fn() };
+    const hook = renderHook(() => useCoreDatabaseSync(demo(), setters, { canImport: false }));
+
+    await waitFor(() => expect(hook.result.current.mode).toBe('database'));
+    expect(calls.some((c) => c.url.startsWith('/api/core/import'))).toBe(false);
+  });
+
   it('does not import, and stays local, when local data fails validation', async () => {
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
     routes['/api/core/snapshot'] = () => ({ body: empty() });
