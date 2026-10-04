@@ -537,20 +537,22 @@ interface NWContextType {
   applyWorkflowTemplate: (templateCode: string, projectId: string) => { tasksCreated: number };
 
   // Management Intelligence & Owner Control (Module 16)
-  salesPipeline: SalesPipelineDeal[];
-  createSalesPipelineDeal: (deal: Omit<SalesPipelineDeal, 'id' | 'deal_number' | 'created_at' | 'updated_at'>) => SalesPipelineDeal;
-  updateSalesPipelineStage: (dealId: string, stage: SalesPipelineStage, notes?: string) => void;
-  ownerDecisions: OwnerDecisionRecord[];
-  decideOwnerDecision: (id: string, status: 'Approved' | 'Rejected' | 'Changes Requested' | 'Delegated', notes?: string, delegatedTo?: string) => void;
-  ownerDependencyHistory: OwnerDependencyMonthly[];
-  recurringProblems: RecurringProblemPattern[];
-  updateRecurringProblemStatus: (id: string, status: RecurringProblemPattern['status']) => void;
-  processImprovements: ProcessImprovementProposal[];
-  updateProcessImprovementStatus: (id: string, status: ProcessImprovementProposal['status']) => void;
-  managementKPIs: ManagementKPIThresholds;
-  updateManagementKPIs: (kpis: Partial<ManagementKPIThresholds>) => void;
-  managementAlerts: ManagementAlert[];
-  dismissManagementAlert: (id: string) => void;
+  // Declared ahead of implementation: NWProvider does not supply these yet, so they are
+  // optional to keep the type honest. Consumers must handle undefined until Module 16 lands.
+  salesPipeline?: SalesPipelineDeal[];
+  createSalesPipelineDeal?: (deal: Omit<SalesPipelineDeal, 'id' | 'deal_number' | 'created_at' | 'updated_at'>) => SalesPipelineDeal;
+  updateSalesPipelineStage?: (dealId: string, stage: SalesPipelineStage, notes?: string) => void;
+  ownerDecisions?: OwnerDecisionRecord[];
+  decideOwnerDecision?: (id: string, status: 'Approved' | 'Rejected' | 'Changes Requested' | 'Delegated', notes?: string, delegatedTo?: string) => void;
+  ownerDependencyHistory?: OwnerDependencyMonthly[];
+  recurringProblems?: RecurringProblemPattern[];
+  updateRecurringProblemStatus?: (id: string, status: RecurringProblemPattern['status']) => void;
+  processImprovements?: ProcessImprovementProposal[];
+  updateProcessImprovementStatus?: (id: string, status: ProcessImprovementProposal['status']) => void;
+  managementKPIs?: ManagementKPIThresholds;
+  updateManagementKPIs?: (kpis: Partial<ManagementKPIThresholds>) => void;
+  managementAlerts?: ManagementAlert[];
+  dismissManagementAlert?: (id: string) => void;
 }
 
 const NWContext = createContext<NWContextType | undefined>(undefined);
@@ -962,7 +964,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     setAvailableUsers((prev) =>
       prev.map((u) => {
         if (u.id === id) {
-          const newStatus = u.status === 'inactive' ? 'active' : 'inactive';
+          const newStatus: 'active' | 'inactive' = u.status === 'inactive' ? 'active' : 'inactive';
           addAuditLog('Toggled User Status', 'UserProfile', id, u.status, newStatus);
           const updated = { ...u, status: newStatus };
           if (currentUser.id === id) {
@@ -1780,9 +1782,9 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
           notes: revision?.notes,
           fileUrl: revision?.file_url,
           projectContext: {
-            projectName: project?.name || 'Project Aurora',
-            projectType: project?.client_type || 'Luxury Retail Flagship',
-            location: project?.location || 'Pavilion Kuala Lumpur',
+            projectName: project?.project_name || 'Project Aurora',
+            projectType: clients.find((c) => c.id === project?.client_id)?.client_type || 'Luxury Retail Flagship',
+            location: project?.site_address || 'Pavilion Kuala Lumpur',
           },
           knowledgeBase: knowledge.map((k) => ({
             id: k.id,
@@ -5468,19 +5470,19 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
 
             const title = (action.template_title || rule.name)
               .replace('{work_item_code}', payload.work_item_code || 'ITM')
-              .replace('{project_name}', projectObj.name)
+              .replace('{project_name}', projectObj.project_name)
               .replace('{revision_number}', payload.revision_number || 'Rev 1');
 
             const desc = (action.template_message || rule.description)
               .replace('{work_item_code}', payload.work_item_code || 'ITM')
               .replace('{contractor_name}', payload.contractor_name || 'Subcontractor')
-              .replace('{project_name}', projectObj.name);
+              .replace('{project_name}', projectObj.project_name);
 
             createTask({
               title,
               description: desc,
               project_id: projectId,
-              project_name: projectObj.name,
+              project_name: projectObj.project_name,
               work_item_id: workItemId,
               work_item_code: payload.work_item_code,
               source_event: eventType,
@@ -5504,7 +5506,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
               source_record_type: 'Task',
               source_record_id: sourceRecord,
               project_id: projectId,
-              project_name: projectObj.name,
+              project_name: projectObj.project_name,
               title: action.template_title || `Escalation: ${rule.name}`,
               reason: action.template_message || `Triggered by ${eventType}`,
               previous_level: 'Site Supervisor',
@@ -5696,7 +5698,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         title: `${stage.phase_name}: ${stage.action_type}`,
         description: `Template: ${tpl.name}. Steps: ${stage.checklist.join(' • ')}`,
         project_id: proj.id,
-        project_name: proj.name,
+        project_name: proj.project_name,
         source_event: 'project.created',
         source_module: 'System Automation',
         source_reason: `Workflow Template applied: ${tpl.name}`,
@@ -5716,7 +5718,7 @@ export const NWProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
       `Applied Workflow Template: ${tpl.name}`,
       'WorkflowTemplate',
       tpl.id,
-      proj.name,
+      proj.project_name,
       `Created ${createdCount} sequential tasks`
     );
 

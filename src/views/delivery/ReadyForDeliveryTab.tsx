@@ -65,7 +65,7 @@ export const ReadyForDeliveryTab: React.FC<ReadyForDeliveryTabProps> = ({
       const matchSearch =
         order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
         order.work_item_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.work_package_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         order.project_name.toLowerCase().includes(searchTerm.toLowerCase());
       if (!matchSearch) return false;
     }
@@ -156,7 +156,7 @@ export const ReadyForDeliveryTab: React.FC<ReadyForDeliveryTabProps> = ({
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <h4 className="text-sm font-black text-slate-900 leading-tight">
-                        {order.work_item_code} — {order.description}
+                        {order.work_item_code} — {order.work_package_name}
                       </h4>
                       <p className="text-xs text-slate-500 font-medium mt-0.5">
                         {order.project_name}

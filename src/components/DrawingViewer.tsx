@@ -835,7 +835,7 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
                     >
                       {workPackages.map((wp) => (
                         <option key={wp.id} value={wp.id}>
-                          {wp.package_number} — {wp.title}
+                          {wp.category} — {wp.name}
                         </option>
                       ))}
                     </select>

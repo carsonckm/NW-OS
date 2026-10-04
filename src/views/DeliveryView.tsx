@@ -116,11 +116,11 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
   ).length;
 
   const openQCInspectionsCount = siteQCInspections.filter(
-    (q) => q.overall_result === 'Failed' || q.overall_result === 'Pass with Minor Rectification'
+    (q) => q.result === 'Fail / Rectification Required' || q.result === 'Pass with Minor Rectification'
   ).length;
 
   const pendingHandoverCount = handoverRecords.filter(
-    (h) => h.status !== 'Approved Handover & Transferred'
+    (h) => h.status !== 'Formal CPC Handover Signed' && h.status !== 'In DLP Period'
   ).length;
 
   const deliveryIssuesCount = deliveryRecords.filter(
@@ -143,7 +143,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
       work_package_id: pkg?.id || '',
       work_item_ids: item ? [item.id] : [],
       production_order_id: order.id,
-      contractor_id: proj.contractor_id || contractors[0]?.id || '',
+      contractor_id: pkg?.contractor_id || contractors[0]?.id || '',
       driver_name: 'Encik Rosli bin Hamzah',
       driver_phone: '+60 12-882 1993',
       vehicle_plate: 'WVR 8821',
@@ -167,48 +167,26 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
 
     scheduleDeliveryRecord({
       project_id: arrangeData.project_id,
-      project_name: proj?.name || 'Project Site',
+      project_name: proj?.project_name || 'Project Site',
       work_package_id: arrangeData.work_package_id,
       work_package_name: pkg?.name || 'Joinery & Fitout Package',
       work_item_ids: arrangeData.work_item_ids,
       work_item_codes: matchedItems.map((m) => m.item_code),
-      production_order_id: arrangeData.production_order_id,
+      production_order_ids: arrangeData.production_order_id ? [arrangeData.production_order_id] : [],
       contractor_id: arrangeData.contractor_id,
-      contractor_name: cont?.name || 'Main Carpentry Subcontractor',
+      contractor_name: cont?.company_name || 'Main Carpentry Subcontractor',
       driver_name: arrangeData.driver_name,
-      driver_phone: arrangeData.driver_phone,
+      driver_contact: arrangeData.driver_phone,
       vehicle_plate: arrangeData.vehicle_plate,
       vehicle_type: arrangeData.vehicle_type,
       delivery_date: arrangeData.delivery_date,
       delivery_time: arrangeData.delivery_time,
       estimated_arrival: arrangeData.estimated_arrival_time,
-      destination_address: arrangeData.destination_address,
+      destination_site: arrangeData.destination_address,
       package_count: arrangeData.package_count,
       special_instructions: arrangeData.special_instructions,
       status: 'Scheduled',
-      packages: [
-        {
-          package_id: `PKG-${Date.now().toString().slice(-4)}-01`,
-          package_number: `${matchedItems[0]?.item_code || 'ITM'}-P01`,
-          work_item_code: matchedItems[0]?.item_code || 'ITM',
-          description: 'Main joinery carcase & subframe assembly',
-          scanned: false,
-        },
-        {
-          package_id: `PKG-${Date.now().toString().slice(-4)}-02`,
-          package_number: `${matchedItems[0]?.item_code || 'ITM'}-P02`,
-          work_item_code: matchedItems[0]?.item_code || 'ITM',
-          description: 'Finished drawer units & internal dividers',
-          scanned: false,
-        },
-        {
-          package_id: `PKG-${Date.now().toString().slice(-4)}-03`,
-          package_number: `${matchedItems[0]?.item_code || 'ITM'}-P03`,
-          work_item_code: matchedItems[0]?.item_code || 'ITM',
-          description: 'Accessories, Blum hardware & installation templates',
-          scanned: false,
-        },
-      ],
+      scanned_packages: [],
       loading_checklist: {
         correct_project: true,
         correct_work_items: true,
@@ -500,7 +478,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.code} • {p.name}
+                        {p.project_number} • {p.project_name}
                       </option>
                     ))}
                   </select>
@@ -516,7 +494,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                   >
                     {contractors.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name} ({c.type})
+                        {c.company_name} ({c.trade})
                       </option>
                     ))}
                   </select>

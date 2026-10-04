@@ -78,7 +78,7 @@ export const NewWorkItemModal: React.FC<NewWorkItemModalProps> = ({
   );
   const [selectedDrawingId, setSelectedDrawingId] = useState(defaultDrawing?.id || '');
   const [selectedRevisionCode, setSelectedRevisionCode] = useState(
-    defaultDrawing?.revisions[0]?.revision_code || 'Rev 1'
+    defaultDrawing?.revisions[0]?.revision || 'Rev 1'
   );
   // Contractor normally inherits from Work Package
   const [contractorId, setContractorId] = useState(workPackage.contractor_id || '');
@@ -106,7 +106,7 @@ export const NewWorkItemModal: React.FC<NewWorkItemModalProps> = ({
     if (currentDrawing && currentDrawing.revisions.length > 0) {
       const activeRev =
         currentDrawing.revisions.find((r) => r.is_current) || currentDrawing.revisions[0];
-      setSelectedRevisionCode(activeRev.revision_code);
+      setSelectedRevisionCode(activeRev.revision);
     }
   }, [selectedDrawingId]);
 
@@ -409,8 +409,8 @@ export const NewWorkItemModal: React.FC<NewWorkItemModalProps> = ({
                 >
                   {currentDrawing && currentDrawing.revisions.length > 0 ? (
                     currentDrawing.revisions.map((rev) => (
-                      <option key={rev.id} value={rev.revision_code}>
-                        {rev.revision_code} {rev.is_current ? '(Current Approved)' : `(${rev.approved_status})`}
+                      <option key={rev.id} value={rev.revision}>
+                        {rev.revision} {rev.is_current ? '(Current Approved)' : `(${rev.approved_status})`}
                       </option>
                     ))
                   ) : (

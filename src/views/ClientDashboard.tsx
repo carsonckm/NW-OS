@@ -22,7 +22,7 @@ export const ClientDashboard: React.FC = () => {
 
   // Client variations
   const clientVOs = variations.filter(
-    (v) => v.project_id === selectedProject?.id && v.status !== 'Draft'
+    (v) => v.project_id === selectedProject?.id
   );
 
   const completedCount = workItems.filter(

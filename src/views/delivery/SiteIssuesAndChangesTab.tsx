@@ -515,7 +515,7 @@ export const SiteIssuesAndChangesTab: React.FC = () => {
                       {iss.category}
                     </span>
                     <span className="px-2 py-0.5 text-[10px] font-bold bg-slate-100 text-slate-700 rounded-md">
-                      {iss.severity}
+                      {iss.priority}
                     </span>
                     <span className="text-xs font-bold text-slate-500">•</span>
                     <span className="text-xs font-bold text-slate-800">{iss.status}</span>

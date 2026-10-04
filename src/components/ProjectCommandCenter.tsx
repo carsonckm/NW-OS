@@ -2186,15 +2186,19 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
       <NewWorkPackageModal
         isOpen={showNewPackageModal}
         onClose={() => setShowNewPackageModal(false)}
+        onSuccess={() => {}}
         defaultProjectId={project.id}
       />
 
-      {/* 7. New Work Item Modal */}
-      <NewWorkItemModal
-        isOpen={showNewItemModal}
-        onClose={() => setShowNewItemModal(false)}
-        defaultProjectId={project.id}
-      />
+      {/* 7. New Work Item Modal (needs a work package; uses the project's first one) */}
+      {projWorkPackages.length > 0 && (
+        <NewWorkItemModal
+          isOpen={showNewItemModal}
+          onClose={() => setShowNewItemModal(false)}
+          workPackage={projWorkPackages[0]}
+          onSuccess={() => {}}
+        />
+      )}
     </div>
   );
 };

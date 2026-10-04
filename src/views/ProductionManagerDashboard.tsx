@@ -146,7 +146,7 @@ export const ProductionManagerDashboard: React.FC<ProductionManagerDashboardProp
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
                   <span>Category: {dwg.category}</span>
-                  <span>Revision: <strong className="text-slate-800 font-bold">{dwg.current_revision}</strong></span>
+                  <span>Revision: <strong className="text-slate-800 font-bold">{dwg.revisions.find((r) => r.id === dwg.current_revision_id)?.revision || dwg.revisions.find((r) => r.is_current)?.revision || '—'}</strong></span>
                 </div>
               </div>
             ))}
