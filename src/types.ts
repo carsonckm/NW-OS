@@ -1447,7 +1447,8 @@ export type ApprovalType =
   | 'Major Cost'
   | 'Client Scope Change'
   | 'Project Date Change'
-  | 'Safety-Critical Decision';
+  | 'Safety-Critical Decision'
+  | 'AI Proposal';
 
 export type ApprovalDecision = 'Pending' | 'Approved' | 'Rejected' | 'Changes Requested';
 

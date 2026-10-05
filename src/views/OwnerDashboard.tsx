@@ -90,8 +90,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
         setLoadingBriefing(false);
       }
     }
-    fetchBriefing();
-  }, [projects.length, ownerEscalations.length]);
+    // Live mode shows the server's Owner Center instead (no generated briefing text).
+    if (!live) fetchBriefing();
+  }, [projects.length, ownerEscalations.length, live]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">

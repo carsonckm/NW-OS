@@ -122,6 +122,7 @@ export class DataService {
         });
         return record;
       },
+      writeModule: (collection, existing, incoming) => this.writeModule(h, this.module(collection), existing, incoming),
     };
     return h;
   }

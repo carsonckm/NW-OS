@@ -16,6 +16,9 @@
  * 12. AI Project Briefing & Risk Radar (One-click Gemini intelligence briefing for PM & Owner)
  */
 
+import { api } from '../services/coreApi';
+import { actionErrorOf } from '../services/records';
+import { AssistantAnswerView, type AssistantResult } from './AssistantAnswerView';
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
 import { navigateTo } from '../services/navigation';
@@ -146,6 +149,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   // AI Briefing Modal state
   const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
   const [briefingData, setBriefingData] = useState<any | null>(null);
+  const [liveBriefing, setLiveBriefing] = useState<AssistantResult | null>(null);
   const [showBriefingModal, setShowBriefingModal] = useState(false);
 
   // Status & Risk editing
@@ -471,6 +475,17 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   const handleGenerateBriefing = async () => {
     setIsGeneratingBriefing(true);
     setShowBriefingModal(true);
+    if (coreDataSync.mode === 'database') {
+      // Live: the server assistant, from this user's records only (no canned fallback).
+      try {
+        setLiveBriefing(await api.post<AssistantResult>('/assistant/ask', { question: 'Why is this project at risk?', project_id: project.id }));
+      } catch (err) {
+        setLiveBriefing({ id: 'err', intent: 'error', answer: actionErrorOf(err).message, facts: [], recommendations: [], principle: '' });
+      } finally {
+        setIsGeneratingBriefing(false);
+      }
+      return;
+    }
     try {
       const response = await fetch('/api/ai/project-briefing', {
         method: 'POST',
@@ -2051,6 +2066,12 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                   Formulating PM action checklist to eliminate Owner dependency.
                 </p>
               </div>
+            ) : coreDataSync.mode === 'database' ? (
+              liveBriefing && (
+                <div className="text-xs">
+                  <AssistantAnswerView result={liveBriefing} />
+                </div>
+              )
             ) : briefingData ? (
               <div className="space-y-4 text-xs">
                 {/* Executive Summary */}

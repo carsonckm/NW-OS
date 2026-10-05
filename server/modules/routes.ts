@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { ForbiddenError } from '../auth/access';
 import { attachUser, csrfGuard, loadAccess, requireUser } from '../auth/middleware';
@@ -18,6 +19,8 @@ import { portfolioRisk, projectRiskFor } from './risk';
 import { dailyBriefing } from './briefing';
 import { ownerCenter, ownerDependency } from './ownerCenter';
 import { findRecord } from './store';
+import { Assistant } from './assistant';
+import { AI_PROPOSAL_TYPE, validateProposal } from './assistantActions';
 import { DataService } from './service';
 
 const wrap =
@@ -62,6 +65,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/risk',
     '/briefing',
     '/owner/*',
+    '/assistant/*',
+    '/ai/assistant',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
@@ -309,6 +314,69 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   router.get('/briefing', wrap(async (req, res) => res.json(await dailyBriefing(pool, req.access!))));
   router.get('/owner/center', wrap(async (req, res) => res.json(await ownerCenter(pool, req.access!))));
   router.get('/owner/dependency', wrap(async (req, res) => res.json(await ownerDependency(pool, req.access!))));
+  // ---------------- AI operating assistant (answers from the user's own scope) ----------------
+  const assistant = new Assistant(pool);
+  router.post('/assistant/ask', wrap(async (req, res) => res.json(await assistant.ask(req.access!, actorOf(req), req.body ?? {}))));
+  // The legacy copilot drawer posts here with its own role and "context": both are ignored.
+  router.post(
+    '/ai/assistant',
+    wrap(async (req, res) => {
+      const a = await assistant.ask(req.access!, actorOf(req), { question: req.body?.question, project_id: req.body?.project_id });
+      const lines = a.facts.slice(0, 8).map((f) => `• [${f.confidence}] ${f.text}`);
+      res.json({ answer: [a.answer, ...lines].join('\n'), source: 'nw-os-records', result: a });
+    })
+  );
+  // AI proposes → a human approves (an "AI Proposal" approval for the asker) → the system executes.
+  router.post(
+    '/assistant/proposals',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      ctx.require('ai.assistant');
+      ctx.require('approvals.request');
+      const { action, params, rationale } = req.body ?? {};
+      const checked = await validateProposal(pool, ctx, action, params);
+      const u = ctx.user;
+      const created = await service.transact(ctx, actorOf(req), async (h) => {
+        const project = (await h.db.query('SELECT project_name FROM projects WHERE id = $1', [checked.project_id])).rows[0];
+        const id = `apr-ai-${randomUUID().slice(0, 8)}`;
+        const record = {
+          id,
+          approval_number: id.toUpperCase(),
+          approval_type: AI_PROPOSAL_TYPE,
+          title: `AI proposal: ${checked.summary}`,
+          description: typeof rationale === 'string' && rationale.trim() ? rationale.trim().slice(0, 2000) : 'Proposed by the NW OS assistant from live records.',
+          project_id: checked.project_id,
+          project_name: project?.project_name ?? '',
+          related_entity_type: 'ai_proposal',
+          related_entity_id: id,
+          // The assistant proposes; the person who asked (or the Owner) decides.
+          requested_by_name: 'NW OS Assistant',
+          requested_by_role: 'NW OS Assistant',
+          asked_by_id: u.id,
+          asked_by_name: u.name,
+          assigned_approver_id: u.id,
+          assigned_approver_name: u.name,
+          assigned_approver_role: u.role,
+          date_requested: new Date().toISOString(),
+          decision: 'Pending',
+          proposal: { action: checked.action, params: checked.params, summary: checked.summary },
+        };
+        await h.insertSystemRecord('approvals', record, `AI proposal for ${u.id}`);
+        await writeAudit(h.db, actorOf(req), { action: 'ai.proposal.create', entityType: 'approval', entityId: id, projectId: checked.project_id, after: record.proposal });
+        return record;
+      });
+      res.status(201).json(created);
+    })
+  );
+  router.get(
+    '/assistant/proposals',
+    wrap(async (req, res) => {
+      if (!req.access!.can('approvals.view')) return void res.json([]); // e.g. contractors: no proposals
+      const rows = await service.list(req.access!, service.module('approvals'), {});
+      res.json(rows.filter((a) => a.approval_type === AI_PROPOSAL_TYPE && (a.assigned_approver_id === req.auth!.user.id || a.asked_by_id === req.auth!.user.id || req.auth!.user.role === 'Owner / CEO')));
+    })
+  );
+
   router.get('/projects/:id/overview', wrap(async (req, res) => res.json(await projectOverview(pool, req.access!, req.params.id))));
   router.get('/projects/:id/profitability', wrap(async (req, res) => res.json(await profitability(pool, req.access!, req.params.id))));
 

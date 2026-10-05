@@ -63,6 +63,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
     markNotificationRead,
     clearAllNotifications,
     resetToDemoData,
+    coreDataSync,
   } = useNW();
 
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
@@ -439,7 +440,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
             {
               id: 'ai-assistant',
               label: 'AI Assistant',
-              show: true,
+              show: coreDataSync.mode !== 'database' || hasPermission(currentUser, 'ai.assistant'),
               badge: pmInbox.filter((i) => i.status === 'pending').length > 0,
               badgeCount: pmInbox.filter((i) => i.status === 'pending').length,
             },
