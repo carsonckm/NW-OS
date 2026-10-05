@@ -16,6 +16,7 @@ import { contractSummary, profitability } from './reports';
 import { exceptionsFor, projectOverview } from './exceptions';
 import { portfolioRisk, projectRiskFor } from './risk';
 import { dailyBriefing } from './briefing';
+import { ownerCenter, ownerDependency } from './ownerCenter';
 import { findRecord } from './store';
 import { DataService } from './service';
 
@@ -60,6 +61,7 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/exceptions',
     '/risk',
     '/briefing',
+    '/owner/*',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
@@ -305,6 +307,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   router.get('/risk', wrap(async (req, res) => { staffOnly(req); res.json(await portfolioRisk(pool, req.access!)); }));
   router.get('/projects/:id/risk', wrap(async (req, res) => { staffOnly(req); res.json(await projectRiskFor(pool, req.access!, req.params.id)); }));
   router.get('/briefing', wrap(async (req, res) => res.json(await dailyBriefing(pool, req.access!))));
+  router.get('/owner/center', wrap(async (req, res) => res.json(await ownerCenter(pool, req.access!))));
+  router.get('/owner/dependency', wrap(async (req, res) => res.json(await ownerDependency(pool, req.access!))));
   router.get('/projects/:id/overview', wrap(async (req, res) => res.json(await projectOverview(pool, req.access!, req.params.id))));
   router.get('/projects/:id/profitability', wrap(async (req, res) => res.json(await profitability(pool, req.access!, req.params.id))));
 

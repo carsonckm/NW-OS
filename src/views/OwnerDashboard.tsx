@@ -22,7 +22,7 @@ import {
   Layers,
   ChevronRight,
 } from 'lucide-react';
-import { ExceptionsPanel } from '../components/ServerOverview';
+import { OwnerCenter } from './owner/OwnerCenter';
 import { IssueModal } from '../components/IssueModal';
 
 interface OwnerDashboardProps {
@@ -95,6 +95,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      {!live && (
+        <>
       {/* Top Banner: Core Management Principle */}
       <div className="bg-gradient-to-r from-amber-50 via-white to-amber-50/60 border border-amber-200/80 rounded-2xl p-5 sm:p-6 shadow-xs relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
@@ -163,8 +165,14 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
           </div>
         </div>
       </div>
+        </>
+      )}
 
-      {live && <ExceptionsPanel title="What needs your attention" ownerFirst limit={15} />}
+      {live && <OwnerCenter />}
+
+      {/* Demo mode only: the illustrative sections below (live mode shows only exceptions). */}
+      {!live && (
+        <>
 
       {/* SECTION 1: CRITICAL DECISIONS REQUIRING OWNER ACTION (The #1 Priority) */}
       <div className="space-y-4">
@@ -395,6 +403,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
           </div>
         </div>
       </div>
+
+        </>
+      )}
 
       {/* Modal for viewing issue details */}
       {selectedIssueForModal && (
