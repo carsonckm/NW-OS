@@ -410,6 +410,37 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       });
     });
 
+    describe('work item production status', () => {
+      const itemOf = async (orderId: string) =>
+        (await db.pool.query(`SELECT work_item_id FROM production_orders WHERE id = $1`, [orderId])).rows[0].work_item_id as string;
+      const itemStatus = async (itemId: string) =>
+        (await db.pool.query(`SELECT production_status FROM work_items WHERE id = $1`, [itemId])).rows[0].production_status;
+
+      it('follows the production order in the same transaction', async () => {
+        await as['Production Manager'].patch('/api/production-orders/po-102').send({ status: 'Blocked' }).expect(200);
+        expect(await itemStatus(await itemOf('po-102'))).toBe('Blocked');
+      });
+
+      it('ignores a production status the browser sends for the work item', async () => {
+        const id = await itemOf('po-102');
+        await owner().patch(`/api/work-items/${id}`).send({ production_status: 'Completed' }).expect(200);
+        expect(await itemStatus(id)).toBe('Blocked');
+      });
+
+      it('stays consistent when a mixed batch is refused and the item is saved on its own', async () => {
+        const id = await itemOf('po-102');
+        const item = (await owner().get(`/api/work-items/${id}`).expect(200)).body;
+        const order = (await owner().get('/api/production-orders/po-102').expect(200)).body;
+        // Staff may not put an order On Hold, so the whole batch is refused...
+        const batch = await as['Production Staff'].post('/api/data/sync').send({ upserts: { workItems: [{ ...item, production_status: 'On Hold' }], productionOrders: [{ ...order, status: 'On Hold' }] } });
+        expect(batch.status).toBe(403);
+        expect(await itemStatus(id)).toBe('Blocked');
+        // ...and the browser's record-by-record retry of the item can't diverge from the order.
+        await as['Production Staff'].post('/api/data/sync').send({ upserts: { workItems: [{ ...item, production_status: 'On Hold' }] } }).expect(200);
+        expect(await itemStatus(id)).toBe('Blocked');
+      });
+    });
+
     it('keeps production records away from roles without production.view', async () => {
       expect((await as['Client'].get('/api/production-orders')).status).toBe(403);
     });

@@ -36,6 +36,7 @@ import { DeliveryView } from './views/DeliveryView';
 import { AutomationView } from './views/AutomationView';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { LoginScreen } from './components/LoginScreen';
+import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
 import {
   authApi,
   claimCoreCache,
@@ -85,6 +86,7 @@ const NWAppContent: React.FC = () => {
         setActiveTab={setActiveTab}
         onOpenAssistant={() => setShowAIAssistant(true)}
       />
+      <SyncErrorBanner />
 
       {/* Main View Router */}
       <main className="flex-1 pb-16">

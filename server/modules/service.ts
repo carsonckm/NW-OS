@@ -6,6 +6,7 @@ import { COLLECTION_ORDER, type CoreCollection } from '../core/schema';
 import { CoreService } from '../core/service';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import { findClientRevision } from './hooks/drawings';
+import { derivedProductionStatus } from './hooks/production';
 import { hasOpenFailedSiteQc } from './hooks/site';
 import { MODULES, MODULE_BY_KEY } from './registry';
 import { inModuleScope, loadOrderInfo, requireAny, hasAny, type OrderInfo } from './scope';
@@ -173,6 +174,11 @@ export class DataService {
       }
       const values = h.ctx.authorizeWrite(collection, existing, incoming);
       if (!values || collection !== 'workItems') return values;
+      // Production status comes from the production order, never from the browser.
+      if (h.mode !== 'import' && 'production_status' in values && (existing || values.id)) {
+        const derived = await derivedProductionStatus(h.db, String(existing?.id ?? values.id));
+        if (derived) values.production_status = derived;
+      }
       // The revision an item was created from is fixed at creation.
       if (existing) values.source_drawing_revision_id = existing.source_drawing_revision_id ?? undefined;
       else if (!values.source_drawing_revision_id) {

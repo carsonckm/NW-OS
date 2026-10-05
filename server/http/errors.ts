@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ForbiddenError } from '../auth/access';
 import { NotFoundError, ValidationError } from '../core/repository';
+import { explainRefusal } from './explain';
 
 // Postgres error codes -> HTTP status + stable error name.
 const PG_ERRORS: Record<string, [number, string]> = {
@@ -16,7 +17,7 @@ const PG_ERRORS: Record<string, [number, string]> = {
 
 export function sendError(res: Response, err: unknown) {
   if (err instanceof NotFoundError) return res.status(404).json({ error: 'not_found', message: err.message });
-  if (err instanceof ForbiddenError) return res.status(403).json({ error: 'forbidden', message: err.message });
+  if (err instanceof ForbiddenError) return res.status(403).json({ error: 'forbidden', message: explainRefusal(err.message) });
   if (err instanceof ValidationError) {
     return res.status(400).json({ error: 'validation_error', message: err.message, details: err.details });
   }

@@ -276,6 +276,28 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     return () => window.removeEventListener('pagehide', onHide);
   }, [state.mode]);
 
+  /**
+   * Puts records the server returned (after a direct API action) into the app, as saved:
+   * merged by id, or replacing the whole collection. Unsaved local edits to other records
+   * of the collection are kept.
+   */
+  const applyRows = useCallback(
+    (collection: string, rows: Rec[], { replace = false } = {}) => {
+      if (!setters[collection]) return;
+      const field = idOf(collection);
+      const merge = (current: Rec[] | undefined) => {
+        if (replace) return rows;
+        const byId = new Map(rows.map((r) => [String(r[field]), r]));
+        const kept = (current ?? []).map((r) => byId.get(String(r[field])) ?? r);
+        const known = new Set(kept.map((r) => String(r[field])));
+        return [...rows.filter((r) => !known.has(String(r[field]))), ...kept];
+      };
+      if (saved.current) saved.current = { ...saved.current, [collection]: merge(saved.current[collection]) };
+      setters[collection](merge(latest.current[collection]) as never[]);
+    },
+    [setters]
+  );
+
   const reloadFromDatabase = useCallback(async () => {
     try {
       apply(await dataApi.snapshot());
@@ -285,5 +307,5 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     }
   }, [apply]);
 
-  return { ...state, reloadFromDatabase };
+  return { ...state, reloadFromDatabase, applyRows };
 }

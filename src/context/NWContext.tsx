@@ -378,7 +378,10 @@ interface NWContextType {
   clearAllNotifications: () => void;
   resetToDemoData: () => void;
   /** Where core-chain data (clients → work items) is stored, and its sync status. */
-  coreDataSync: CoreSyncState & { reloadFromDatabase: () => Promise<void> };
+  coreDataSync: CoreSyncState & {
+    reloadFromDatabase: () => Promise<void>;
+    applyRows: (collection: string, rows: Record<string, unknown>[], opts?: { replace?: boolean }) => void;
+  };
   /** True when signed in through the server (sign-in replaces the demo role switcher). */
   authMode: boolean;
   signOut: () => void;
