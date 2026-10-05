@@ -9,6 +9,8 @@ import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import { addClientRevision, setClientRevisionStatus } from './hooks/drawings';
 import { checkTransition } from './hooks/variations';
+import { assertConvertible, clientQuotation, nextVersionCode } from './hooks/commercial';
+import { writeAudit } from '../audit';
 import { MODULES } from './registry';
 import { contractSummary, profitability } from './reports';
 import { findRecord } from './store';
@@ -156,6 +158,118 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
         return findRecord(h.db, def, req.params.id);
       });
       res.json(result);
+    })
+  );
+
+  // ---------------- sales: quotation versions, client view, award -> project ----------------
+  // Client-facing quotation: no internal cost, supplier/contractor cost, margin or notes.
+  router.get(
+    '/quotations/:id/client-view',
+    wrap(async (req, res) => res.json(clientQuotation(await service.get(req.access!, service.module('commercialQuotations'), req.params.id))))
+  );
+
+  // Negotiation: a new Draft version copies the items; the previous version is superseded.
+  router.post(
+    '/quotations/:id/versions',
+    wrap(async (req, res) => {
+      const def = service.module('commercialQuotations');
+      await service.get(req.access!, def, req.params.id); // view permission + scope
+      const result = await service.transact(req.access!, actorOf(req), async (h) => {
+        const q = (await findRecord(h.db, def, req.params.id, true))!;
+        if (!['Draft', 'Internal Review', 'Submitted', 'Negotiation'].includes(String(q.status))) {
+          throw new ForbiddenError(`A ${String(q.status)} quotation cannot get a new version`);
+        }
+        const latest = (
+          await h.db.query(`SELECT max((data->>'version')::int) AS v FROM commercial_quotations WHERE data->>'quotation_number' = $1`, [q.quotation_number])
+        ).rows[0].v as number;
+        const version = (latest || Number(q.version) || 1) + 1;
+        const id = `${String(q.quotation_number)}-v${version}`.toLowerCase();
+        const { submitted_at: _s, ...rest } = q;
+        await service.writeInTransaction(h, def, undefined, {
+          ...rest,
+          ...(req.body?.items ? { items: req.body.items } : {}),
+          id,
+          version,
+          version_code: nextVersionCode(q, version),
+          previous_version_id: q.id,
+          status: 'Draft',
+          approval_status: 'Pending',
+          date: new Date().toISOString().slice(0, 10),
+          created_at: undefined,
+        });
+        await service.writeInTransaction(h, def, q, { ...q, status: 'Superseded', superseded_by_id: id });
+        return findRecord(h.db, def, id);
+      });
+      res.status(201).json(result);
+    })
+  );
+
+  // Award -> project: carries the client, scope, contract value and budget forward in one
+  // transaction. No drawings, packages or production records are created.
+  router.post(
+    '/quotations/:id/convert',
+    wrap(async (req, res) => {
+      const def = service.module('commercialQuotations');
+      const ctx = req.access!;
+      ctx.require('projects.create');
+      await service.get(ctx, def, req.params.id);
+      const body = req.body ?? {};
+      for (const f of ['project_number', 'start_date', 'end_date']) {
+        if (typeof body[f] !== 'string' || !body[f]) throw new ValidationError(`${f} is required`);
+      }
+      const result = await service.transact(ctx, actorOf(req), async (h) => {
+        const q = (await findRecord(h.db, def, req.params.id, true))!;
+        assertConvertible(q);
+        const enquiry = q.enquiry_id ? await findRecord(h.db, service.module('clientEnquiries'), String(q.enquiry_id), true) : undefined;
+        const tender = q.tender_id ? await findRecord(h.db, service.module('commercialTenders'), String(q.tender_id), true) : undefined;
+        const contractValue = Number(q.subtotal_selling_price) || Number(q.total_selling_price) || 0;
+        const project = await service.createCoreInTransaction(h, 'projects', {
+          project_number: body.project_number,
+          project_name: body.project_name || q.project_name,
+          client_id: q.client_id,
+          site_address: body.site_address || q.site_address || enquiry?.site_address || '',
+          contract_value: contractValue,
+          project_status: 'Awarded',
+          start_date: body.start_date,
+          end_date: body.end_date,
+          signed_date: body.signed_date || new Date().toISOString().slice(0, 10),
+          project_manager_id: body.project_manager_id || '',
+          site_supervisor_id: body.site_supervisor_id || '',
+          progress_percent: 0,
+          description: [q.scope_summary, enquiry?.scope_description].filter(Boolean).join('\n') || `Awarded from ${String(q.version_code)}`,
+        });
+        const projectId = String(project.id);
+        await service.writeInTransaction(h, service.module('commercialBaselines'), undefined, {
+          project_id: projectId,
+          project_number: project.project_number,
+          project_name: project.project_name,
+          original_contract_value: contractValue,
+          original_budget_direct_cost: Number(q.total_estimated_cost) || 0,
+          variance_drivers: { material: 0, subcontractor: 0, rework: 0, logistics: 0, other: 0 },
+          cash_billed: 0,
+          cash_collected: 0,
+          cash_outstanding: 0,
+          source_quotation_id: q.id,
+        });
+        // The quotation's project link is set only here (not editable through the API).
+        await h.db.query(
+          `UPDATE commercial_quotations SET project_id = $2,
+             data = jsonb_set(jsonb_set(data, '{project_id}', to_jsonb($2::text)), '{converted_project_id}', to_jsonb($2::text)),
+             updated_at = now() WHERE id = $1`,
+          [q.id, projectId]
+        );
+        if (enquiry) await service.writeInTransaction(h, service.module('clientEnquiries'), enquiry, { ...enquiry, status: 'Won', project_id: projectId });
+        if (tender) await service.writeInTransaction(h, service.module('commercialTenders'), tender, { ...tender, status: 'Awarded', project_id: projectId });
+        await writeAudit(h.db, h.actor, {
+          action: 'quotation.convert',
+          entityType: 'commercialQuotations',
+          entityId: String(q.id),
+          projectId,
+          after: { project_id: projectId, contract_value: contractValue, budget: q.total_estimated_cost, quotation: q.version_code },
+        });
+        return { project, quotation: await findRecord(h.db, def, String(q.id)) };
+      });
+      res.status(201).json(result);
     })
   );
 

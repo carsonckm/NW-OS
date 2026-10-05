@@ -1969,7 +1969,8 @@ export type QuotationStatus =
   | 'Accepted'
   | 'Rejected'
   | 'Expired'
-  | 'Superseded';
+  | 'Superseded'
+  | 'Cancelled';
 
 export type CostSource =
   | 'Material Price'
@@ -2065,6 +2066,28 @@ export interface CommercialQuotation {
   low_margin_warning?: boolean;
   created_at: string;
   updated_at: string;
+  // Phase 4 sales workflow (server-set fields are marked)
+  site_address?: string;
+  attention_to?: string;
+  scope_summary?: string;
+  /** Client-facing terms and notes (shown on the client quotation). */
+  terms?: string;
+  client_notes?: string;
+  /** Internal only: never on the client quotation. */
+  internal_notes?: string;
+  attachments?: string[];
+  prepared_by_id?: string; // server
+  approved_by_id?: string; // server
+  approved_by_name?: string; // server
+  approved_at?: string; // server
+  submitted_at?: string; // server
+  awarded_at?: string; // server
+  awarded_by?: string; // server
+  converted_project_id?: string; // server
+  previous_version_id?: string;
+  superseded_by_id?: string;
+  lost_reason?: string;
+  cancel_reason?: string;
 }
 
 export interface ClientEnquiry {
@@ -2080,6 +2103,17 @@ export interface ClientEnquiry {
   status: 'New' | 'Reviewing' | 'Tender Invited' | 'Quoted' | 'Won' | 'Lost' | 'Cancelled';
   assigned_estimator: string;
   notes?: string;
+  // Phase 4 sales workflow
+  contact_person?: string;
+  contact_phone?: string;
+  contact_email?: string;
+  site_address?: string;
+  source?: string;
+  assigned_user_id?: string;
+  follow_up_date?: string;
+  documents?: string[];
+  /** Set when the work is awarded and converted to a project. */
+  project_id?: string;
 }
 
 export interface CommercialTender {
@@ -2096,6 +2130,16 @@ export interface CommercialTender {
   status: 'In Preparation' | 'Submitted' | 'Shortlisted' | 'Awarded' | 'Regretted' | 'Lost';
   documents: string[];
   assigned_lead: string;
+  // Phase 4 sales workflow
+  tender_reference?: string;
+  site_address?: string;
+  scope?: string;
+  bq_reference?: string;
+  bq_notes?: string;
+  assigned_user_id?: string;
+  submission_record?: { submitted_at: string; submitted_by: string; method: string; reference?: string };
+  notes?: string;
+  project_id?: string;
 }
 
 export interface PriceDatabaseRecord {

@@ -54,27 +54,27 @@ export function useRecords() {
     return {
       live,
       /** Creates a record. The server's stored version (ids, derived fields) is returned. */
-      create: <T extends Rec>(collection: string, record: T) =>
+      create: <T extends object>(collection: string, record: T) =>
         guard(async () => {
           const c = pathOf(collection);
           if (!live) {
-            applyRows(collection, [record]);
-            return record;
+            applyRows(collection, [record as unknown as Rec]);
+            return record as T & Rec;
           }
-          const stored = await api.post<T>(`/${c.path}`, record);
+          const stored = await api.post<T & Rec>(`/${c.path}`, record);
           applyRows(collection, [stored]);
           return stored;
         }),
       /** Updates fields of a record; the server checks who may change what. */
-      update: <T extends Rec>(collection: string, id: string, patch: Partial<T>, current?: T) =>
+      update: <T extends object>(collection: string, id: string, patch: Partial<T>, current?: T) =>
         guard(async () => {
           const c = pathOf(collection);
           if (!live) {
-            const merged = { ...(current ?? {}), ...patch, [c.idField]: id } as T;
+            const merged = { ...(current ?? {}), ...patch, [c.idField]: id } as unknown as T & Rec;
             applyRows(collection, [merged]);
             return merged;
           }
-          const stored = await api.patch<T>(`/${c.path}/${encodeURIComponent(id)}`, patch);
+          const stored = await api.patch<T & Rec>(`/${c.path}/${encodeURIComponent(id)}`, patch);
           applyRows(collection, [stored]);
           return stored;
         }),

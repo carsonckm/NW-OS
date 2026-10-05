@@ -5,6 +5,7 @@ import { installationHooks, siteQcHooks } from './hooks/site';
 import { productionOrderHooks } from './hooks/production';
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
+import { quotationHooks } from './hooks/commercial';
 import type { ModuleDef } from './types';
 
 /**
@@ -324,6 +325,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'client' },
     perms: { view: 'commercial.view', create: 'commercial.edit', edit: 'commercial.edit', delete: null },
     required: ['client_id', 'status'],
+    // Server-priced, versioned, internally approved before submission (hooks/commercial.ts).
+    hooks: quotationHooks,
   },
   {
     key: 'priceDatabase',

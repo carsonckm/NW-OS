@@ -272,6 +272,11 @@ export class DataService {
     return this.inTransaction(ctx, actor, 'rest', (h) => this.core.remove(ctx, collection, id, this.coreTx(h)));
   }
 
+  /** Creates a core record (e.g. a project) inside a domain action's transaction, audited. */
+  createCoreInTransaction(h: HookContext, collection: CoreCollection, input: Row) {
+    return this.core.create(h.ctx, collection, input, this.coreTx(h));
+  }
+
   /** Runs `fn` with a hook context in its own transaction (domain endpoints). */
   transact<T>(ctx: AccessContext, actor: AuditActor, fn: (h: HookContext) => Promise<T>) {
     return this.inTransaction(ctx, actor, 'rest', fn);

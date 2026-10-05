@@ -1,66 +1,23 @@
 import type express from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../../src/data/initialData';
-import { AccessContext } from '../auth/access';
-import type { AuthUser } from '../auth/store';
+import { readdirSync } from 'fs';
+import { INITIAL_CLIENTS } from '../../src/data/initialData';
 import { migrate } from '../db/migrate';
-import { buildApp, seedUsers, signIn, type SeedUser } from '../test/app';
-import { createTestDb, TEST_DATABASE_URL, type TestDb } from '../test/db';
-import { demoData } from './demo';
+import { buildApp, signIn } from '../test/app';
+import { TEST_DATABASE_URL, type TestDb } from '../test/db';
+import { setupDemoWorld, unrelatedProject, USERS } from '../test/demoWorld';
 import { MODULES } from './registry';
-import { DataService } from './service';
 
 type Row = Record<string, any>;
-
-const USERS: SeedUser[] = [
-  { id: 'user-owner', role: 'Owner / CEO', email: 'owner@test.local' },
-  { id: 'user-admin', role: 'Admin', email: 'admin@test.local' },
-  { id: 'user-pm', role: 'Project Manager', email: 'pm@test.local' },
-  { id: 'user-site', role: 'Site Supervisor', email: 'site@test.local' },
-  { id: 'user-purchasing', role: 'Purchasing', email: 'purchasing@test.local' },
-  { id: 'user-accountant', role: 'Accountant', email: 'accountant@test.local' },
-  { id: 'user-prod-mgr', role: 'Production Manager', email: 'prodmgr@test.local' },
-  { id: 'user-prod-staff', role: 'Production Staff', email: 'staff@test.local', assigned: ['proj-1'] },
-  { id: 'user-contractor', role: 'Contractor', email: 'contractor@test.local', contractor_id: 'con-1' },
-  { id: 'user-client', role: 'Client', email: 'client@test.local', client_id: 'client-1' },
-];
-
-const SYSTEM: AuthUser = {
-  id: 'system-import', name: 'System', email: 'system@test.local', role: 'Owner / CEO', is_active: true, is_dev_seed: false,
-  client_id: null, contractor_id: null, phone: null, department: null, title: null, created_at: '', updated_at: '', last_login: null,
-};
-
-/** An unrelated project (client-3, other PM, contractor con-9) for cross-project tests. */
-function unrelatedProject(): Record<string, Row[]> {
-  const project = { ...INITIAL_PROJECTS[0], id: 'proj-x', project_number: 'NW-2026-999', project_name: 'Unrelated', client_id: 'client-3', project_manager_id: 'someone-else', site_supervisor_id: 'someone-else' };
-  const wp = { ...INITIAL_WORK_PACKAGES[0], id: 'wp-x', project_id: 'proj-x', contractor_id: 'con-9' };
-  const item = { ...INITIAL_WORK_ITEMS[0], id: 'item-x', project_id: 'proj-x', work_package_id: 'wp-x', contractor_id: 'con-9', drawing_id: 'dwg-x', drawing_revision: 'Rev 1' };
-  const drawing = {
-    id: 'dwg-x', project_id: 'proj-x', drawing_number: 'X-1', title: 'Unrelated drawing', category: 'Joinery', current_revision_id: 'rev-x1', created_at: '2026-01-01',
-    revisions: [{ id: 'rev-x1', drawing_id: 'dwg-x', revision: 'Rev 1', title: 'X', file_url: '/x.pdf', uploaded_date: '2026-01-01', uploaded_by: 'PM', approved_status: 'Approved', notes: '', is_current: true, drawing_type: 'Client / Designer Drawing', markups: [] }],
-  };
-  const delivery = { id: 'del-x', delivery_number: 'DEL-X', project_id: 'proj-x', project_name: 'Unrelated', work_package_id: 'wp-x', work_package_name: 'X', work_item_ids: ['item-x'], work_item_codes: ['X'], production_order_ids: [], contractor_id: 'con-9', contractor_name: 'Other', driver_name: '', driver_contact: '', vehicle_plate: '', vehicle_type: '', delivery_date: '2026-10-10', delivery_time: '10:00', estimated_arrival: '11:00', destination_site: 'X', special_instructions: '', package_count: 1, status: 'Scheduled', status_history: [], loading_checklist: {}, scanned_packages: [], qr_code: 'X', barcode: 'X', photos: [] };
-  return { projects: [project], workPackages: [wp], workItems: [item], drawings: [drawing], deliveryRecords: [delivery] };
-}
 
 describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
   let db: TestDb;
   let app: express.Express;
-  const as: Record<string, request.Agent> = {};
+  let as: Record<string, request.Agent> = {};
 
   beforeAll(async () => {
-    db = await createTestDb();
-    const service = new DataService(db.pool);
-    const ctx = await AccessContext.load(db.pool, SYSTEM);
-    const demo = demoData();
-    const extra = unrelatedProject();
-    for (const [k, rows] of Object.entries(extra)) demo[k] = [...(demo[k] ?? []), ...rows];
-    const imported = await service.importData(ctx, demo, {}, { id: SYSTEM.id });
-    expect(imported.problems).toEqual([]);
-    await seedUsers(db.pool, USERS);
-    app = buildApp(db.pool);
-    for (const u of USERS) as[u.role] = await signIn(app, u.email);
+    ({ db, app, as } = await setupDemoWorld());
   });
   afterAll(async () => {
     await db?.close();
@@ -73,7 +30,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
     it('applies every migration once (re-running is a no-op)', async () => {
       expect(await migrate(db.pool)).toEqual([]);
       const applied = (await db.pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map((r) => r.name);
-      expect(applied).toEqual(['001_core_chain.sql', '002_auth.sql', '003_audit_drawings_documents.sql', '004_workflow.sql', '005_production.sql', '006_delivery_site.sql', '007_commercial.sql', '008_revision_review_on_hold.sql']);
+      expect(applied).toEqual(readdirSync('db/migrations').filter((f) => f.endsWith('.sql')).sort());
     });
 
     it('has a table with the registered columns for every module', async () => {
