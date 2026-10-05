@@ -72,7 +72,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 end-to-end acceptance: automation, 
     s.baseline = await ledger();
   });
   afterAll(async () => {
-    engine?.stop();
+    await engine?.stop();
     await db?.close();
   });
 
@@ -84,7 +84,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 end-to-end acceptance: automation, 
       await prodMgr().patch('/api/production-orders/p5-po').send({ status: 'Blocked', blocked_reason: 'Edge bander down' }).expect(200);
       s.prodTask = await waitFor(async () => (await db.pool.query(`SELECT id, assigned_user_id, status, source_rule FROM tasks WHERE id = 'tsk-auto-prod-p5-po'`)).rows[0]);
     } finally {
-      listening.stop();
+      await listening.stop();
     }
     expect(s.prodTask).toMatchObject({ assigned_user_id: 'user-prod-mgr', status: 'Open', source_rule: 'production_blocked' });
     expect((await one(`SELECT trigger FROM automation_runs WHERE rule_key = 'production_blocked' ORDER BY id DESC LIMIT 1`)).trigger).toBe('event');
@@ -103,12 +103,15 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 end-to-end acceptance: automation, 
     const before = await count(`SELECT count(*) AS n FROM automation_runs WHERE trigger = 'schedule'`);
     const scheduler = new AutomationEngine(db.pool);
     await db.pool.query(`UPDATE automation_rules SET next_run_at = now() - interval '1 second'`);
+    const since = await count(`SELECT coalesce(max(id), 0) AS n FROM automation_runs`);
     await scheduler.start(200);
     try {
-      await waitFor(async () => (await count(`SELECT count(*) AS n FROM automation_runs WHERE trigger = 'schedule'`)) >= before + 10 || undefined);
+      // Every rule has a finished scheduled run (started runs are logged as 'running' first).
+      await waitFor(async () => (await count(`SELECT count(DISTINCT rule_key) AS n FROM automation_runs WHERE trigger = 'schedule' AND status <> 'running' AND id > $1`, [since])) >= 10 || undefined, 20000);
     } finally {
-      scheduler.stop();
+      await scheduler.stop();
     }
+    expect(await count(`SELECT count(*) AS n FROM automation_runs WHERE trigger = 'schedule'`)).toBeGreaterThanOrEqual(before + 10);
     const runs = (await db.pool.query(`SELECT DISTINCT ON (rule_key) rule_key, status FROM automation_runs WHERE trigger = 'schedule' ORDER BY rule_key, id DESC`)).rows;
     expect(runs.length).toBe(10);
     expect(runs.every((r) => r.status === 'succeeded')).toBe(true);

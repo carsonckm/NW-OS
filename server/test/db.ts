@@ -25,7 +25,8 @@ export async function createTestDb(): Promise<TestDb> {
   await admin.query(`CREATE SCHEMA ${schema}`);
   await admin.end();
 
-  const pool = createPool({ connectionString: TEST_DATABASE_URL, max: 5, options: `-c search_path=${schema}` });
+  // A bounded wait for a connection: a pool-starvation bug fails the test instead of hanging CI.
+  const pool = createPool({ connectionString: TEST_DATABASE_URL, max: 5, connectionTimeoutMillis: 20_000, options: `-c search_path=${schema}` });
   await migrate(pool);
   return {
     pool,

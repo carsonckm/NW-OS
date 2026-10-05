@@ -34,6 +34,8 @@ export const SYSTEM_USER: AuthUser = {
 };
 export const SYSTEM_ACTOR: AuditActor = { id: null, name: 'NW OS Automation', role: 'system' };
 const MAX_BACKOFF_MINUTES = 60;
+/** A run's lease on its rule; far longer than any run, short enough to recover from a crash. */
+const LEASE_MINUTES = 10;
 
 export interface RunResult {
   rule: string;
@@ -60,6 +62,9 @@ export class AutomationEngine {
   private intervalMs = 0;
   private ticking = false;
   private stopped = false;
+  /** This engine's runs, one at a time (scheduler ticks, event batches and manual runs). */
+  private queue: Promise<unknown> = Promise.resolve();
+  private tickPromise: Promise<void> = Promise.resolve();
   private pendingEvents = new Set<string>();
   private eventTimer?: NodeJS.Timeout;
   private unsubscribe?: () => void;
@@ -141,16 +146,30 @@ export class AutomationEngine {
   }
 
   /** Runs one rule now. Concurrent runs of the same rule are prevented with an advisory lock. */
-  async runRule(key: string, trigger: Trigger, event: Row | null = null): Promise<RunResult> {
+  /**
+   * Runs one rule. Runs from this engine are queued one at a time; across servers a run
+   * claims a lease on the rule's row (no connection is held while the rule works, so
+   * concurrent runs can never starve the pool), and a dead server's lease expires.
+   */
+  runRule(key: string, trigger: Trigger, event: Row | null = null): Promise<RunResult> {
+    const run = this.queue.then(() => this.runRuleNow(key, trigger, event));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runRuleNow(key: string, trigger: Trigger, event: Row | null): Promise<RunResult> {
     const rule = RULE_BY_KEY.get(key);
     if (!rule) throw new Error(`Unknown automation rule ${key}`);
-    const lockClient = await this.pool.connect();
-    try {
-      const locked = (await lockClient.query(`SELECT pg_try_advisory_lock(hashtext(current_schema() || ':nwos-automation:' || $1)) AS ok`, [key])).rows[0].ok;
-      if (!locked) return { rule: key, run_id: null, status: 'skipped', actions_taken: 0 };
+    const token = randomUUID();
+    const claimed = await this.pool.query(
+      `UPDATE automation_rules SET lease_until = now() + make_interval(mins => $3), lease_token = $2
+       WHERE key = $1 AND (lease_until IS NULL OR lease_until < now()) RETURNING enabled, config, consecutive_failures`,
+      [key, token, LEASE_MINUTES]
+    );
+    if (!claimed.rowCount) return { rule: key, run_id: null, status: 'skipped', actions_taken: 0 };
+    {
       try {
-        const cfgRow = (await this.pool.query('SELECT enabled, config, consecutive_failures FROM automation_rules WHERE key = $1', [key])).rows[0];
-        if (!cfgRow) return { rule: key, run_id: null, status: 'skipped', actions_taken: 0 };
+        const cfgRow = claimed.rows[0];
         if (!cfgRow.enabled && trigger !== 'manual') return { rule: key, run_id: null, status: 'skipped', actions_taken: 0 };
         const retryCount = trigger === 'retry' ? cfgRow.consecutive_failures : 0;
         const runId = Number(
@@ -198,10 +217,8 @@ export class AutomationEngine {
           return { rule: key, run_id: runId, status: 'failed', actions_taken: taken.length, error: message };
         }
       } finally {
-        await lockClient.query(`SELECT pg_advisory_unlock(hashtext(current_schema() || ':nwos-automation:' || $1))`, [key]);
+        await this.pool.query('UPDATE automation_rules SET lease_until = NULL, lease_token = NULL WHERE key = $1 AND lease_token = $2', [key, token]);
       }
-    } finally {
-      lockClient.release();
     }
   }
 
@@ -210,6 +227,7 @@ export class AutomationEngine {
     const due = (await this.pool.query(`SELECT key, consecutive_failures FROM automation_rules WHERE enabled AND next_run_at <= now() ORDER BY key`)).rows as { key: string; consecutive_failures: number }[];
     const out: RunResult[] = [];
     for (const r of due) {
+      if (this.stopped) break; // stopped mid-tick: leave the rest for the next server
       if (!RULE_BY_KEY.has(r.key)) continue;
       out.push(await this.runRule(r.key, r.consecutive_failures > 0 ? 'retry' : 'schedule'));
     }
@@ -247,13 +265,16 @@ export class AutomationEngine {
     const tick = async () => {
       if (this.ticking || this.stopped) return;
       this.ticking = true;
-      try {
-        await this.runDue();
-      } catch (err) {
-        console.error('automation scheduler tick failed:', err);
-      } finally {
-        this.ticking = false;
-      }
+      this.tickPromise = (async () => {
+        try {
+          await this.runDue();
+        } catch (err) {
+          console.error('automation scheduler tick failed:', err);
+        } finally {
+          this.ticking = false;
+        }
+      })();
+      await this.tickPromise;
     };
     this.intervalMs = intervalMs;
     this.timer = setInterval(() => void tick(), intervalMs);
@@ -269,11 +290,15 @@ export class AutomationEngine {
     return this.intervalMs / 1000;
   }
 
-  stop() {
+  /** Stops the timer and event triggers, then waits for any run already in progress. */
+  async stop() {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     if (this.eventTimer) clearTimeout(this.eventTimer);
+    this.eventTimer = undefined;
     this.unsubscribe?.();
+    await this.tickPromise;
+    await this.queue;
   }
 }

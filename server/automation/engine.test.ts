@@ -38,7 +38,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 automation engine and scheduler', (
     engine = new AutomationEngine(db.pool);
   });
   afterAll(async () => {
-    engine?.stop();
+    await engine?.stop();
     RULES.splice(RULES.indexOf(testRule), 1);
     RULE_BY_KEY.delete(testRule.key);
     await db?.close();
@@ -107,17 +107,24 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 automation engine and scheduler', (
     expect(audit).toMatchObject({ actor_name: 'NW OS Automation', action: 'create' });
   });
 
-  it('does not run a rule twice at the same time (advisory lock)', async () => {
-    const holder = await db.pool.connect();
-    try {
-      await holder.query(`SELECT pg_advisory_lock(hashtext(current_schema() || ':nwos-automation:test_rule'))`);
-      expect((await engine.runRule('test_rule', 'manual')).status).toBe('skipped');
-    } finally {
-      await holder.query(`SELECT pg_advisory_unlock(hashtext(current_schema() || ':nwos-automation:test_rule'))`);
-      holder.release();
-    }
+  it('does not run a rule twice at the same time (lease), and recovers a dead server\'s lease', async () => {
+    // Another server is running it right now.
+    await db.pool.query(`UPDATE automation_rules SET lease_until = now() + interval '5 minutes', lease_token = 'other-server' WHERE key = 'test_rule'`);
+    expect((await engine.runRule('test_rule', 'manual')).status).toBe('skipped');
+    // That server died: its lease expires and the rule runs again.
+    await db.pool.query(`UPDATE automation_rules SET lease_until = now() - interval '1 second' WHERE key = 'test_rule'`);
     expect((await engine.runRule('test_rule', 'manual')).status).toBe('succeeded');
+    expect((await db.pool.query(`SELECT lease_until, lease_token FROM automation_rules WHERE key = 'test_rule'`)).rows[0]).toEqual({ lease_until: null, lease_token: null });
   });
+
+  it('never starves the connection pool when many different rules run at once (regression: CI hang)', async () => {
+    // Two servers' engines, every rule at once, on a 5-connection pool. With the old session
+    // advisory lock each run pinned a connection and waited for another: a deadlock.
+    const engines = [new AutomationEngine(db.pool), new AutomationEngine(db.pool)];
+    const statuses = await Promise.all(RULES.flatMap((r) => engines.map((e) => e.runRule(r.key, 'manual').then((x) => x.status))));
+    expect(statuses.every((st) => st === 'succeeded' || st === 'skipped')).toBe(true);
+    expect(statuses.filter((st) => st === 'succeeded').length).toBeGreaterThanOrEqual(RULES.length);
+  }, 30_000);
 
   it('skips disabled rules on schedule', async () => {
     await db.pool.query(`UPDATE automation_rules SET enabled = false, next_run_at = now() - interval '1 minute' WHERE key = 'test_rule'`);
@@ -159,7 +166,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 automation engine and scheduler', (
       expect(closed).toBe('Completed');
       expect((await db.pool.query(`SELECT approval_status FROM drawing_revisions WHERE id = 'rev-evt'`)).rows[0].approval_status).toBe('Rejected');
     } finally {
-      started.stop();
+      await started.stop();
     }
   }, 30_000);
 
