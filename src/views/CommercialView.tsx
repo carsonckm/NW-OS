@@ -5,6 +5,7 @@
  * Variations, Claims, Invoices, Payments, Profitability & Cost Leaks, Reports.
  */
 
+import { ClaimActions, ClaimForm, PaymentForm } from './commercial/ClaimsPayments';
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
 import { officialBaseline, useServerFinancials } from '../services/serverFinancials';
@@ -798,11 +799,21 @@ const VariationsSection: React.FC<{ variations: any[]; projectId: string }> = ({
 // SUBSECTION 9: CLAIMS (IPC)
 // =========================================================================
 const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims, projectId }) => {
+  const { currentUser } = useNW();
+  const [adding, setAdding] = React.useState(false);
   return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <h3 className="text-sm font-black text-slate-900">
-        Progress Claims & Interim Payment Certificates (IPC)
-      </h3>
+    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4" data-testid="claims-section">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-black text-slate-900">
+          Progress Claims & Interim Payment Certificates (IPC)
+        </h3>
+        {hasPermission(currentUser, 'finance.manage_claims') && (
+          <button type="button" onClick={() => setAdding(true)} className="rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400">
+            New claim
+          </button>
+        )}
+      </div>
+      {adding && <ClaimForm projectId={projectId} onClose={() => setAdding(false)} />}
       <div className="divide-y divide-slate-100">
         {claims.map((claim) => (
           <div key={claim.id} className="py-4 flex justify-between items-center text-xs">
@@ -812,7 +823,8 @@ const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims,
             </div>
             <div className="text-right">
               <div className="font-black text-slate-950">Net Claim: RM {claim.net_claim_amount?.toLocaleString()}</div>
-              <div className="text-slate-500 text-[11px]">Retention: RM {claim.retention_amount?.toLocaleString()}</div>
+              <div className="text-slate-500 text-[11px]">Retention: RM {claim.retention_amount?.toLocaleString()} · {claim.status}</div>
+              <ClaimActions claim={claim} />
             </div>
           </div>
         ))}
@@ -825,9 +837,19 @@ const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims,
 // SUBSECTION 11: PAYMENTS
 // =========================================================================
 const PaymentsSection: React.FC<{ payments: any[]; projectId: string }> = ({ payments, projectId }) => {
+  const { currentUser } = useNW();
+  const [adding, setAdding] = React.useState(false);
   return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <h3 className="text-sm font-black text-slate-900">Payments & Cash Movements</h3>
+    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4" data-testid="payments-section">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-black text-slate-900">Payments & Cash Movements</h3>
+        {hasPermission(currentUser, 'finance.record_payments') && (
+          <button type="button" onClick={() => setAdding(true)} className="rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400">
+            Record payment
+          </button>
+        )}
+      </div>
+      {adding && <PaymentForm projectId={projectId} onClose={() => setAdding(false)} />}
       <div className="divide-y divide-slate-100">
         {payments.map((p) => (
           <div key={p.id} className="py-3.5 flex justify-between items-center text-xs">

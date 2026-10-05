@@ -320,3 +320,61 @@ export const HandoverForm: React.FC<{ onClose: () => void; onCreated?: (id: stri
     </Modal>
   );
 };
+
+/** Schedules the installation of a work item (status Scheduled; the site team starts it). */
+export const InstallationJobForm: React.FC<{ onClose: () => void; onCreated?: (id: string) => void }> = ({ onClose, onCreated }) => {
+  const { workItems, workPackages, projects, contractors, availableUsers, installationJobs } = useNW();
+  const records = useRecords();
+  const scheduled = new Set(installationJobs.filter((j) => j.status !== 'Cancelled').map((j) => j.work_item_id));
+  const candidates = workItems.filter((w) => !scheduled.has(w.id) && w.status !== 'Completed');
+  const [itemId, setItemId] = useState(candidates[0]?.id ?? '');
+  const [f, setF] = useState({ start: addDays(today(), 1), finish: addDays(today(), 5), lead: '', contact: '', headcount: 2, location: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    const item = workItems.find((w) => w.id === itemId);
+    if (!item) return setError('Choose the work item to install.');
+    const project = projects.find((p) => p.id === item.project_id);
+    const wp = workPackages.find((w) => w.id === item.work_package_id);
+    const contractor = contractors.find((c) => c.id === (item.contractor_id || wp?.contractor_id));
+    const supervisor = availableUsers.find((u) => u.id === project?.site_supervisor_id);
+    const id = newId('inst');
+    setBusy(true);
+    setError(null);
+    try {
+      await records.create('installationJobs', {
+        id, job_number: `INS-${id.slice(5, 13).toUpperCase()}`, work_item_id: item.id, work_item_code: item.item_code, work_item_description: item.description,
+        project_id: item.project_id, project_name: project?.project_name ?? '', work_package_id: item.work_package_id, work_package_name: wp?.name,
+        location: f.location || item.location || '', contractor_id: contractor?.id ?? '', contractor_name: contractor?.company_name ?? '',
+        lead_installer: f.lead, installer_contact: f.contact, site_supervisor_id: supervisor?.id ?? project?.site_supervisor_id ?? '', site_supervisor_name: supervisor?.name ?? '',
+        team_headcount: Number(f.headcount) || 1, status: 'Scheduled', planned_start_date: f.start, planned_completion_date: f.finish,
+        drawing_reference: item.drawing_id ?? '', drawing_revision: item.drawing_revision ?? '', progress_percent: 0, photos: [],
+        checklist: { level_plumb: false, secure_fixing: false, alignment_adjacent: false, hardware_operation: false, surface_condition: false, joint_sealant_tolerances: false, services_integration: false, cleanliness_protection: false },
+      });
+      onCreated?.(id);
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Schedule installation" subtitle="Created as Scheduled; the site team starts it when work begins." onClose={onClose} footer={<><Button onClick={onClose}>Cancel</Button><Button tone="primary" busy={busy} onClick={submit}>Schedule installation</Button></>}>
+      <Field label="Work item">
+        <Select value={itemId} onChange={(e) => setItemId(e.target.value)} aria-label="Installation work item">
+          {candidates.map((w) => <option key={w.id} value={w.id}>{w.item_code} — {w.description} ({projects.find((p) => p.id === w.project_id)?.project_number ?? ''})</option>)}
+        </Select>
+      </Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Planned start"><Input type="date" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} /></Field>
+        <Field label="Planned completion"><Input type="date" value={f.finish} onChange={(e) => setF({ ...f, finish: e.target.value })} /></Field>
+        <Field label="Lead installer"><Input value={f.lead} onChange={(e) => setF({ ...f, lead: e.target.value })} aria-label="Lead installer" /></Field>
+        <Field label="Installer contact"><Input value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} /></Field>
+        <Field label="Team size"><Input type="number" min={1} value={f.headcount} onChange={(e) => setF({ ...f, headcount: Number(e.target.value) })} /></Field>
+        <Field label="Location on site"><Input value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} /></Field>
+      </div>
+      <FormError error={error} onDismiss={() => setError(null)} />
+    </Modal>
+  );
+};

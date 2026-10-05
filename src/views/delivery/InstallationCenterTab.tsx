@@ -21,6 +21,8 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
+import { InstallationJobForm } from './SiteWorkflow';
+import { hasPermission } from '../../utils/permissions';
 import { InstallationJob, InstallationJobStatus, SiteReadinessCheck } from '../../types';
 
 interface InstallationCenterTabProps {
@@ -47,6 +49,8 @@ export const InstallationCenterTab: React.FC<InstallationCenterTabProps> = ({
   const [activeStageFilter, setActiveStageFilter] = useState<string>('all');
   const [selectedJobId, setSelectedJobId] = useState<string>(installationJobs[0]?.id || '');
   const [showReadinessModal, setShowReadinessModal] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const canSchedule = hasPermission(currentUser, 'installation.update') && currentUser.role !== 'Contractor';
 
   const selectedJob = installationJobs.find((j) => j.id === selectedJobId) || installationJobs[0];
 
@@ -98,6 +102,7 @@ export const InstallationCenterTab: React.FC<InstallationCenterTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {showSchedule && <InstallationJobForm onClose={() => setShowSchedule(false)} onCreated={setSelectedJobId} />}
       {/* Top Header */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -115,6 +120,15 @@ export const InstallationCenterTab: React.FC<InstallationCenterTabProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
+          {canSchedule && (
+            <button
+              type="button"
+              onClick={() => setShowSchedule(true)}
+              className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+            >
+              Schedule installation
+            </button>
+          )}
           <button
             onClick={() => setShowReadinessModal(true)}
             className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5"
