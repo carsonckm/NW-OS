@@ -26,6 +26,19 @@ type Rec = Record<string, unknown>;
 type Setters = Record<string, (rows: never[]) => void>;
 
 const BACKUP_PREFIX = 'nw_os_core_backup_';
+
+/**
+ * Collections whose stored figures the server derives from others: after a save that
+ * touches any of the listed sources, the browser reloads them so it shows the server's
+ * totals (e.g. committed cost after a PO is issued) instead of its own preview.
+ */
+const SERVER_DERIVED: { key: string; path: string; sources: string[] }[] = [
+  {
+    key: 'commercialBaselines',
+    path: 'commercial-baselines',
+    sources: ['projects', 'variations', 'purchaseOrders', 'projectCostLedger', 'commercialQuotations', 'commercialBaselines'],
+  },
+];
 const MAX_BACKUPS = 3;
 const DEBOUNCE_MS = 400;
 
@@ -74,9 +87,13 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 export interface CoreSyncOptions {
   /** Whether this user may import local data into an empty database (settings.manage). */
   canImport?: boolean;
+  /** Whether this user may read a server-derived collection (e.g. baselines need commercial.view). */
+  canRead?: (collection: string) => boolean;
 }
 
-export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImport = true }: CoreSyncOptions = {}) {
+export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImport = true, canRead }: CoreSyncOptions = {}) {
+  const canReadRef = useRef(canRead);
+  canReadRef.current = canRead;
   const [state, setState] = useState<CoreSyncState>({ mode: 'checking', status: 'idle' });
   const latest = useRef(data);
   latest.current = data;
@@ -155,6 +172,29 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     return failures;
   }, []);
 
+  const refreshDerived = useCallback(
+    async (changes: SyncChanges) => {
+      for (const d of SERVER_DERIVED) {
+        if (!setters[d.key] || !saved.current || canReadRef.current?.(d.key) === false) continue;
+        if (!d.sources.some((c) => changes.upserts[c] || changes.deletes[c])) continue;
+        try {
+          const rows = await dataApi.list(d.path);
+          const field = idOf(d.key);
+          // Skip if the user has unsaved edits to this collection; the next save refreshes it.
+          const pending = diffCoreData({ [d.key]: saved.current[d.key] ?? [] }, { [d.key]: latest.current[d.key] ?? [] }).count;
+          if (pending || !saved.current) continue;
+          const order = new Map((latest.current[d.key] ?? []).map((r, i) => [String(r[field]), i]));
+          rows.sort((a, b) => (order.get(String(a[field])) ?? 1e9) - (order.get(String(b[field])) ?? 1e9));
+          saved.current = { ...saved.current, [d.key]: rows };
+          setters[d.key](rows as never[]);
+        } catch {
+          // Not allowed to read it, or offline: keep what is shown.
+        }
+      }
+    },
+    [setters]
+  );
+
   const flush = useCallback(async () => {
     if (!saved.current) return;
     if (inFlight.current) {
@@ -172,6 +212,7 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
       // blocking rule no longer applies): show the database's state again, unless the user
       // has edited since this save started (the next save will then run anyway).
       if (failures.length && diffCoreData(next, latest.current).count === 0) apply(await dataApi.snapshot());
+      else if (!failures.length) await refreshDerived(changes);
       setState((s) =>
         failures.length
           ? { ...s, status: 'error', message: `${failures.length} change(s) not saved: ${failures[0]}` }
@@ -186,7 +227,7 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
         void flush();
       }
     }
-  }, [write]);
+  }, [write, refreshDerived]);
 
   // Decide the mode once on load.
   useEffect(() => {

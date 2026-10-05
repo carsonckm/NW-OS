@@ -366,7 +366,7 @@ export interface DrawingRevision {
   file_url: string;
   uploaded_date: string;
   uploaded_by: string;
-  approved_status: 'Pending Review' | 'Approved' | 'Superseded' | 'Rejected' | 'Draft' | 'Review';
+  approved_status: 'Draft' | 'Internal Review' | 'Approved' | 'Superseded' | 'Rejected' | 'Pending Review' | 'Review';
   supersedes_revision?: string;
   notes: string;
   is_current: boolean;
@@ -499,6 +499,7 @@ export type ProductionStatus =
   | 'Packing'
   | 'Ready for Delivery'
   | 'Completed'
+  | 'On Hold'
   | 'Blocked'
   | 'Cancelled';
 

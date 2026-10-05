@@ -91,9 +91,9 @@ export class CoreRepository {
     return fromRow<T>(def, res.rows[0]);
   }
 
-  async create<T>(collection: CoreCollection, input: Row): Promise<T> {
+  async create<T>(collection: CoreCollection, input: Row, db: Queryable = this.pool): Promise<T> {
     const def = ENTITIES[collection];
-    const data = await this.withDerivedProject(collection, input);
+    const data = await this.withDerivedProject(collection, input, db);
     const now = new Date().toISOString();
     const row = toRow(def, {
       ...data,
@@ -101,20 +101,20 @@ export class CoreRepository {
       created_at: data.created_at || now,
       updated_at: data.updated_at || now,
     });
-    const created = await insertRow(this.pool, def, row, 'error');
+    const created = await insertRow(db, def, row, 'error');
     return fromRow<T>(def, created!);
   }
 
-  async update<T>(collection: CoreCollection, id: string, patch: Row): Promise<T> {
+  async update<T>(collection: CoreCollection, id: string, patch: Row, db: Queryable = this.pool): Promise<T> {
     const def = ENTITIES[collection];
     if ('id' in patch && patch.id !== id) throw new ValidationError('id cannot be changed');
-    const data = await this.withDerivedProject(collection, patch);
+    const data = await this.withDerivedProject(collection, patch, db);
     const row = toRow(def, { ...data, updated_at: new Date().toISOString() });
     delete row.id;
     delete row.created_at;
     const cols = Object.keys(row);
     const sets = cols.map((c, i) => `${q(c)} = $${i + 2}`);
-    const res = await this.pool.query(
+    const res = await db.query(
       `UPDATE ${q(def.table)} SET ${sets.join(', ')} WHERE id = $1 RETURNING ${columnsOf(def)}`,
       [id, ...cols.map((c) => row[c])]
     );
@@ -132,16 +132,16 @@ export class CoreRepository {
     return res.rows[0] ? fromRow<T>(def, res.rows[0]) : undefined;
   }
 
-  async remove(collection: CoreCollection, id: string): Promise<void> {
+  async remove(collection: CoreCollection, id: string, db: Queryable = this.pool): Promise<void> {
     const def = ENTITIES[collection];
-    const res = await this.pool.query(`DELETE FROM ${q(def.table)} WHERE id = $1`, [id]);
+    const res = await db.query(`DELETE FROM ${q(def.table)} WHERE id = $1`, [id]);
     if (res.rowCount === 0) throw new NotFoundError(collection, id);
   }
 
   /** A work item's project_id can be omitted; it is taken from its work package. */
-  private async withDerivedProject(collection: CoreCollection, input: Row): Promise<Row> {
+  private async withDerivedProject(collection: CoreCollection, input: Row, db: Queryable = this.pool): Promise<Row> {
     if (collection !== 'workItems' || input.project_id || typeof input.work_package_id !== 'string') return input;
-    const res = await this.pool.query('SELECT project_id FROM work_packages WHERE id = $1', [input.work_package_id]);
+    const res = await db.query('SELECT project_id FROM work_packages WHERE id = $1', [input.work_package_id]);
     if (!res.rows[0]) throw new ValidationError(`work package ${input.work_package_id} does not exist`);
     return { ...input, project_id: res.rows[0].project_id };
   }

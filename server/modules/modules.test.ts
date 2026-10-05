@@ -1,7 +1,7 @@
 import type express from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../../src/data/initialData';
+import { INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../../src/data/initialData';
 import { AccessContext } from '../auth/access';
 import type { AuthUser } from '../auth/store';
 import { migrate } from '../db/migrate';
@@ -73,7 +73,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
     it('applies every migration once (re-running is a no-op)', async () => {
       expect(await migrate(db.pool)).toEqual([]);
       const applied = (await db.pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map((r) => r.name);
-      expect(applied).toEqual(['001_core_chain.sql', '002_auth.sql', '003_audit_drawings_documents.sql', '004_workflow.sql', '005_production.sql', '006_delivery_site.sql', '007_commercial.sql']);
+      expect(applied).toEqual(['001_core_chain.sql', '002_auth.sql', '003_audit_drawings_documents.sql', '004_workflow.sql', '005_production.sql', '006_delivery_site.sql', '007_commercial.sql', '008_revision_review_on_hold.sql']);
     });
 
     it('has a table with the registered columns for every module', async () => {
@@ -179,16 +179,78 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
 
   // ---------------------------------------------------------------- drawings
   describe('drawing revisions', () => {
-    it('adds a new revision without overwriting the old one, which becomes superseded', async () => {
-      const res = await owner()
+    const setStatus = (who: string, drawing: string, rev: string, status: string) =>
+      as[who].post(`/api/drawings/${drawing}/revisions/${rev}/status`).send({ status });
+    const revisionRows = async (drawing: string) =>
+      (await db.pool.query(`SELECT id, approval_status, is_current FROM drawing_revisions WHERE drawing_id = $1 AND kind = 'client' ORDER BY id`, [drawing])).rows;
+
+    it('stores an uploaded revision as Draft; the approved revision stays current', async () => {
+      const res = await as['Project Manager']
         .post('/api/drawings/dwg-2/revisions')
         .send({ id: 'rev-202', revision: 'Rev 2', title: 'Feature wall Rev 2', file_url: '/drawings/A-104_Rev2.pdf', notes: 'Wider panels', drawing_type: 'Client / Designer Drawing' })
         .expect(201);
       const revs = res.body.revisions as Row[];
       expect(revs.map((r) => r.id)).toEqual(['rev-201', 'rev-202']);
-      expect(revs.find((r) => r.id === 'rev-201')).toMatchObject({ approved_status: 'Superseded', is_current: false, file_url: expect.any(String) });
-      expect(revs.find((r) => r.id === 'rev-202')).toMatchObject({ is_current: true, approved_status: 'Pending Review' });
+      expect(revs.find((r) => r.id === 'rev-202')).toMatchObject({ approved_status: 'Draft', is_current: false });
+      expect(revs.find((r) => r.id === 'rev-201')).toMatchObject({ approved_status: 'Approved', is_current: true });
+      expect(res.body.current_revision_id).toBe('rev-201');
+    });
+
+    it('never approves on upload, through either route', async () => {
+      const posted = await owner()
+        .post('/api/drawings/dwg-2/revisions')
+        .send({ id: 'rev-203', revision: 'Rev 3', title: 'x', file_url: '/x.pdf', notes: '', drawing_type: 'Client / Designer Drawing', approved_status: 'Approved' });
+      expect(posted.status).toBe(403);
+      const drawing = (await owner().get('/api/drawings/dwg-2').expect(200)).body;
+      const synced = { ...drawing, revisions: [...drawing.revisions, { id: 'rev-203', drawing_id: 'dwg-2', revision: 'Rev 3', title: 'x', file_url: '/x.pdf', uploaded_date: '2026-10-05', uploaded_by: 'x', approved_status: 'Approved', notes: '', is_current: true, drawing_type: 'Client / Designer Drawing', markups: [] }] };
+      const res = await owner().post('/api/data/sync').send({ upserts: { drawings: [synced] } });
+      expect(res.status).toBe(403);
+      expect(res.body.message).toMatch(/only an approver can approve/);
+      expect((await db.pool.query(`SELECT 1 FROM drawing_revisions WHERE id = 'rev-203'`)).rowCount).toBe(0);
+    });
+
+    it('must pass Internal Review before approval', async () => {
+      const res = await setStatus('Owner / CEO', 'dwg-2', 'rev-202', 'Approved');
+      expect(res.status).toBe(403);
+      expect(res.body.message).toMatch(/Internal Review/);
+    });
+
+    it('denies approval to users without drawings.approve', async () => {
+      expect((await setStatus('Site Supervisor', 'dwg-2', 'rev-202', 'Internal Review')).status).toBe(403);
+      await setStatus('Project Manager', 'dwg-2', 'rev-202', 'Internal Review').expect(200);
+      expect((await setStatus('Project Manager', 'dwg-2', 'rev-202', 'Approved')).status).toBe(403);
+      expect((await setStatus('Production Manager', 'dwg-2', 'rev-202', 'Approved')).status).toBe(403);
+      // The same approval smuggled through a sync batch is refused too.
+      const drawing = (await owner().get('/api/drawings/dwg-2').expect(200)).body;
+      const approve = { ...drawing, revisions: drawing.revisions.map((r: Row) => (r.id === 'rev-202' ? { ...r, approved_status: 'Approved', is_current: true } : r)) };
+      expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(403);
+      expect(await revisionRows('dwg-2')).toEqual([
+        { id: 'rev-201', approval_status: 'Approved', is_current: true },
+        { id: 'rev-202', approval_status: 'Internal Review', is_current: false },
+      ]);
+    });
+
+    it('lets an authorised approver approve; the old revision is superseded, never deleted', async () => {
+      const res = await setStatus('Owner / CEO', 'dwg-2', 'rev-202', 'Approved').expect(200);
       expect(res.body.current_revision_id).toBe('rev-202');
+      expect(await revisionRows('dwg-2')).toEqual([
+        { id: 'rev-201', approval_status: 'Superseded', is_current: false },
+        { id: 'rev-202', approval_status: 'Approved', is_current: true },
+      ]);
+      const audit = (await db.pool.query(`SELECT action, entity_id, actor_id FROM audit_logs WHERE entity_id IN ('rev-201', 'rev-202') AND action LIKE 'drawing.revision.%' ORDER BY id`)).rows;
+      expect(audit.map((a) => [a.action, a.entity_id])).toEqual([
+        ['drawing.revision.create', 'rev-202'],
+        ['drawing.revision.status', 'rev-202'],
+        ['drawing.revision.approve', 'rev-202'],
+        ['drawing.revision.supersede', 'rev-201'],
+      ]);
+      expect((await setStatus('Owner / CEO', 'dwg-2', 'rev-201', 'Approved')).status).toBe(403); // can't reinstate
+    });
+
+    it('keeps the workflow in the database too', async () => {
+      await expect(db.pool.query(`UPDATE drawing_revisions SET approval_status = 'Signed off' WHERE id = 'rev-202'`)).rejects.toThrow(/drawing_revisions_client_status/);
+      await expect(db.pool.query(`INSERT INTO drawing_revisions (id, drawing_id, kind, revision, approval_status, is_current, content_hash, data) VALUES ('rev-db', 'dwg-2', 'client', 'Rev 9', 'Draft', true, 'h', '{}')`)).rejects.toThrow(/drawing_revisions_current_is_approved/);
+      await expect(db.pool.query(`INSERT INTO drawing_revisions (id, drawing_id, kind, revision, approval_status, is_current, content_hash, data) VALUES ('rev-db', 'dwg-2', 'client', 'Rev 9', 'Approved', true, 'h', '{}')`)).rejects.toThrow(/drawing_revisions_one_current/);
     });
 
     it('refuses to change a stored revision through the API', async () => {
@@ -204,13 +266,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       expect(item.source_drawing_revision_id).toBe('rev-3');
     });
 
-    it('lets uploaders record the client issue, but only drawings.approve releases an NW drawing for production', async () => {
+    it('only drawings.approve releases an NW production drawing for production', async () => {
       const drawing = (await owner().get('/api/drawings/dwg-2').expect(200)).body;
-      const approve = { ...drawing, revisions: drawing.revisions.map((r: Row) => (r.id === 'rev-202' ? { ...r, approved_status: 'Approved' } : r)) };
-      expect((await as['Site Supervisor'].post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(403);
-      expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [approve] } })).status).toBe(200);
       const nw = { id: 'nwd-202', drawing_number: 'A-104-NW', revision: 'Rev 1', title: 'NW A-104', linked_client_drawing_id: 'dwg-2', linked_client_revision: 'Rev 2', status: 'Draft', approved_for_production: false };
-      const withNw = (n: Row) => ({ ...approve, nw_production_drawings: [n] });
+      const withNw = (n: Row) => ({ ...drawing, nw_production_drawings: [n] });
       expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [withNw({ ...nw, status: 'Approved', approved_for_production: true })] } })).status).toBe(403);
       await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [withNw(nw)] } }).expect(200);
       expect((await as['Project Manager'].post('/api/data/sync').send({ upserts: { drawings: [withNw({ ...nw, status: 'Approved', approved_for_production: true })] } })).status).toBe(403);
@@ -285,11 +344,70 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       expect((await as['Production Manager'].patch('/api/production-orders/po-102').send({ status: 'Blocked' })).status).toBe(200);
     });
 
-    it('blocks advancing once the revision is superseded', async () => {
-      await owner().post('/api/drawings/dwg-1/revisions').send({ id: 'rev-4', revision: 'Rev 4', title: 'Counter Rev 4', file_url: '/A-103_Rev4.pdf', notes: '', drawing_type: 'Client / Designer Drawing' }).expect(201);
+    it('cannot use a revision that is uploaded but not yet approved', async () => {
+      await as['Project Manager'].post('/api/drawings/dwg-1/revisions').send({ id: 'rev-4', revision: 'Rev 4', title: 'Counter Rev 4', file_url: '/A-103_Rev4.pdf', notes: '', drawing_type: 'Client / Designer Drawing' }).expect(201);
+      const draft = await as['Production Manager'].post('/api/production-orders').send(order({ id: 'po-draft', approved_client_drawing_revision: 'A-103 Rev 4' }));
+      expect(draft.status).toBe(400);
+      expect(draft.body.message).toMatch(/Rev 4 is not approved \(Draft\)/);
+      await as['Project Manager'].post('/api/drawings/dwg-1/revisions/rev-4/status').send({ status: 'Internal Review' }).expect(200);
+      const review = await as['Production Manager'].post('/api/production-orders').send(order({ id: 'po-draft', approved_client_drawing_revision: 'A-103 Rev 4' }));
+      expect(review.status).toBe(400);
+      // Until Rev 4 is approved, Rev 3 stays the approved, current revision and orders on it go on.
+      await as['Production Manager'].patch('/api/production-orders/po-new').send({ status: 'Material Required' }).expect(200);
+    });
+
+    it('blocks advancing once a newer revision is approved and the old one superseded', async () => {
+      await owner().post('/api/drawings/dwg-1/revisions/rev-4/status').send({ status: 'Approved' }).expect(200);
       const res = await as['Production Manager'].patch('/api/production-orders/po-new').send({ status: 'Cutting' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/superseded/);
+    });
+
+    describe('On Hold', () => {
+      const hold = (who: string, id: string, status: string) => as[who].patch(`/api/production-orders/${id}`).send({ status });
+
+      it('is a management decision: staff cannot hold or resume, the production manager can', async () => {
+        await as['Production Manager']
+          .post('/api/production-orders')
+          .send(order({ id: 'po-hold', order_number: 'PO-HOLD', approved_client_drawing_id: 'dwg-2', approved_client_drawing_revision: 'A-104 Rev 2', approved_nw_production_drawing_id: 'nwd-202' }))
+          .expect(201);
+        await hold('Production Staff', 'po-hold', 'Cutting').expect(200); // ordinary stage moves stay with staff
+        expect((await hold('Production Staff', 'po-hold', 'On Hold')).status).toBe(403);
+        await hold('Production Manager', 'po-hold', 'On Hold').expect(200);
+        expect((await hold('Production Staff', 'po-hold', 'Cutting')).status).toBe(403);
+        expect((await db.pool.query(`SELECT status FROM production_orders WHERE id = 'po-hold'`)).rows[0].status).toBe('On Hold');
+      });
+
+      it('must be resumed before completion, and a finished order cannot be held', async () => {
+        const done = await hold('Production Manager', 'po-hold', 'Completed');
+        expect(done.status).toBe(400);
+        expect(done.body.message).toMatch(/Resume/);
+        await hold('Production Manager', 'po-hold', 'Assembly').expect(200);
+        await hold('Production Manager', 'po-hold', 'Completed').expect(200);
+        const held = await hold('Production Manager', 'po-hold', 'On Hold');
+        expect(held.status).toBe(400);
+        expect(held.body.message).toMatch(/Completed production order cannot be put On Hold/);
+      });
+
+      it('can park an order on a superseded drawing, which still cannot resume production', async () => {
+        await hold('Production Manager', 'po-102', 'On Hold').expect(200);
+        const resume = await hold('Production Manager', 'po-102', 'Cutting');
+        expect(resume.status).toBe(400);
+        expect(resume.body.message).toMatch(/approved, current drawing revision/);
+      });
+
+      it('lets production roles update only the production fields of the linked work item', async () => {
+        await as['Production Manager'].patch('/api/work-items/item-16').send({ production_status: 'On Hold' }).expect(200);
+        await as['Production Staff'].patch('/api/work-items/item-16').send({ production_status: 'Cutting', progress_percent: 20 }).expect(200);
+        expect((await as['Production Staff'].patch('/api/work-items/item-16').send({ description: 'Changed by staff' })).status).toBe(403);
+        expect((await as['Production Manager'].patch('/api/work-items/item-16').send({ installation_status: 'Completed' })).status).toBe(403);
+      });
+
+      it('is accepted by the database for orders and work items only as On Hold', async () => {
+        const item = (await owner().get('/api/work-items/item-16').expect(200)).body;
+        await owner().post('/api/data/sync').send({ upserts: { workItems: [{ ...item, production_status: 'On Hold' }] } }).expect(200);
+        await expect(db.pool.query(`UPDATE production_orders SET status = 'Paused' WHERE id = 'po-hold'`)).rejects.toThrow(/production_orders_status_check/);
+      });
     });
 
     it('keeps production records away from roles without production.view', async () => {
@@ -455,6 +573,26 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       expect(Object.keys(afterInvoice).some((k) => /net/i.test(k))).toBe(false);
     });
 
+    it('computes baseline totals itself and ignores totals sent by the browser', async () => {
+      const official = (await as['Accountant'].get('/api/projects/proj-2/profitability').expect(200)).body;
+      const stored = (await owner().get('/api/commercial-baselines/proj-2').expect(200)).body;
+      await owner()
+        .post('/api/data/sync')
+        .send({ upserts: { commercialBaselines: [{ ...stored, committed_cost: 1, actual_cost: 2, forecast_final_cost: 3, forecast_gross_profit: 999999999, current_contract_value: 4 }] } })
+        .expect(200);
+      const data = (await db.pool.query(`SELECT data FROM commercial_baselines WHERE project_id = 'proj-2'`)).rows[0].data;
+      expect(data.committed_cost).toBeUndefined();
+      expect(data.forecast_gross_profit).toBeUndefined();
+      const read = (await owner().get('/api/commercial-baselines/proj-2').expect(200)).body;
+      expect(read).toMatchObject({
+        committed_cost: official.committed_cost,
+        actual_cost: official.actual_cost,
+        forecast_final_cost: official.forecast_final_cost,
+        forecast_gross_profit: official.project_gross_profit,
+        current_contract_value: official.current_contract_value,
+      });
+    });
+
     it('a draft PO is not committed cost', async () => {
       const before = (await as['Accountant'].get('/api/projects/proj-2/profitability')).body;
       await as['Purchasing'].post('/api/purchase-orders').send({ id: 'po-c2', po_number: 'PO-C2', project_id: 'proj-2', project_name: 'Horizon', supplier_id: null, supplier_name: '', items: [], total_amount: 5000, status: 'Draft', created_at: '', updated_at: '' }).expect(201);
@@ -470,6 +608,61 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       const rows = (await owner().get('/api/audit-logs?entity_type=variations').expect(200)).body as Row[];
       expect(rows.some((r) => r.entity_id === 'vo-new')).toBe(true);
       expect((await as['Production Staff'].get('/api/audit-logs')).status).toBe(403);
+    });
+  });
+
+  // ------------------------------------------------- core audit transactional
+  describe('core REST writes and their audit rows', () => {
+    const auditFor = async (id: string) =>
+      (await db.pool.query(`SELECT action, actor_id FROM audit_logs WHERE entity_id = $1 ORDER BY id`, [id])).rows;
+    const newClient = (id: string) => ({ ...INITIAL_CLIENTS[0], id, company_name: `Audit test ${id}` });
+
+    it('commit together', async () => {
+      await owner().post('/api/clients').send(newClient('client-audit-ok')).expect(201);
+      await owner().patch('/api/clients/client-audit-ok').send({ notes: 'Updated' }).expect(200);
+      await owner().delete('/api/clients/client-audit-ok').expect(204);
+      expect(await auditFor('client-audit-ok')).toEqual([
+        { action: 'create', actor_id: 'user-owner' },
+        { action: 'update', actor_id: 'user-owner' },
+        { action: 'delete', actor_id: 'user-owner' },
+      ]);
+    });
+
+    it('roll back together when the audit write fails', async () => {
+      // A test-only trigger makes the audit insert fail for one entity.
+      await db.pool.query(`
+        CREATE FUNCTION fail_audit_for_test() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.entity_id = 'client-audit-boom' THEN RAISE EXCEPTION 'audit unavailable'; END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER fail_audit_for_test BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION fail_audit_for_test();`);
+      try {
+        expect((await owner().post('/api/clients').send(newClient('client-audit-boom'))).status).toBe(500);
+      } finally {
+        await db.pool.query('DROP TRIGGER fail_audit_for_test ON audit_logs; DROP FUNCTION fail_audit_for_test();');
+      }
+      expect((await db.pool.query(`SELECT 1 FROM clients WHERE id = 'client-audit-boom'`)).rowCount).toBe(0);
+      expect(await auditFor('client-audit-boom')).toEqual([]);
+    });
+
+    it('leave no audit row when the change is refused, and apply the Phase 3 rules', async () => {
+      // item-4's latest site QC failed (demo sqc-2), so it cannot be completed through REST either.
+      const before = (await owner().get('/api/work-items/item-4').expect(200)).body;
+      const auditBefore = await auditFor('item-4');
+      const res = await owner().patch('/api/work-items/item-4').send({ status: 'Completed' });
+      expect(res.status).toBe(403);
+      expect(res.body.message).toMatch(/site QC failed/);
+      expect((await owner().get('/api/work-items/item-4')).body.status).toBe(before.status);
+      expect(await auditFor('item-4')).toEqual(auditBefore);
+      // The revision a work item was created from stays fixed through REST too.
+      await owner().patch('/api/work-items/item-1').send({ source_drawing_revision_id: 'rev-1' }).expect(200);
+      expect((await db.pool.query(`SELECT source_drawing_revision_id FROM work_items WHERE id = 'item-1'`)).rows[0].source_drawing_revision_id).toBe('rev-3');
+    });
+
+    it('keeps the audit log append-only', async () => {
+      await expect(db.pool.query(`UPDATE audit_logs SET action = 'x' WHERE entity_id = 'client-audit-ok'`)).rejects.toThrow(/append-only/);
+      await expect(db.pool.query(`DELETE FROM audit_logs WHERE entity_id = 'client-audit-ok'`)).rejects.toThrow(/append-only/);
     });
   });
 

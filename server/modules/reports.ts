@@ -1,7 +1,10 @@
 import { ForbiddenError, type AccessContext } from '../auth/access';
 import { canSeeProjectFinancials } from '../auth/permissions';
 import { NotFoundError } from '../core/repository';
-import type { Pool } from '../db/pool';
+import type { Pool, PoolClient } from '../db/pool';
+import type { ModuleHooks, Row } from './types';
+
+type Db = Pool | PoolClient;
 
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -22,6 +25,10 @@ function checkFinancialAccess(ctx: AccessContext, projectId: string) {
  */
 export async function contractSummary(pool: Pool, ctx: AccessContext, projectId: string) {
   checkFinancialAccess(ctx, projectId);
+  return computeContract(pool, projectId);
+}
+
+async function computeContract(pool: Db, projectId: string) {
   const project = (await pool.query('SELECT contract_value FROM projects WHERE id = $1', [projectId])).rows[0];
   if (!project) throw new NotFoundError('projects', projectId);
   const v = (
@@ -59,7 +66,11 @@ export async function contractSummary(pool: Pool, ctx: AccessContext, projectId:
  */
 export async function profitability(pool: Pool, ctx: AccessContext, projectId: string) {
   checkFinancialAccess(ctx, projectId);
-  const contract = await contractSummary(pool, ctx, projectId);
+  return computeProfitability(pool, projectId);
+}
+
+async function computeProfitability(pool: Db, projectId: string) {
+  const contract = await computeContract(pool, projectId);
   const [baseline, quotation, pos, ledger] = await Promise.all([
     pool.query('SELECT original_budget_direct_cost FROM commercial_baselines WHERE project_id = $1', [projectId]),
     pool.query(
@@ -92,13 +103,18 @@ export async function profitability(pool: Pool, ctx: AccessContext, projectId: s
   const forecast = money(Math.max(estimated, actual + openPoCommitment + ledgerCommitments));
   const selling = contract.current_contract_value;
   const grossProfit = money(selling - forecast);
+  const variance = money(forecast - estimated);
   return {
     ...contract,
     selling_price: selling,
+    estimated_final_revenue: money(selling + contract.pending_variations_total),
     estimated_direct_cost: estimated,
     committed_cost: committed,
     actual_cost: money(actual),
     forecast_final_cost: forecast,
+    cost_variance: variance,
+    cost_variance_status: varianceStatus(variance, estimated),
+    current_gross_profit: money(selling - actual),
     project_gross_profit: grossProfit,
     project_gross_margin_percent: selling > 0 ? Math.round((grossProfit / selling) * 10000) / 100 : 0,
     basis: {
@@ -108,3 +124,64 @@ export async function profitability(pool: Pool, ctx: AccessContext, projectId: s
     },
   };
 }
+
+/**
+ * Fields of a commercial baseline that are derived from other records. The server computes
+ * them on every read and ignores whatever a browser sends, so a stored baseline can never
+ * carry its own (possibly stale or forged) totals. The inputs stay editable: original
+ * contract value, budget, cash billed/collected and the variance driver breakdown.
+ */
+export const DERIVED_BASELINE_FIELDS = [
+  'approved_variations_total',
+  'current_contract_value',
+  'unapproved_potential_variations_total',
+  'estimated_final_revenue',
+  'committed_cost',
+  'actual_cost',
+  'forecast_final_cost',
+  'cost_variance',
+  'cost_variance_status',
+  'current_gross_profit',
+  'forecast_gross_profit',
+  'forecast_gross_margin_percent',
+] as const;
+
+function varianceStatus(variance: number, budget: number) {
+  if (variance <= 0) return 'On Budget';
+  const pct = budget > 0 ? variance / budget : 1;
+  return pct <= 0.03 ? 'Minor Variance' : pct <= 0.1 ? 'Forecast Over Budget' : 'Critical Overrun';
+}
+
+export const baselineHooks: ModuleHooks = {
+  async beforeWrite(_h, _existing, incoming) {
+    const kept = { ...incoming };
+    for (const f of DERIVED_BASELINE_FIELDS) delete kept[f];
+    return kept;
+  },
+
+  async hydrate(db, records) {
+    return Promise.all(
+      records.map(async (b) => {
+        const projectId = String(b.project_id);
+        const exists = (await db.query('SELECT 1 FROM projects WHERE id = $1', [projectId])).rowCount;
+        if (!exists) return b;
+        const p = await computeProfitability(db, projectId);
+        return {
+          ...b,
+          approved_variations_total: p.approved_variations_total,
+          current_contract_value: p.current_contract_value,
+          unapproved_potential_variations_total: p.pending_variations_total,
+          estimated_final_revenue: p.estimated_final_revenue,
+          committed_cost: p.committed_cost,
+          actual_cost: p.actual_cost,
+          forecast_final_cost: p.forecast_final_cost,
+          cost_variance: p.cost_variance,
+          cost_variance_status: p.cost_variance_status,
+          current_gross_profit: p.current_gross_profit,
+          forecast_gross_profit: p.project_gross_profit,
+          forecast_gross_margin_percent: p.project_gross_margin_percent,
+        } as Row;
+      })
+    );
+  },
+};

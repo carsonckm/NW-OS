@@ -4,6 +4,7 @@ import { drawingHooks } from './hooks/drawings';
 import { installationHooks, siteQcHooks } from './hooks/site';
 import { productionOrderHooks } from './hooks/production';
 import { variationHooks } from './hooks/variations';
+import { baselineHooks } from './reports';
 import type { ModuleDef } from './types';
 
 /**
@@ -346,6 +347,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'commercial.view', create: 'commercial.edit', edit: ['commercial.edit', 'finance.edit'], delete: null },
     required: ['project_id'],
+    // Totals (committed, actual, forecast, gross profit...) are computed by the server.
+    hooks: baselineHooks,
   },
   {
     key: 'suppliers',

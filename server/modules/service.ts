@@ -248,6 +248,24 @@ export class DataService {
     });
   }
 
+  // Core chain REST writes (/api/clients, /projects, /work-packages, /work-items): same
+  // authorisation and Phase 3 rules as the sync, and the audit row in the same transaction.
+  private coreTx(h: HookContext) {
+    return { db: h.db, authorize: this.coreAuthorize(h), onWritten: this.coreWritten(h) };
+  }
+
+  coreCreate(ctx: AccessContext, collection: CoreCollection, input: Row, actor: AuditActor) {
+    return this.inTransaction(ctx, actor, 'rest', (h) => this.core.create(ctx, collection, input, this.coreTx(h)));
+  }
+
+  coreUpdate(ctx: AccessContext, collection: CoreCollection, id: string, patch: Row, actor: AuditActor) {
+    return this.inTransaction(ctx, actor, 'rest', (h) => this.core.update(ctx, collection, id, patch, this.coreTx(h)));
+  }
+
+  coreRemove(ctx: AccessContext, collection: CoreCollection, id: string, actor: AuditActor) {
+    return this.inTransaction(ctx, actor, 'rest', (h) => this.core.remove(ctx, collection, id, this.coreTx(h)));
+  }
+
   /** Runs `fn` with a hook context in its own transaction (domain endpoints). */
   transact<T>(ctx: AccessContext, actor: AuditActor, fn: (h: HookContext) => Promise<T>) {
     return this.inTransaction(ctx, actor, 'rest', fn);

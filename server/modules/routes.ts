@@ -7,7 +7,7 @@ import { ValidationError } from '../core/repository';
 import { pendingMigrations } from '../db/migrate';
 import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
-import { addClientRevision } from './hooks/drawings';
+import { addClientRevision, setClientRevisionStatus } from './hooks/drawings';
 import { checkTransition } from './hooks/variations';
 import { MODULES } from './registry';
 import { contractSummary, profitability } from './reports';
@@ -80,7 +80,7 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   );
 
   // ---------------- domain actions ----------------
-  // New client drawing revision: never overwrites, supersedes the previous current one.
+  // New client drawing revision: never overwrites, starts as Draft and is never approved on upload.
   router.post(
     '/drawings/:id/revisions',
     wrap(async (req, res) => {
@@ -91,7 +91,7 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
         const rev = req.body ?? {};
         if (!rev.revision || !rev.file_url) throw new ValidationError('revision and file_url are required');
         await addClientRevision(h, req.params.id, {
-          approved_status: 'Pending Review',
+          approved_status: 'Draft',
           ...rev,
           id: rev.id || `rev-${req.params.id}-${Date.now()}`,
           drawing_id: req.params.id,
@@ -102,6 +102,24 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
         return findRecord(h.db, def, req.params.id);
       });
       res.status(201).json(result);
+    })
+  );
+
+  // Review step for a client revision: Internal Review, Approved, Rejected or back to Draft.
+  // Approving supersedes the previously approved revision.
+  router.post(
+    '/drawings/:id/revisions/:revId/status',
+    wrap(async (req, res) => {
+      const def = service.module('drawings');
+      const status = (req.body ?? {}).status;
+      if (typeof status !== 'string' || !status) throw new ValidationError('status is required');
+      const result = await service.transact(req.access!, actorOf(req), async (h) => {
+        const drawing = await findRecord(h.db, def, req.params.id, true);
+        if (!drawing || !h.ctx.canSeeProject(drawing.project_id)) throw new ForbiddenError('Drawing not found or not accessible');
+        await setClientRevisionStatus(h, req.params.id, req.params.revId, status);
+        return findRecord(h.db, def, req.params.id);
+      });
+      res.json(result);
     })
   );
 

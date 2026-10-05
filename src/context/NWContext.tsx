@@ -322,6 +322,11 @@ interface NWContextType {
     saveAsStandard?: boolean,
     standardData?: { title: string; category: any; description: string; reason: string }
   ) => void;
+  setDrawingRevisionStatus: (
+    drawingId: string,
+    revisionId: string,
+    status: 'Draft' | 'Internal Review' | 'Approved' | 'Rejected'
+  ) => void;
   analyzeDrawingWithAI: (drawingId: string, revisionId: string) => Promise<AIDrawingAnalysis>;
   approveAISuggestedWorkItem: (
     drawingId: string,
@@ -924,7 +929,10 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       }) as unknown as Record<string, (rows: never[]) => void>,
     []
   );
-  const coreDataSync = useCoreDatabaseSync(syncedData, syncedSetters, { canImport: canImportCoreData });
+  const coreDataSync = useCoreDatabaseSync(syncedData, syncedSetters, {
+    canImport: canImportCoreData,
+    canRead: (collection) => collection !== 'commercialBaselines' || hasPermission(currentUser, 'commercial.view'),
+  });
 
   // In database mode the audit trail comes from the server (append-only, read-only here).
   useEffect(() => {
@@ -1749,16 +1757,11 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     standardData?: { title: string; category: any; description: string; reason: string }
   ) => {
     const revId = 'rev-' + Date.now();
+    // A new revision starts as Draft and is not current: the approved revision stays in use
+    // (and production keeps using it) until an approver approves the new one.
     setDrawings((prev) =>
       prev.map((dwg) => {
         if (dwg.id === drawingId) {
-          // mark existing revisions as superseded / not current
-          const updatedRevisions = dwg.revisions.map((r) => ({
-            ...r,
-            is_current: false,
-            approved_status: (r.is_current ? 'Superseded' : r.approved_status) as any,
-          }));
-
           const addedRev = {
             id: revId,
             drawing_id: drawingId,
@@ -1767,19 +1770,15 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
             file_url: newRevision.file_url,
             uploaded_date: new Date().toISOString().split('T')[0],
             uploaded_by: currentUser.name,
-            approved_status: 'Approved' as const,
+            approved_status: 'Draft' as const,
             supersedes_revision: newRevision.supersedes_revision,
             notes: newRevision.notes,
-            is_current: true,
+            is_current: false,
             drawing_type: newRevision.drawing_type,
             markups: [],
           };
 
-          return {
-            ...dwg,
-            current_revision_id: revId,
-            revisions: [...updatedRevisions, addedRev],
-          };
+          return { ...dwg, revisions: [...dwg.revisions, addedRev] };
         }
         return dwg;
       })
@@ -1808,6 +1807,31 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     );
   };
 
+  // Client revision review: Draft -> Internal Review -> Approved (the server checks who may).
+  // Approving makes the revision current and supersedes the previously approved one.
+  const setDrawingRevisionStatus = (
+    drawingId: string,
+    revisionId: string,
+    status: 'Draft' | 'Internal Review' | 'Approved' | 'Rejected'
+  ) => {
+    setDrawings((prev) =>
+      prev.map((dwg) => {
+        if (dwg.id !== drawingId) return dwg;
+        const approving = status === 'Approved';
+        return {
+          ...dwg,
+          ...(approving ? { current_revision_id: revisionId } : {}),
+          revisions: dwg.revisions.map((r) => {
+            if (r.id === revisionId) return { ...r, approved_status: status, is_current: approving };
+            if (approving && r.approved_status === 'Approved') return { ...r, approved_status: 'Superseded' as const, is_current: false };
+            return r;
+          }),
+        };
+      })
+    );
+    addAuditLog(`Drawing Revision ${status}`, 'Drawing', drawingId, '', `${revisionId} -> ${status}`);
+  };
+
   // Drawing Intelligence & Production Review Functions
   const uploadDrawing = (drawingData: {
     project_id: string;
@@ -1829,9 +1853,10 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       file_url: drawingData.file_url || '/assets/drawings/sample-blueprint.svg',
       uploaded_date: new Date().toISOString().split('T')[0],
       uploaded_by: currentUser.name,
-      approved_status: 'Approved',
+      // Uploading never approves: the first revision waits for Internal Review and approval.
+      approved_status: 'Draft',
       notes: drawingData.notes || '',
-      is_current: true,
+      is_current: false,
       drawing_type: drawingData.drawing_type,
       markups: [],
     };
@@ -1846,7 +1871,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       file_url: newRev.file_url,
       current_revision_id: revisionId,
       created_at: new Date().toISOString(),
-      status: 'Approved',
+      status: 'Draft',
       uploaded_by: currentUser.name,
       notes: drawingData.notes,
       revisions: [newRev],
@@ -5888,6 +5913,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         addKnowledgeItem,
         uploadDrawing,
         addDrawingRevision,
+        setDrawingRevisionStatus,
         analyzeDrawingWithAI,
         approveAISuggestedWorkItem,
         compareDrawingRevisions,

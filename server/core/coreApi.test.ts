@@ -266,7 +266,8 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
         .post('/api/core/import')
         .send({ ...demo, projects: [...INITIAL_PROJECTS, { ...INITIAL_PROJECTS[0], id: 'proj-orphan', client_id: 'client-ghost' }] });
       expect(res.status).toBe(422);
-      expect(res.body.problems).toEqual(['projects proj-orphan: client_id "client-ghost" not found']);
+      // Refused by the foreign key inside the same transaction as the rest of the import.
+      expect(res.body.problems).toEqual([expect.stringMatching(/client-ghost/)]);
       expect((await app.get('/api/clients')).body).toHaveLength(0);
     });
   });

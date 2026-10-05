@@ -55,6 +55,12 @@ const EXECUTION_FIELDS = new Set([
   'installation_status',
   'updated_at',
 ]);
+/**
+ * Fields a production user (production.update) may change on a work item: moving its
+ * production order through the factory updates the item's production status, and at QC /
+ * ready for delivery / completion its status and progress.
+ */
+const PRODUCTION_FIELDS = new Set(['status', 'progress_percent', 'production_status', 'notes', 'updated_at']);
 const FINANCIAL_FIELDS: Partial<Record<CoreCollection, string[]>> = { projects: ['contract_value'] };
 
 /**
@@ -206,11 +212,12 @@ export class AccessContext {
     if (!existing) {
       this.require(CREATE[collection]);
     } else if (!this.can(EDIT[collection])) {
-      const onlyExecution =
+      const only = (allowed: Set<string>) =>
+        Object.keys(values).every((f) => allowed.has(f) || f === 'id' || sameValue(f, values[f], existing[f]));
+      const allowed =
         collection === 'workItems' &&
-        this.can('work_items.complete') &&
-        Object.keys(values).every((f) => EXECUTION_FIELDS.has(f) || f === 'id' || sameValue(f, values[f], existing[f]));
-      if (!onlyExecution) throw new ForbiddenError(`Missing permission: ${EDIT[collection]}`);
+        ((this.can('work_items.complete') && only(EXECUTION_FIELDS)) || (this.can('production.update') && only(PRODUCTION_FIELDS)));
+      if (!allowed) throw new ForbiddenError(`Missing permission: ${EDIT[collection]}`);
     }
 
     // The record must stay (or land) inside the user's scope: no moving work into, or

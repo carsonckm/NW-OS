@@ -56,11 +56,19 @@ localStorage still holds a copy of everything.
   columns with foreign keys and CHECKs; the full record is also kept in a `data` jsonb column
   so the existing screens get back exactly what they saved.
 - `drawing_revisions` rows can never be deleted, their file, revision label and content
-  hash never change, and a superseded revision can't be reinstated (trigger). A work item
+  hash never change, and a superseded revision can't be reinstated (trigger). Client
+  revisions only use the review statuses (Draft, Internal Review, Approved, Superseded,
+  Rejected), only an Approved revision can be current, and a drawing has at most one current
+  revision (migration 008). A work item
   stores the exact revision it was created from (`source_drawing_revision_id`); a
   production order stores the exact client and NW revisions it was checked against.
 - `audit_logs` and `delivery_receipts` are append-only (UPDATE/DELETE/TRUNCATE blocked).
 - A site QC result of Fail must reference a rectification issue (CHECK).
+- Production orders and work items accept the On Hold production status (migration 008).
+- Commercial baselines store only their inputs; committed, actual and forecast cost, contract
+  value and gross profit are computed by the server on every read.
+- Every write, including the core REST endpoints, writes its audit row in the same
+  transaction: if either fails, neither is kept.
 - `server/core/schema.ts` maps every field of the TypeScript types to a column. The compiler
   rejects a type change that isn't mapped, and a test checks the map against the database.
 
@@ -81,7 +89,8 @@ localStorage still holds a copy of everything.
 | POST | `/data/import[?dryRun=true]` | Validated import of everything, never overwrites (`settings.manage`) |
 | GET, POST | `/<module>` (e.g. `/drawings`, `/production-orders`, `/deliveries`, `/site-qc`, `/variations`, `/purchase-orders`, `/cost-ledger`) | List (filter by declared columns) / create |
 | GET, PATCH, DELETE | `/<module>/:id` | Read / update / delete (delete only where allowed) |
-| POST | `/drawings/:id/revisions` | Add a revision; older ones become Superseded, none is overwritten |
+| POST | `/drawings/:id/revisions` | Add a revision as Draft; nothing is overwritten or approved |
+| POST | `/drawings/:id/revisions/:revId/status` | Internal Review, Approved (supersedes the previous approved revision), Rejected or back to Draft |
 | POST | `/approvals/:id/decision` | Approve / reject / request changes (server decides who may) |
 | POST | `/variations/:id/transition` | Move a variation one step through its workflow |
 | GET | `/projects/:id/contract-summary` | Original contract, approved / pending variations, current contract value |

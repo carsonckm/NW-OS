@@ -68,6 +68,7 @@ export const ProductionOrdersTab: React.FC<ProductionOrdersTabProps> = ({
     'Packing',
     'Ready for Delivery',
     'Completed',
+    'On Hold',
     'Blocked',
     'Cancelled',
   ];
@@ -255,6 +256,8 @@ export const ProductionOrdersTab: React.FC<ProductionOrdersTabProps> = ({
                         className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
                           order.current_stage === 'Blocked'
                             ? 'bg-rose-600 text-white animate-pulse'
+                            : order.current_stage === 'On Hold'
+                            ? 'bg-amber-200 text-amber-900'
                             : order.current_stage === 'Ready for Delivery'
                             ? 'bg-emerald-600 text-white font-black'
                             : order.current_stage === 'QC'
