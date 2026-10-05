@@ -6,6 +6,7 @@ import { productionOrderHooks } from './hooks/production';
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
 import { quotationHooks } from './hooks/commercial';
+import { handoverHooks, issueHooks, taskHooks } from './hooks/workflow';
 import { goodsReceivedHooks, invoiceHooks, purchaseOrderHooks } from './hooks/purchasing';
 import type { ModuleDef } from './types';
 
@@ -50,6 +51,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'issues.view', create: 'issues.create', edit: ['issues.assign', 'issues.resolve', 'issues.escalate'], delete: null },
     required: ['project_id', 'status'],
+    // Resolution waits for linked tasks; resolver from the session.
+    hooks: issueHooks,
   },
   {
     key: 'tasks',
@@ -64,10 +67,12 @@ export const MODULES: ModuleDef[] = [
       { col: 'priority' },
       { col: 'assigned_user_id' },
       { col: 'due_date' },
+      { col: 'issue_id' },
     ],
     scope: { kind: 'project', optional: true },
     perms: { view: 'automation.view', create: 'automation.manage_tasks', edit: ['automation.manage_tasks', 'automation.execute_action'], delete: 'automation.manage_tasks' },
     required: ['status'],
+    hooks: taskHooks,
   },
   {
     key: 'escalations',
@@ -290,6 +295,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: ['handover.manage', 'projects.view'], create: 'handover.manage', edit: 'handover.manage', delete: null },
     required: ['project_id'],
+    // Draft -> signed (client name + signature); signed handovers are locked.
+    hooks: handoverHooks,
   },
 
   // ---------------- Commercial ----------------

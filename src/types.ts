@@ -2368,6 +2368,7 @@ export interface NWTask {
   id: string;
   task_number: string; // e.g. "TSK-2026-081"
   title: string;
+  issue_id?: string; // issue this task was raised from (server-validated, immutable)
   description: string;
   project_id: string;
   project_name: string;

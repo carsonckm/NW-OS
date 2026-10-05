@@ -189,6 +189,7 @@ export class DataService {
         throw new ForbiddenError(`${collection} ${String(existing.id)} not found or not accessible`);
       }
       const values = h.ctx.authorizeWrite(collection, existing, incoming);
+      if (values && collection === 'projects' && h.mode !== 'import') this.checkProjectCompletion(h, existing, values);
       if (!values || collection !== 'workItems') return values;
       // Production status comes from the production order, never from the browser.
       if (h.mode !== 'import' && 'production_status' in values && (existing || values.id)) {
@@ -213,6 +214,32 @@ export class DataService {
       }
       return values;
     };
+  }
+
+  /**
+   * A project is marked Completed / Closed only by a person, and only when its handover is
+   * signed and no site QC failure is still open. Closed comes after Completed.
+   */
+  private checkProjectCompletion(h: HookContext, existing: Row | undefined, values: Row) {
+    const to = values.project_status;
+    if (to !== 'Completed' && to !== 'Closed') return;
+    if (existing?.project_status === to) return;
+    if (to === 'Closed' && existing?.project_status !== 'Completed') throw new ForbiddenError('A project is closed after it is completed');
+    const id = String(values.id ?? existing?.id);
+    h.defer(async () => {
+      const signed = await h.db.query(
+        `SELECT 1 FROM handover_records WHERE project_id = $1 AND status IN ('Formal CPC Handover Signed', 'In DLP Period') LIMIT 1`,
+        [id]
+      );
+      if (!signed.rowCount) throw new ForbiddenError('The project can be completed once its handover is signed');
+      const failed = await h.db.query(
+        `SELECT DISTINCT ON (work_item_id) work_item_id, result FROM site_qc_inspections
+         WHERE project_id = $1 ORDER BY work_item_id, coalesce(inspected_at, '') DESC, created_at DESC, id DESC`,
+        [id]
+      );
+      const open = failed.rows.filter((r) => r.result === 'Fail / Rectification Required');
+      if (open.length) throw new ForbiddenError(`The project has ${open.length} work item(s) whose latest site QC failed`);
+    });
   }
 
   private coreWritten(h: HookContext) {

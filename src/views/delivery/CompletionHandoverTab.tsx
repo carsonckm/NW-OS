@@ -14,6 +14,9 @@ import {
 } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
 import { HandoverRecord, ProjectCompletionChecklist } from '../../types';
+import { useRecords } from '../../services/records';
+import { FormError } from '../../components/ui/FormError';
+import { HandoverForm } from './SiteWorkflow';
 
 export const CompletionHandoverTab: React.FC = () => {
   const {
@@ -27,8 +30,13 @@ export const CompletionHandoverTab: React.FC = () => {
   const [selectedRecordId, setSelectedRecordId] = useState<string>(
     handoverRecords[0]?.id || ''
   );
-  const [clientSignoffName, setClientSignoffName] = useState('Mr. Julian Tan (Retail Operations Director)');
-  const [signatureStamp, setSignatureStamp] = useState('APPROVED & SIGNED — CPC-NW-2026-PAV-01');
+  const records = useRecords();
+  const [clientSignoffName, setClientSignoffName] = useState(records.live ? '' : 'Mr. Julian Tan (Retail Operations Director)');
+  const [signatureStamp, setSignatureStamp] = useState(records.live ? '' : 'APPROVED & SIGNED — CPC-NW-2026-PAV-01');
+  const [showCreate, setShowCreate] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
+  const [signing, setSigning] = useState(false);
+  const canManage = ['Owner / CEO', 'Project Manager'].includes(currentUser.role);
 
   const activeRecord =
     handoverRecords.find((h) => h.id === selectedRecordId) ||
@@ -59,19 +67,36 @@ export const CompletionHandoverTab: React.FC = () => {
     });
   };
 
-  const handleClientSignoff = () => {
+  const handleClientSignoff = async () => {
     if (!activeRecord) return;
-    updateHandoverRecord(activeRecord.id, {
-      client_signoff_name: clientSignoffName,
+    const patch: Partial<HandoverRecord> = {
+      client_signoff_name: clientSignoffName.trim(),
       client_signoff_date: new Date().toISOString().split('T')[0],
-      client_signoff_signature: signatureStamp,
+      client_signoff_signature: signatureStamp.trim(),
       status: 'Formal CPC Handover Signed',
       retention_sum_status: '50% Released at CPC',
-    });
+    };
+    if (!records.live) return updateHandoverRecord(activeRecord.id, patch);
+    // The server records who signed for NW and leaves the project status unchanged.
+    setSigning(true);
+    setSignError(null);
+    try {
+      await records.update<HandoverRecord>('handoverRecords', activeRecord.id, patch, activeRecord);
+    } catch (err) {
+      setSignError((err as Error).message);
+    } finally {
+      setSigning(false);
+    }
   };
 
   return (
     <div className="space-y-6">
+      {showCreate && <HandoverForm onClose={() => setShowCreate(false)} onCreated={setSelectedRecordId} />}
+      {activeRecord && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-[11px] text-sky-900">
+          Signing the handover starts the defects liability period. It does not complete the project: the Owner marks the project Completed separately, and only once a handover is signed and no site QC failure is open.
+        </div>
+      )}
       {/* Header */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -89,6 +114,15 @@ export const CompletionHandoverTab: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="px-3 py-1.5 rounded-lg bg-sky-600 text-xs font-bold text-white hover:bg-sky-700"
+            >
+              Prepare handover
+            </button>
+          )}
           <select
             value={selectedRecordId}
             onChange={(e) => setSelectedRecordId(e.target.value)}
@@ -329,9 +363,11 @@ export const CompletionHandoverTab: React.FC = () => {
                       />
                     </div>
 
+                    <FormError error={signError} onDismiss={() => setSignError(null)} />
                     <button
                       onClick={handleClientSignoff}
-                      className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black shadow-sm transition-all flex items-center justify-center space-x-1.5"
+                      disabled={signing || !canManage || !clientSignoffName.trim() || !signatureStamp.trim()}
+                      className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black shadow-sm transition-all disabled:opacity-50 flex items-center justify-center space-x-1.5"
                     >
                       <PenTool className="w-4 h-4" />
                       <span>Endorse Certificate of Practical Completion (CPC)</span>
