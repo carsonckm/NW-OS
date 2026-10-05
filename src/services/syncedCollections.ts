@@ -57,6 +57,8 @@ export const SYNCED_COLLECTIONS: SyncedCollection[] = [
   { key: 'cashflowEntries', storageKey: 'cashflow_entries', idField: 'id', path: 'cashflow' },
   { key: 'financialClaims', storageKey: 'financialClaims', idField: 'id', path: 'claims' },
   { key: 'payments', storageKey: 'payments', idField: 'id', path: 'payments' },
+  // Phase 4
+  { key: 'knowledge', storageKey: 'knowledge', idField: 'id', path: 'knowledge' },
 ];
 
 export const SYNCED_KEYS = SYNCED_COLLECTIONS.map((c) => c.key);

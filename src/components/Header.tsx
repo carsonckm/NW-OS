@@ -5,6 +5,8 @@
 
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
+import { useServerNotifications, type ServerNotification } from '../services/notifications';
+import { navigateTo } from '../services/navigation';
 import { UserRole } from '../types';
 import { hasPermission } from '../utils/permissions';
 import {
@@ -67,10 +69,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
   const [showLangDropdown, setShowLangDropdown] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
-  // Filter notifications relevant to current user role or ALL
-  const userNotifications = notifications.filter(
-    (n) => n.target_role === 'ALL' || n.target_role === currentUser.role
-  );
+  // Signed in: the server's notifications for this user. Demo mode: browser alerts by role.
+  const server = useServerNotifications();
+  const userNotifications = server.enabled
+    ? server.items.map((n) => ({ ...n, link_type: undefined as string | undefined }))
+    : notifications.filter((n) => n.target_role === 'ALL' || n.target_role === currentUser.role);
   const unreadCount = userNotifications.filter((n) => !n.is_read).length;
 
   const pendingApprovalsCount = approvals.filter((a) => a.decision === 'Pending').length;
@@ -224,7 +227,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
                       )}
                     </div>
                     <button
-                      onClick={clearAllNotifications}
+                      onClick={() => (server.enabled ? void server.markAllRead() : clearAllNotifications())}
                       className="text-[11px] text-slate-500 hover:text-amber-600 font-medium"
                     >
                       Mark all read
@@ -235,13 +238,19 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
                     {userNotifications.length === 0 ? (
                       <p className="text-center py-6 text-xs text-slate-400">No active alerts for your role.</p>
                     ) : (
-                      userNotifications.slice(0, 6).map((notif) => (
+                      userNotifications.slice(0, server.enabled ? 20 : 6).map((notif) => (
                         <div
                           key={notif.id}
                           onClick={() => {
-                            markNotificationRead(notif.id);
-                            if (notif.link_type === 'issue') setActiveTab('issues');
-                            if (notif.link_type === 'work_item') setActiveTab('work-items');
+                            if (server.enabled) {
+                              void server.markRead(notif.id);
+                              const n = notif as unknown as ServerNotification;
+                              if (n.link_tab) navigateTo(n.link_tab, n.project_id ?? undefined);
+                            } else {
+                              markNotificationRead(notif.id);
+                              if (notif.link_type === 'issue') setActiveTab('issues');
+                              if (notif.link_type === 'work_item') setActiveTab('work-items');
+                            }
                             setShowNotifDropdown(false);
                           }}
                           className={`px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors ${

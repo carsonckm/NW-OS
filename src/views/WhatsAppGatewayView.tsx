@@ -15,6 +15,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { WhatsAppServerGateway } from './automation/ServerAutomation';
 import { useNW } from '../context/NWContext';
 import {
   GatewayChannel,
@@ -180,6 +181,7 @@ export const WhatsAppGatewayView: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <WhatsAppServerGateway />
       {/* Top Banner: SIMULATED WHATSAPP (Required by Section 7, 33) */}
       <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs">
         <div className="flex items-start space-x-3">

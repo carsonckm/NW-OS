@@ -910,7 +910,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     packingPackages, productionIssues, cncFileVersions, productionMaterials, deliveryRecords, installationJobs,
     siteQCInspections, handoverRecords, clientEnquiries, commercialTenders, commercialQuotations, priceDatabase,
     commercialBaselines, suppliers, purchaseOrders, goodsReceived, materialRequests, projectCostLedger,
-    commercialInvoices, costLeakAlerts, cashflowEntries, financialClaims, payments,
+    commercialInvoices, costLeakAlerts, cashflowEntries, financialClaims, payments, knowledge,
   } as unknown as Record<string, Record<string, unknown>[]>;
   const syncedSetters = useMemo(
     () =>
@@ -928,13 +928,14 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         suppliers: setSuppliers, purchaseOrders: setPurchaseOrders, goodsReceived: setGoodsReceived,
         materialRequests: setMaterialRequests, projectCostLedger: setProjectCostLedger, commercialInvoices: setCommercialInvoices,
         costLeakAlerts: setCostLeakAlerts, cashflowEntries: setCashflowEntries, financialClaims: setFinancialClaims,
-        payments: setPayments,
+        payments: setPayments, knowledge: setKnowledge,
       }) as unknown as Record<string, (rows: never[]) => void>,
     []
   );
   const coreDataSync = useCoreDatabaseSync(syncedData, syncedSetters, {
     canImport: canImportCoreData,
-    canRead: (collection) => collection !== 'commercialBaselines' || hasPermission(currentUser, 'commercial.view'),
+    canRead: (collection) =>
+      collection === 'commercialBaselines' ? hasPermission(currentUser, 'commercial.view') : collection === 'knowledge' ? hasPermission(currentUser, 'knowledge.view') : true,
   });
 
   // In database mode the audit trail comes from the server (append-only, read-only here).
@@ -1796,7 +1797,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         example: `Derived from revision ${newRevision.revision} on drawing ${drawingId}`,
         created_by: currentUser.name,
         approved_by: currentUser.name,
-        status: 'Approved',
+        status: 'Review', // a knowledge editor approves it (server-enforced)
         source_project_id: selectedProjectId,
       });
     }
@@ -2360,7 +2361,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         example: `Applied on Drawing ${drawingId} (${newReview.client_drawing_revision}): ${newReview.construction_method || ''}`,
         created_by: newReview.reviewed_by,
         approved_by: 'Dato’ Nicholas Wong (Owner / CEO)',
-        status: 'Approved',
+        status: 'Review', // a knowledge editor approves it (server-enforced)
         source_project_id: selectedProjectId,
       });
     }

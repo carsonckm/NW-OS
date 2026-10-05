@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
+import { ServerUserManagement } from './users/ServerUsers';
 import { UserProfile, UserRole, PermissionKey } from '../types';
 import {
   ROLE_DEFINITIONS,
@@ -45,6 +46,7 @@ export const UserManagementView: React.FC = () => {
     updateUser,
     toggleUserStatus,
     projects,
+    authMode,
   } = useNW();
 
   const [activeTab, setActiveTab] = useState<'users' | 'matrix' | 'simulator'>('users');
@@ -187,7 +189,7 @@ export const UserManagementView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className={`flex items-center space-x-3 ${authMode ? 'hidden' : ''}`}>
           <button
             onClick={() => setShowCreateModal(true)}
             className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-colors"
@@ -209,7 +211,7 @@ export const UserManagementView: React.FC = () => {
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>User Accounts & Projects ({availableUsers.length})</span>
+          <span>User Accounts & Projects{authMode ? '' : ` (${availableUsers.length})`}</span>
         </button>
 
         <button
@@ -238,7 +240,8 @@ export const UserManagementView: React.FC = () => {
       </div>
 
       {/* TAB 1: USER DIRECTORY & PROJECT ASSIGNMENTS */}
-      {activeTab === 'users' && (
+      {activeTab === 'users' && authMode && <ServerUserManagement />}
+      {activeTab === 'users' && !authMode && (
         <div className="space-y-4">
           {/* Filter Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

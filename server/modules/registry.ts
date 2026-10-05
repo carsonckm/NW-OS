@@ -8,6 +8,7 @@ import { baselineHooks } from './reports';
 import { quotationHooks } from './hooks/commercial';
 import { handoverHooks, issueHooks, taskHooks } from './hooks/workflow';
 import { goodsReceivedHooks, invoiceHooks, purchaseOrderHooks } from './hooks/purchasing';
+import { knowledgeHooks } from './hooks/knowledge';
 import type { ModuleDef } from './types';
 
 /**
@@ -478,6 +479,17 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'finance.view', create: 'finance.record_payments', edit: 'finance.record_payments', delete: null },
     required: ['project_id'],
+  },
+  {
+    key: 'knowledge',
+    table: 'knowledge_articles',
+    path: 'knowledge',
+    idField: 'id',
+    columns: [{ col: 'status' }, { col: 'category' }, { col: 'project_id', from: 'source_project_id' }],
+    scope: { kind: 'company' },
+    perms: { view: 'knowledge.view', create: ['knowledge.edit', 'production.propose_methods'], edit: ['knowledge.edit', 'production.propose_methods'], delete: null },
+    required: ['title', 'status'],
+    hooks: knowledgeHooks,
   },
 ];
 
