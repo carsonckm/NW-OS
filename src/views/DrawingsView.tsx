@@ -8,6 +8,7 @@ import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { DrawingViewer } from '../components/DrawingViewer';
 import { UploadDrawingModal } from '../components/UploadDrawingModal';
+import { RevisionRegister } from '../components/RevisionRegister';
 import { canUploadClientDrawing } from '../utils/permissions';
 import {
   Layers,
@@ -309,7 +310,10 @@ export const DrawingsView: React.FC = () => {
 
       {/* Main Drawing Viewer */}
       {activeDrawing ? (
-        <DrawingViewer drawing={activeDrawing} />
+        <>
+          <DrawingViewer drawing={activeDrawing} />
+          <RevisionRegister drawing={activeDrawing} />
+        </>
       ) : (
         <div className="p-12 text-center bg-white rounded-2xl border border-slate-200">
           <FileText className="w-8 h-8 text-slate-400 mx-auto mb-2" />

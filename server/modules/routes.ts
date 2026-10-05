@@ -7,12 +7,13 @@ import { ValidationError } from '../core/repository';
 import { pendingMigrations } from '../db/migrate';
 import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
-import { addClientRevision, setClientRevisionStatus } from './hooks/drawings';
+import { addClientRevision, drawingProductionUsage, setClientRevisionStatus } from './hooks/drawings';
 import { checkTransition } from './hooks/variations';
 import { assertConvertible, clientQuotation, nextVersionCode } from './hooks/commercial';
 import { writeAudit } from '../audit';
 import { MODULES } from './registry';
 import { contractSummary, profitability } from './reports';
+import { exceptionsFor, projectOverview } from './exceptions';
 import { findRecord } from './store';
 import { DataService } from './service';
 
@@ -52,6 +53,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/audit-logs',
     '/projects/:id/contract-summary',
     '/projects/:id/profitability',
+    '/projects/:id/overview',
+    '/exceptions',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
@@ -122,6 +125,16 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
         return findRecord(h.db, def, req.params.id);
       });
       res.json(result);
+    })
+  );
+
+  // Which production orders are built from which revision of a drawing.
+  router.get(
+    '/drawings/:id/production-usage',
+    wrap(async (req, res) => {
+      if (!req.access!.can('production.view')) throw new ForbiddenError('Missing permission: production.view (see production orders)');
+      const drawing = await service.get(req.access!, service.module('drawings'), req.params.id);
+      res.json(await drawingProductionUsage(pool, String(drawing.id)));
     })
   );
 
@@ -279,6 +292,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   );
 
   router.get('/projects/:id/contract-summary', wrap(async (req, res) => res.json(await contractSummary(pool, req.access!, req.params.id))));
+  router.get('/exceptions', wrap(async (req, res) => res.json(await exceptionsFor(pool, req.access!))));
+  router.get('/projects/:id/overview', wrap(async (req, res) => res.json(await projectOverview(pool, req.access!, req.params.id))));
   router.get('/projects/:id/profitability', wrap(async (req, res) => res.json(await profitability(pool, req.access!, req.params.id))));
 
   // Read-only audit history (audit.view). Non-company-wide users only see their projects.

@@ -17,6 +17,35 @@ const NW_IMMUTABLE = [
   'installation_instructions', 'production_notes', 'file_url', 'uploaded_by', 'uploaded_date',
 ];
 
+// Who moved a revision through review, and when. Set by the server only; anything the
+// browser sends for these is ignored and the stored values are kept.
+const REVIEW_STAMPS = [
+  'uploaded_by_id', 'review_requested_by', 'review_requested_at', 'approved_by', 'approved_by_id', 'approved_at',
+  'rejected_by', 'rejected_by_id', 'rejected_at', 'superseded_at',
+];
+
+function stampsFrom(data: Row | undefined) {
+  const out: Row = {};
+  for (const k of REVIEW_STAMPS) if (data?.[k] !== undefined) out[k] = data[k];
+  return out;
+}
+
+function withoutStamps(rev: Row) {
+  const out: Row = { ...rev };
+  for (const k of REVIEW_STAMPS) delete out[k];
+  return out;
+}
+
+function reviewStamp(h: HookContext, from: string, to: string): Row {
+  if (from === to || h.mode === 'import') return {};
+  const at = new Date().toISOString();
+  const who = h.ctx.user.name;
+  if (to === 'Approved') return { approved_by: who, approved_by_id: h.ctx.user.id, approved_at: at };
+  if (to === 'Rejected') return { rejected_by: who, rejected_by_id: h.ctx.user.id, rejected_at: at };
+  if (isReview(to) && !isReview(from)) return { review_requested_by: who, review_requested_at: at };
+  return {};
+}
+
 const blank = (v: unknown) => (v === undefined || v === null ? '' : v);
 
 export function contentHash(fields: string[], rev: Row) {
@@ -112,8 +141,9 @@ function checkClientTransition(h: HookContext, revId: string, from: string, to: 
 }
 
 /** Upserts one revision; returns its id when this write approved a client revision. */
-async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' | 'nw_production', rev: Row): Promise<string | undefined> {
-  if (typeof rev.id !== 'string' || !rev.id) throw new ValidationError('Drawing revision needs an id');
+async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' | 'nw_production', sent: Row): Promise<string | undefined> {
+  if (typeof sent.id !== 'string' || !sent.id) throw new ValidationError('Drawing revision needs an id');
+  const rev = (h.mode === 'import' ? sent : withoutStamps(sent)) as Row & { id: string };
   const isClient = kind === 'client';
   const hash = contentHash(isClient ? CLIENT_IMMUTABLE : NW_IMMUTABLE, rev);
   let status = isClient ? statusOfClient(rev) : statusOfNw(rev);
@@ -137,7 +167,10 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
     let linked: string | null = null;
     if (!isClient) linked = (await findClientRevision(h.db, rev.linked_client_drawing_id, rev.linked_client_revision))?.id ?? null;
     // An imported approved revision keeps its "current" flag in data for settleCurrent to honour.
-    const data = isClient ? { ...rev, approved_status: status, is_current: importing && status === 'Approved' && Boolean(rev.is_current) } : rev;
+    const stamps = importing ? {} : { uploaded_by_id: h.actor.id ?? null, ...(isClient ? reviewStamp(h, 'Draft', status) : {}) };
+    const data = isClient
+      ? { ...rev, ...stamps, approved_status: status, is_current: importing && status === 'Approved' && Boolean(rev.is_current) }
+      : { ...rev, ...stamps };
     await h.db.query(
       `INSERT INTO drawing_revisions (id, drawing_id, kind, revision, approval_status, is_current, approved_for_production,
          linked_client_revision_id, file_url, content_hash, superseded_at, data, created_by)
@@ -181,7 +214,14 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
     }
     isCurrent = status !== 'Superseded';
   }
-  const data = isClient ? { ...rev, approved_status: status, is_current: isCurrent } : rev;
+  const kept = { ...stampsFrom(existing.data), ...(h.mode === 'import' ? stampsFrom(sent) : {}) };
+  const fromStatus = existing.approval_status;
+  const stamp = isClient
+    ? reviewStamp(h, fromStatus, status)
+    : approving && !importing
+      ? { approved_by: h.ctx.user.name, approved_by_id: h.ctx.user.id, approved_at: new Date().toISOString() }
+      : {};
+  const data = isClient ? { ...rev, ...kept, ...stamp, approved_status: status, is_current: isCurrent } : { ...rev, ...kept, ...stamp };
   const changed =
     existing.approval_status !== status || existing.is_current !== isCurrent || existing.approved_for_production !== approvedForProduction ||
     JSON.stringify(existing.data) !== JSON.stringify(data);
@@ -279,7 +319,7 @@ export const drawingHooks: ModuleHooks = {
         ...(current ? { current_revision_id: current.id } : {}),
         revisions: mine
           .filter((r) => r.kind === 'client')
-          .map((r) => ({ ...r.data, approved_status: r.approval_status, is_current: r.is_current })),
+          .map((r) => ({ ...r.data, approved_status: r.approval_status, is_current: r.is_current, ...(r.superseded_at ? { superseded_at: r.superseded_at } : {}) })),
         nw_production_drawings: mine
           .filter((r) => r.kind === 'nw_production')
           .map((r) => ({ ...r.data, status: r.approval_status, approved_for_production: r.approved_for_production })),
@@ -311,4 +351,20 @@ export async function setClientRevisionStatus(h: HookContext, drawingId: string,
   if (!existing || existing.drawing_id !== drawingId || existing.kind !== 'client') throw new ValidationError(`No client revision ${revId} on ${drawingId}`);
   const approvedNow = await upsertRevision(h, drawingId, 'client', { ...existing.data, approved_status: status });
   await settleCurrent(h, drawingId, approvedNow);
+}
+
+/** Production orders built from each revision of a drawing (client and NW production). */
+export async function drawingProductionUsage(db: Db, drawingId: string) {
+  const res = await db.query(
+    `SELECT r.id AS revision_id, r.kind, r.revision, o.id, o.status, o.work_item_id, o.data->>'order_number' AS order_number
+     FROM drawing_revisions r
+     JOIN production_orders o ON o.client_drawing_revision_id = r.id OR o.nw_drawing_revision_id = r.id
+     WHERE r.drawing_id = $1 ORDER BY r.created_at, o.id`,
+    [drawingId]
+  );
+  const byRevision: Record<string, { id: string; order_number: string; status: string; work_item_id: string }[]> = {};
+  for (const row of res.rows) {
+    (byRevision[row.revision_id] ??= []).push({ id: row.id, order_number: row.order_number ?? row.id, status: row.status, work_item_id: row.work_item_id });
+  }
+  return byRevision;
 }
