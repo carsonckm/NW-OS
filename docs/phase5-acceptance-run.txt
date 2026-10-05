@@ -1,0 +1,20 @@
+0 [setup] project proj-p5-muvq8skh; drawing check valid; risk On Track
+1 [Production blocked (Production Manager) → server raises a task] user-prod-mgr Open production_blocked; trigger event
+2 [Notification generated] "New task: Unblock production PO-P5-muvq8skh" group=action source=production_blocked
+3 [Scheduled automation runs without the browser] 2 scheduled runs; last task_overdue succeeded
+4 [Overdue high-priority task escalated] levels 1,2
+6 [Failed QC creates the rectification workflow] user-site evidence=true; issue Reported
+7 [Risk changes with real conditions] On Track → Critical: 1 overdue task; Production PO-P5-muvq8skh blocked; Site QC failed on 1 work item(s)
+5 [Blocked production is an Owner exception (UI)] shown: true
+8 [Owner dashboard shows the exceptions (UI)] QC failure shown: true; escalation shown: true
+9 [PM dashboard shows the task (UI)] briefing lists it: true
+10 [Owner asks the AI why the project is at risk (UI)] P5 Gallery muvq8skh is Critical because of 4 signal(s) in its records.
+11 [AI retrieves authorized data only] 4 records read; Confirmed labels: 5; contractor gets: "Project risk assessments are internal to NW. Please ask your"
+12 [AI gives recommendations, not decisions] recommendations shown: true; proposal buttons: 2
+13 [Owner approves the consequential action (UI)] apr-ai-862c36cb: Approved by user-owner
+14 [The action executes] task tsk-ai-apr-ai-862c36cb → user-prod-mgr Open
+15 [Audit log records it] create, ai.proposal.create, approval.approve, update, ai.proposal.execute
+16 [Re-running the events creates no duplicates] tasks/notifications/escalations 4/13/2 → 4/13/2
+17 [Project returns to healthy] risk On Track; open escalations 0: yes; automation task Completed
+18 [Owner exception list updates (UI)] project still listed: false
+API refusals / page errors: {"owner-ceo":[],"project-manager":[],"production-manager":[],"site-supervisor":[],"admin":[],"contractor":[]}

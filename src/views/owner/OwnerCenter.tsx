@@ -37,7 +37,13 @@ interface Center {
 interface Dependency {
   today: Record<string, number>;
   week: { owner_actions: number; repeatable_operational_decisions: number; by_category: { category: string; count: number; routine: number }[] };
-  waiting: { tasks_assigned_to_owner: number; tasks_waiting_for_owner: number; approvals_waiting_for_owner: number; escalations_to_owner: number; projects_blocked_by_owner: { project_id: string; project_name: string }[] };
+  waiting: {
+    tasks_assigned_to_owner: number;
+    tasks_waiting_for_owner: number;
+    approvals_waiting_for_owner: number;
+    escalations_to_owner: number;
+    projects_blocked_by_owner: { project_id: string; project_name: string }[];
+  };
   average_response_hours: number | null;
   recommendations: { category: string; observed: string; suggestion: string }[];
   note: string;
@@ -46,37 +52,46 @@ const SEV = { critical: 'bad', high: 'warn', medium: 'info' } as const;
 const open = (i: Item) => navigateTo(i.tab, i.project_id ?? undefined, i.entity_type && i.entity_id ? { type: i.entity_type, id: i.entity_id } : undefined);
 const waited = (h?: number) => (h === undefined ? '' : h >= 48 ? ` · waiting ${Math.floor(h / 24)} days` : h >= 1 ? ` · waiting ${h}h` : '');
 
-const List: React.FC<{ title: string; icon: React.ReactNode; items: Item[]; empty: string; testId: string }> = ({ title, icon, items, empty, testId }) => (
-  <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={testId}>
-    <div className="flex items-center gap-2">
-      {icon}
-      <h3 className="text-sm font-black text-slate-900">{title}</h3>
-      <span className="rounded-full bg-slate-100 px-2 text-[11px] font-bold text-slate-600">{items.length}</span>
+const List: React.FC<{ title: string; icon: React.ReactNode; items: Item[]; empty: string; testId: string }> = ({ title, icon, items, empty, testId }) => {
+  const [all, setAll] = useState(false);
+  return (
+    <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={testId}>
+      <div className="flex items-center gap-2">
+        {icon}
+        <h3 className="text-sm font-black text-slate-900">{title}</h3>
+        <span className="rounded-full bg-slate-100 px-2 text-[11px] font-bold text-slate-600">{items.length}</span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-emerald-700">{empty}</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {(all ? items : items.slice(0, 12)).map((i) => (
+            <li key={i.id}>
+              <button type="button" onClick={() => open(i)} className="w-full py-1.5 text-left hover:bg-slate-50">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Pill tone={SEV[i.severity]}>{i.severity}</Pill>
+                  <span className="text-xs font-bold text-slate-900">{i.title}</span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {i.project_name ? `${i.project_name} · ` : ''}
+                  {i.detail}
+                  {waited(i.waiting_hours)}
+                </p>
+              </button>
+            </li>
+          ))}
+          {items.length > 12 && (
+            <li className="py-1">
+              <button type="button" onClick={() => setAll(!all)} className="text-[11px] font-bold text-slate-600 hover:text-slate-900">
+                {all ? 'Show fewer' : `Show all ${items.length}`}
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
     </div>
-    {items.length === 0 ? (
-      <p className="text-xs text-emerald-700">{empty}</p>
-    ) : (
-      <ul className="divide-y divide-slate-100">
-        {items.slice(0, 12).map((i) => (
-          <li key={i.id}>
-            <button type="button" onClick={() => open(i)} className="w-full py-1.5 text-left hover:bg-slate-50">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Pill tone={SEV[i.severity]}>{i.severity}</Pill>
-                <span className="text-xs font-bold text-slate-900">{i.title}</span>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                {i.project_name ? `${i.project_name} · ` : ''}
-                {i.detail}
-                {waited(i.waiting_hours)}
-              </p>
-            </button>
-          </li>
-        ))}
-        {items.length > 12 && <li className="py-1 text-[11px] text-slate-500">…and {items.length - 12} more</li>}
-      </ul>
-    )}
-  </div>
-);
+  );
+};
 
 export const OwnerCenter: React.FC = () => {
   const { coreDataSync } = useNW();
@@ -132,10 +147,34 @@ export const OwnerCenter: React.FC = () => {
             ))}
           </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <List title="Decisions required" icon={<Gavel className="h-4 w-4 text-amber-600" />} items={c.decisions} empty="No decisions waiting for you." testId="owner-decisions" />
-            <List title="Critical exceptions" icon={<AlertOctagon className="h-4 w-4 text-rose-600" />} items={c.critical} empty="Nothing critical." testId="owner-critical" />
-            <List title="Financial exceptions" icon={<TrendingDown className="h-4 w-4 text-rose-600" />} items={c.financial} empty="No financial exceptions." testId="owner-financial" />
-            <List title="Client exceptions" icon={<Users className="h-4 w-4 text-sky-600" />} items={c.client} empty="No client exceptions." testId="owner-client" />
+            <List
+              title="Decisions required"
+              icon={<Gavel className="h-4 w-4 text-amber-600" />}
+              items={c.decisions}
+              empty="No decisions waiting for you."
+              testId="owner-decisions"
+            />
+            <List
+              title="Critical exceptions"
+              icon={<AlertOctagon className="h-4 w-4 text-rose-600" />}
+              items={c.critical}
+              empty="Nothing critical."
+              testId="owner-critical"
+            />
+            <List
+              title="Financial exceptions"
+              icon={<TrendingDown className="h-4 w-4 text-rose-600" />}
+              items={c.financial}
+              empty="No financial exceptions."
+              testId="owner-financial"
+            />
+            <List
+              title="Client exceptions"
+              icon={<Users className="h-4 w-4 text-sky-600" />}
+              items={c.client}
+              empty="No client exceptions."
+              testId="owner-client"
+            />
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center gap-2">
@@ -172,7 +211,9 @@ export const OwnerCenter: React.FC = () => {
               Projects waiting on you for more than 2 days: <strong>{d.waiting.projects_blocked_by_owner.map((p) => p.project_name).join(', ')}</strong>
             </p>
           )}
-          {d.week.by_category.length > 0 && <p className="text-[11px] text-slate-600">This week by type: {d.week.by_category.map((x) => `${x.category} ${x.count}`).join(' · ')}</p>}
+          {d.week.by_category.length > 0 && (
+            <p className="text-[11px] text-slate-600">This week by type: {d.week.by_category.map((x) => `${x.category} ${x.count}`).join(' · ')}</p>
+          )}
           {d.recommendations.map((r) => (
             <div key={r.category} className="rounded-xl border border-amber-300 bg-white p-2 text-xs">
               <p className="font-bold text-slate-900">{r.observed}</p>
