@@ -14,6 +14,23 @@ import {
 type Row = Record<string, unknown>;
 type Queryable = Pool | PoolClient;
 
+export type CoreChanges = {
+  upserts?: Partial<Record<CoreCollection, Row[]>>;
+  deletes?: Partial<Record<CoreCollection, string[]>>;
+};
+export type CoreAuthorize = (
+  collection: CoreCollection,
+  existing: Row | undefined,
+  incoming: Row | undefined,
+  client: PoolClient
+) => Row | undefined | Promise<Row | undefined>;
+export type CoreWritten = (
+  collection: CoreCollection,
+  existing: Row | undefined,
+  stored: Row | undefined,
+  client: PoolClient
+) => Promise<void>;
+
 export class NotFoundError extends Error {
   constructor(public collection: CoreCollection, public id: string) {
     super(`${collection} ${id} not found`);
@@ -74,9 +91,9 @@ export class CoreRepository {
     return fromRow<T>(def, res.rows[0]);
   }
 
-  async create<T>(collection: CoreCollection, input: Row): Promise<T> {
+  async create<T>(collection: CoreCollection, input: Row, db: Queryable = this.pool): Promise<T> {
     const def = ENTITIES[collection];
-    const data = await this.withDerivedProject(collection, input);
+    const data = await this.withDerivedProject(collection, input, db);
     const now = new Date().toISOString();
     const row = toRow(def, {
       ...data,
@@ -84,20 +101,20 @@ export class CoreRepository {
       created_at: data.created_at || now,
       updated_at: data.updated_at || now,
     });
-    const created = await insertRow(this.pool, def, row, 'error');
+    const created = await insertRow(db, def, row, 'error');
     return fromRow<T>(def, created!);
   }
 
-  async update<T>(collection: CoreCollection, id: string, patch: Row): Promise<T> {
+  async update<T>(collection: CoreCollection, id: string, patch: Row, db: Queryable = this.pool): Promise<T> {
     const def = ENTITIES[collection];
     if ('id' in patch && patch.id !== id) throw new ValidationError('id cannot be changed');
-    const data = await this.withDerivedProject(collection, patch);
+    const data = await this.withDerivedProject(collection, patch, db);
     const row = toRow(def, { ...data, updated_at: new Date().toISOString() });
     delete row.id;
     delete row.created_at;
     const cols = Object.keys(row);
     const sets = cols.map((c, i) => `${q(c)} = $${i + 2}`);
-    const res = await this.pool.query(
+    const res = await db.query(
       `UPDATE ${q(def.table)} SET ${sets.join(', ')} WHERE id = $1 RETURNING ${columnsOf(def)}`,
       [id, ...cols.map((c) => row[c])]
     );
@@ -115,16 +132,16 @@ export class CoreRepository {
     return res.rows[0] ? fromRow<T>(def, res.rows[0]) : undefined;
   }
 
-  async remove(collection: CoreCollection, id: string): Promise<void> {
+  async remove(collection: CoreCollection, id: string, db: Queryable = this.pool): Promise<void> {
     const def = ENTITIES[collection];
-    const res = await this.pool.query(`DELETE FROM ${q(def.table)} WHERE id = $1`, [id]);
+    const res = await db.query(`DELETE FROM ${q(def.table)} WHERE id = $1`, [id]);
     if (res.rowCount === 0) throw new NotFoundError(collection, id);
   }
 
   /** A work item's project_id can be omitted; it is taken from its work package. */
-  private async withDerivedProject(collection: CoreCollection, input: Row): Promise<Row> {
+  private async withDerivedProject(collection: CoreCollection, input: Row, db: Queryable = this.pool): Promise<Row> {
     if (collection !== 'workItems' || input.project_id || typeof input.work_package_id !== 'string') return input;
-    const res = await this.pool.query('SELECT project_id FROM work_packages WHERE id = $1', [input.work_package_id]);
+    const res = await db.query('SELECT project_id FROM work_packages WHERE id = $1', [input.work_package_id]);
     if (!res.rows[0]) throw new ValidationError(`work package ${input.work_package_id} does not exist`);
     return { ...input, project_id: res.rows[0].project_id };
   }
@@ -177,41 +194,53 @@ export class CoreRepository {
    * be consistent (e.g. deleting a client that still has projects fails the whole batch).
    */
   async applyChanges(
-    changes: {
-      upserts?: Partial<Record<CoreCollection, Row[]>>;
-      deletes?: Partial<Record<CoreCollection, string[]>>;
-    },
+    changes: CoreChanges,
     /**
      * Called for every record before it is written, with the stored row locked
      * (undefined when new) and the incoming values (undefined for a delete). Returns the
      * values to write, or throws to abort the whole batch.
      */
-    authorize?: (collection: CoreCollection, existing: Row | undefined, incoming: Row | undefined) => Row | undefined
+    authorize?: CoreAuthorize
   ) {
-    const counts = { upserted: 0, deleted: 0 };
-    await withTransaction(this.pool, async (client) => {
+    return withTransaction(this.pool, async (client) => {
       await client.query('SET CONSTRAINTS ALL DEFERRED');
-      for (const collection of [...COLLECTION_ORDER].reverse()) {
-        for (const id of changes.deletes?.[collection] ?? []) {
-          if (typeof id !== 'string') throw new ValidationError(`${collection} delete without id`);
-          const existing = await this.find<Row>(collection, id, client, true);
-          if (!existing) continue;
-          authorize?.(collection, existing, undefined);
-          const res = await client.query(`DELETE FROM ${q(ENTITIES[collection].table)} WHERE id = $1`, [id]);
-          counts.deleted += res.rowCount ?? 0;
-        }
-      }
-      for (const collection of COLLECTION_ORDER) {
-        for (const record of changes.upserts?.[collection] ?? []) {
-          if (typeof record.id !== 'string' || !record.id) throw new ValidationError(`${collection} record without id`);
-          const existing = authorize ? await this.find<Row>(collection, record.id, client, true) : undefined;
-          const values = authorize ? { ...authorize(collection, existing, record), id: record.id } : record;
-          await insertRow(client, ENTITIES[collection], toRow(ENTITIES[collection], values), 'update');
-          counts.upserted++;
-        }
-      }
+      return this.applyChangesWith(client, changes, authorize);
     });
+  }
+
+  /** applyChanges inside a caller's transaction (constraints already deferred by the caller). */
+  async applyChangesWith(client: PoolClient, changes: CoreChanges, authorize?: CoreAuthorize, onWritten?: CoreWritten) {
+    const counts = { upserted: 0, deleted: 0 };
+    for (const collection of [...COLLECTION_ORDER].reverse()) {
+      for (const id of changes.deletes?.[collection] ?? []) {
+        if (typeof id !== 'string') throw new ValidationError(`${collection} delete without id`);
+        const existing = await this.find<Row>(collection, id, client, true);
+        if (!existing) continue;
+        await authorize?.(collection, existing, undefined, client);
+        const res = await client.query(`DELETE FROM ${q(ENTITIES[collection].table)} WHERE id = $1`, [id]);
+        counts.deleted += res.rowCount ?? 0;
+        await onWritten?.(collection, existing, undefined, client);
+      }
+    }
+    for (const collection of COLLECTION_ORDER) {
+      for (const record of changes.upserts?.[collection] ?? []) {
+        if (typeof record.id !== 'string' || !record.id) throw new ValidationError(`${collection} record without id`);
+        const existing = authorize ? await this.find<Row>(collection, record.id, client, true) : undefined;
+        const values = authorize ? { ...(await authorize(collection, existing, record, client)), id: record.id } : record;
+        const stored = await insertRow(client, ENTITIES[collection], toRow(ENTITIES[collection], values), 'update');
+        counts.upserted++;
+        await onWritten?.(collection, existing, stored ? fromRow<Row>(ENTITIES[collection], stored) : undefined, client);
+      }
+    }
     return counts;
+  }
+
+  /** Inserts a record unless its id exists (imports). Returns whether it was inserted. */
+  async insertIfAbsent(client: PoolClient, collection: CoreCollection, record: Row): Promise<boolean> {
+    const before = await client.query(`SELECT 1 FROM ${q(ENTITIES[collection].table)} WHERE id = $1`, [record.id]);
+    if (before.rowCount) return false;
+    await insertRow(client, ENTITIES[collection], toRow(ENTITIES[collection], record), 'skip');
+    return true;
   }
 
   /**

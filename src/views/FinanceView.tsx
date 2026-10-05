@@ -8,6 +8,7 @@ import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { FinancialClaim, PaymentRecord } from '../types';
 import { canViewFinancialMargins, hasPermission } from '../utils/permissions';
+import { usePortfolioFinancials } from '../services/serverFinancials';
 import {
   DollarSign,
   TrendingUp,
@@ -35,6 +36,7 @@ export const FinanceView: React.FC = () => {
     financialClaims,
     payments,
     variations,
+    coreDataSync,
   } = useNW();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'claims' | 'ledger' | 'variations'>('overview');
@@ -46,8 +48,14 @@ export const FinanceView: React.FC = () => {
 
   const canSeeMargins = canViewFinancialMargins(currentUser);
 
+  // Official figures from the server in database mode (current contract value and project
+  // gross profit per project); the local figures are only a preview in demo mode.
+  const server = usePortfolioFinancials(canSeeMargins ? projects.map((p) => p.id) : [], coreDataSync);
+  const official = (projectId: string) => server[projectId];
+  const contractOf = (p: { id: string; contract_value: number }) => official(p.id)?.current_contract_value ?? p.contract_value;
+
   // Financial aggregates
-  const totalContractValue = projects.reduce((sum, p) => sum + p.contract_value, 0);
+  const totalContractValue = projects.reduce((sum, p) => sum + contractOf(p), 0);
   const totalClaimed = financialClaims.reduce((sum, c) => sum + c.cumulative_claimed, 0);
   const totalPaidInflow = payments
     .filter((p) => p.type === 'Client Inflow')
@@ -57,9 +65,17 @@ export const FinanceView: React.FC = () => {
     .reduce((sum, p) => sum + p.amount, 0);
   const totalRetention = financialClaims.reduce((sum, c) => sum + c.retention_amount, 0);
 
-  // Estimated gross margin (realistic 28.5% industry standard for high-end bespoke carpentry)
-  const estimatedMarginPercent = 28.4;
-  const estimatedProfit = totalContractValue * (estimatedMarginPercent / 100);
+  // Company gross margin: the sum of the server's project gross profits (forecast, before
+  // company overheads). Demo mode has no server, so it keeps the illustrative 28.4%.
+  const serverFigures = projects.map((p) => official(p.id)).filter((f) => f !== undefined);
+  const hasServerFigures = serverFigures.length > 0;
+  const serverSelling = serverFigures.reduce((sum, f) => sum + f!.selling_price, 0);
+  const estimatedProfit = hasServerFigures
+    ? serverFigures.reduce((sum, f) => sum + f!.project_gross_profit, 0)
+    : totalContractValue * 0.284;
+  const estimatedMarginPercent = hasServerFigures
+    ? serverSelling > 0 ? Math.round((estimatedProfit / serverSelling) * 1000) / 10 : 0
+    : 28.4;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
@@ -209,7 +225,7 @@ export const FinanceView: React.FC = () => {
                         <span className="text-[11px] text-slate-500">{proj.project_number}</span>
                       </td>
                       <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
-                        RM {proj.contract_value.toLocaleString()}
+                        RM {contractOf(proj).toLocaleString()}
                       </td>
                       <td className="py-3.5 px-4">
                         <div className="flex items-center space-x-2">
@@ -230,7 +246,7 @@ export const FinanceView: React.FC = () => {
                       </td>
                       {canSeeMargins && (
                         <td className="py-3.5 px-4 text-right font-black text-amber-700">
-                          {estimatedMarginPercent}%
+                          {official(proj.id)?.project_gross_margin_percent ?? estimatedMarginPercent}%
                         </td>
                       )}
                     </tr>

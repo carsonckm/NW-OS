@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
+import { hasPermission } from '../utils/permissions';
 import {
   Drawing,
   DrawingRevision,
@@ -53,6 +54,7 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
     contractors,
     addDrawingMarkup,
     addDrawingRevision,
+    setDrawingRevisionStatus,
     analyzeDrawingWithAI,
     approveAISuggestedWorkItem,
     compareDrawingRevisions,
@@ -248,6 +250,33 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
             <span>+ New Revision</span>
           </button>
 
+          {/* Revision review: Draft -> Internal Review -> Approved (server enforces who may) */}
+          {currentRev?.approved_status === 'Draft' && hasPermission(currentUser, 'drawings.upload') && (
+            <button
+              onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Internal Review')}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/40 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              <span>Submit for Internal Review</span>
+            </button>
+          )}
+          {['Internal Review', 'Pending Review', 'Review'].includes(currentRev?.approved_status ?? '') &&
+            hasPermission(currentUser, 'drawings.approve') && (
+              <>
+                <button
+                  onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Approved')}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                >
+                  <span>Approve Revision</span>
+                </button>
+                <button
+                  onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Rejected')}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                >
+                  <span>Reject Revision</span>
+                </button>
+              </>
+            )}
+
           {/* Interactive Markup Toggle */}
           <button
             onClick={() => setIsAddingMarkup(!isAddingMarkup)}
@@ -296,7 +325,11 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
                     </span>
                   ) : (
                     <span className="text-[9px] font-sans px-1 rounded bg-amber-500/30 text-amber-200">
-                      CURRENT
+                      {rev.approved_status === 'Draft'
+                        ? 'DRAFT'
+                        : rev.approved_status === 'Rejected'
+                          ? 'REJECTED'
+                          : 'IN REVIEW'}
                     </span>
                   )}
                 </button>

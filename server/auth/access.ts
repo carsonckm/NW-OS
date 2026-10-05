@@ -49,8 +49,18 @@ const EXECUTION_FIELDS = new Set([
   'photos',
   'item_photos',
   'production_status',
+  // Site execution states, set by the delivery receiving and installation screens. The
+  // server still refuses completion while a site QC failure is open.
+  'delivery_status',
+  'installation_status',
   'updated_at',
 ]);
+/**
+ * Fields a production user (production.update) may change on a work item: moving its
+ * production order through the factory updates the item's production status, and at QC /
+ * ready for delivery / completion its status and progress.
+ */
+const PRODUCTION_FIELDS = new Set(['status', 'progress_percent', 'production_status', 'notes', 'updated_at']);
 const FINANCIAL_FIELDS: Partial<Record<CoreCollection, string[]>> = { projects: ['contract_value'] };
 
 /**
@@ -65,15 +75,18 @@ export class AccessContext {
     private visibleProjects: Set<string> | null,
     private projectClient: Map<string, string>,
     private packageContractor: Map<string, string>,
-    private packageProject: Map<string, string>
+    private packageProject: Map<string, string>,
+    /** work item id -> its project, package and contractor (for module record scoping). */
+    readonly workItemInfo: Map<string, { project_id: string; work_package_id: string; contractor_id: string }>
   ) {
     this.permissions = permissionsFor(user.role);
   }
 
   static async load(db: Pool | PoolClient, user: AuthUser): Promise<AccessContext> {
-    const [projects, packages, assignments] = await Promise.all([
+    const [projects, packages, items, assignments] = await Promise.all([
       db.query('SELECT id, client_id, project_manager_id, site_supervisor_id FROM projects'),
       db.query('SELECT id, project_id, contractor_id FROM work_packages'),
+      db.query('SELECT id, project_id, work_package_id, contractor_id FROM work_items'),
       db.query('SELECT project_id FROM project_assignments WHERE user_id = $1', [user.id]),
     ]);
     const assigned = new Set<string>(assignments.rows.map((r) => r.project_id));
@@ -113,7 +126,8 @@ export class AccessContext {
         // Assigned production work only.
         visible = assigned;
     }
-    return new AccessContext(user, visible, projectClient, packageContractor, packageProject);
+    const workItemInfo = new Map(items.rows.map((w) => [w.id as string, w]));
+    return new AccessContext(user, visible, projectClient, packageContractor, packageProject, workItemInfo);
   }
 
   get companyWide() {
@@ -126,6 +140,17 @@ export class AccessContext {
 
   require(permission: PermissionKey) {
     if (!this.can(permission)) throw new ForbiddenError(`Missing permission: ${permission}`);
+  }
+
+  /** For a Contractor: whether a work item is theirs (directly or through its package). */
+  contractorOwnsWorkItem(workItemId: unknown): boolean {
+    const info = typeof workItemId === 'string' ? this.workItemInfo.get(workItemId) : undefined;
+    if (!info || this.user.role !== 'Contractor') return false;
+    return info.contractor_id === this.user.contractor_id || this.packageContractor.get(info.work_package_id) === this.user.contractor_id;
+  }
+
+  packageContractorOf(packageId: unknown) {
+    return typeof packageId === 'string' ? this.packageContractor.get(packageId) : undefined;
   }
 
   canSeeProject(projectId: unknown): boolean {
@@ -187,11 +212,12 @@ export class AccessContext {
     if (!existing) {
       this.require(CREATE[collection]);
     } else if (!this.can(EDIT[collection])) {
-      const onlyExecution =
+      const only = (allowed: Set<string>) =>
+        Object.keys(values).every((f) => allowed.has(f) || f === 'id' || sameValue(f, values[f], existing[f]));
+      const allowed =
         collection === 'workItems' &&
-        this.can('work_items.complete') &&
-        Object.keys(values).every((f) => EXECUTION_FIELDS.has(f) || f === 'id' || sameValue(f, values[f], existing[f]));
-      if (!onlyExecution) throw new ForbiddenError(`Missing permission: ${EDIT[collection]}`);
+        ((this.can('work_items.complete') && only(EXECUTION_FIELDS)) || (this.can('production.update') && only(PRODUCTION_FIELDS)));
+      if (!allowed) throw new ForbiddenError(`Missing permission: ${EDIT[collection]}`);
     }
 
     // The record must stay (or land) inside the user's scope: no moving work into, or

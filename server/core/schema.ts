@@ -79,6 +79,7 @@ const workItemFields: Record<keyof WorkItem, FieldKind> = {
   unit: 'text',
   drawing_id: 'text',
   drawing_revision: 'text',
+  source_drawing_revision_id: 'text?',
   client_drawing_id: 'text?',
   client_drawing_revision: 'text?',
   nw_production_drawing_id: 'text?',

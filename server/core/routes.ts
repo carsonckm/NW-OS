@@ -7,6 +7,11 @@ import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import type { CoreCollection } from './schema';
 import { CoreService } from './service';
+import { DataService } from '../modules/service';
+import { ValidationError } from './repository';
+import { COLLECTION_ORDER } from './schema';
+
+const CORE_COLLECTIONS = new Set<string>(COLLECTION_ORDER);
 
 interface CoreRouterOptions {
   pool?: Pool;
@@ -47,6 +52,17 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
   }
 
   const service = CoreService.forPool(pool);
+  // Writes go through DataService: the change, the Phase 3 rules and the audit row run in
+  // one transaction, so a rolled-back change leaves no audit entry and vice versa.
+  const data = new DataService(pool);
+  // The /core/* batch endpoints only ever touch the four core collections.
+  const coreOnly = <T,>(batch: Record<string, T> | undefined) => {
+    if (!batch) return undefined;
+    const unknown = Object.keys(batch).filter((k) => !CORE_COLLECTIONS.has(k));
+    if (unknown.length) throw new ValidationError(`Unknown collection: ${unknown.join(', ')}`);
+    return batch;
+  };
+  const actor = (req: Request) => ({ id: req.auth!.user.id, name: req.auth!.user.name, role: req.auth!.user.role, ip: req.ip });
   let schemaReady = false;
   const checkSchema = async () => {
     if (!schemaReady) schemaReady = (await pendingMigrations(pool)).length === 0;
@@ -101,7 +117,7 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
     '/core/sync',
     wrap(async (req, res) => {
       const { upserts, deletes } = req.body ?? {};
-      res.json(await service.applyChanges(req.access!, { upserts, deletes }));
+      res.json(await data.sync(req.access!, { upserts: coreOnly(upserts), deletes: coreOnly(deletes) }, actor(req)));
     })
   );
 
@@ -109,7 +125,7 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
     '/core/import',
     wrap(async (req, res) => {
       const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
-      const result = await service.importData(req.access!, req.body ?? {}, { dryRun });
+      const result = await data.importData(req.access!, coreOnly(req.body) ?? {}, { dryRun }, actor(req));
       res.status(result.ok ? 200 : 422).json(result);
     })
   );
@@ -126,17 +142,21 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
     );
     router.post(
       `/${path}`,
-      wrap(async (req, res) => res.status(201).json(await service.create(req.access!, collection, req.body ?? {})))
+      wrap(async (req, res) => {
+        res.status(201).json(await data.coreCreate(req.access!, collection, req.body ?? {}, actor(req)));
+      })
     );
     router.get(`/${path}/:id`, wrap(async (req, res) => res.json(await service.get(req.access!, collection, req.params.id))));
     router.patch(
       `/${path}/:id`,
-      wrap(async (req, res) => res.json(await service.update(req.access!, collection, req.params.id, req.body ?? {})))
+      wrap(async (req, res) => {
+        res.json(await data.coreUpdate(req.access!, collection, req.params.id, req.body ?? {}, actor(req)));
+      })
     );
     router.delete(
       `/${path}/:id`,
       wrap(async (req, res) => {
-        await service.remove(req.access!, collection, req.params.id);
+        await data.coreRemove(req.access!, collection, req.params.id, actor(req));
         res.status(204).end();
       })
     );

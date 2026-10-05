@@ -211,7 +211,8 @@ import {
   INITIAL_MANAGEMENT_KPIS,
   INITIAL_MANAGEMENT_ALERTS,
 } from '../data/managementInitialData';
-import { canAccessProject } from '../utils/permissions';
+import { canAccessProject, hasPermission } from '../utils/permissions';
+import { dataApi } from '../services/coreApi';
 import { useCoreDatabaseSync, type CoreSyncState } from '../services/coreSync';
 import { clearCoreCache } from '../services/authApi';
 
@@ -320,6 +321,11 @@ interface NWContextType {
     },
     saveAsStandard?: boolean,
     standardData?: { title: string; category: any; description: string; reason: string }
+  ) => void;
+  setDrawingRevisionStatus: (
+    drawingId: string,
+    revisionId: string,
+    status: 'Draft' | 'Internal Review' | 'Approved' | 'Rejected'
   ) => void;
   analyzeDrawingWithAI: (drawingId: string, revisionId: string) => Promise<AIDrawingAnalysis>;
   approveAISuggestedWorkItem: (
@@ -893,13 +899,70 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   useEffect(() => saveStorage('workItems', workItems), [workItems]);
 
   // Database sync for the core chain; a no-op unless the server runs with CORE_DATA_SOURCE=database.
-  const coreSetters = useMemo(
-    () => ({ clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems }),
+  // Collections backed by PostgreSQL in database mode (see services/syncedCollections.ts).
+  const syncedData = {
+    clients, projects, workPackages, workItems,
+    drawings, documents, issues, tasks, escalations, approvals, variations, clientChangeRequests, qcRecords,
+    siteMeasurements, productionOrders, productionParts, cncJobs, assemblyJobs, finishingJobs, factoryQCInspections,
+    packingPackages, productionIssues, cncFileVersions, productionMaterials, deliveryRecords, installationJobs,
+    siteQCInspections, handoverRecords, clientEnquiries, commercialTenders, commercialQuotations, priceDatabase,
+    commercialBaselines, suppliers, purchaseOrders, goodsReceived, materialRequests, projectCostLedger,
+    commercialInvoices, costLeakAlerts, cashflowEntries, financialClaims, payments,
+  } as unknown as Record<string, Record<string, unknown>[]>;
+  const syncedSetters = useMemo(
+    () =>
+      ({
+        clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems,
+        drawings: setDrawings, documents: setDocuments, issues: setIssues, tasks: setTasks, escalations: setEscalations,
+        approvals: setApprovals, variations: setVariations, clientChangeRequests: setClientChangeRequests,
+        qcRecords: setQcRecords, siteMeasurements: setSiteMeasurements, productionOrders: setProductionOrders,
+        productionParts: setProductionParts, cncJobs: setCncJobs, assemblyJobs: setAssemblyJobs,
+        finishingJobs: setFinishingJobs, factoryQCInspections: setFactoryQCInspections, packingPackages: setPackingPackages,
+        productionIssues: setProductionIssues, cncFileVersions: setCncFileVersions, productionMaterials: setProductionMaterials,
+        deliveryRecords: setDeliveryRecords, installationJobs: setInstallationJobs, siteQCInspections: setSiteQCInspections,
+        handoverRecords: setHandoverRecords, clientEnquiries: setClientEnquiries, commercialTenders: setCommercialTenders,
+        commercialQuotations: setCommercialQuotations, priceDatabase: setPriceDatabase, commercialBaselines: setCommercialBaselines,
+        suppliers: setSuppliers, purchaseOrders: setPurchaseOrders, goodsReceived: setGoodsReceived,
+        materialRequests: setMaterialRequests, projectCostLedger: setProjectCostLedger, commercialInvoices: setCommercialInvoices,
+        costLeakAlerts: setCostLeakAlerts, cashflowEntries: setCashflowEntries, financialClaims: setFinancialClaims,
+        payments: setPayments,
+      }) as unknown as Record<string, (rows: never[]) => void>,
     []
   );
-  const coreDataSync = useCoreDatabaseSync({ clients, projects, workPackages, workItems }, coreSetters, {
+  const coreDataSync = useCoreDatabaseSync(syncedData, syncedSetters, {
     canImport: canImportCoreData,
+    canRead: (collection) => collection !== 'commercialBaselines' || hasPermission(currentUser, 'commercial.view'),
   });
+
+  // In database mode the audit trail comes from the server (append-only, read-only here).
+  useEffect(() => {
+    if (coreDataSync.mode !== 'database' || !hasPermission(currentUser, 'audit.view')) return;
+    let cancelled = false;
+    dataApi
+      .auditLogs()
+      .then((rows) => {
+        if (cancelled) return;
+        setAuditLogs(
+          rows.map((r) => ({
+            id: `srv-${String(r.id)}`,
+            user_id: String(r.actor_id ?? ''),
+            user_name: String(r.actor_name ?? 'System'),
+            user_role: String(r.actor_role ?? ''),
+            action: String(r.action),
+            object_type: String(r.entity_type),
+            object_id: String(r.entity_id ?? ''),
+            entity_id: r.entity_id ? String(r.entity_id) : undefined,
+            details: r.details ? String(r.details) : r.after ? JSON.stringify(r.after).slice(0, 300) : undefined,
+            timestamp: String(r.occurred_at),
+          }))
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coreDataSync.mode, coreDataSync.lastSyncedAt]);
 
   const signOut = () => {
     // In database mode the cached core data belongs to this user's view; drop it.
@@ -1618,8 +1681,8 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
           ? {
               ...v,
               status: approvedByClient ? 'Approved' : 'Client Approval',
-              approved_by_owner: currentUser.name,
-              approved_by_client: approvedByClient ? 'Michelle Tan (Client)' : undefined,
+              approved_by_owner: approvedByClient ? v.approved_by_owner : currentUser.name,
+              approved_by_client: approvedByClient ? currentUser.name : undefined,
             }
           : v
       )
@@ -1694,16 +1757,11 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     standardData?: { title: string; category: any; description: string; reason: string }
   ) => {
     const revId = 'rev-' + Date.now();
+    // A new revision starts as Draft and is not current: the approved revision stays in use
+    // (and production keeps using it) until an approver approves the new one.
     setDrawings((prev) =>
       prev.map((dwg) => {
         if (dwg.id === drawingId) {
-          // mark existing revisions as superseded / not current
-          const updatedRevisions = dwg.revisions.map((r) => ({
-            ...r,
-            is_current: false,
-            approved_status: (r.is_current ? 'Superseded' : r.approved_status) as any,
-          }));
-
           const addedRev = {
             id: revId,
             drawing_id: drawingId,
@@ -1712,19 +1770,15 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
             file_url: newRevision.file_url,
             uploaded_date: new Date().toISOString().split('T')[0],
             uploaded_by: currentUser.name,
-            approved_status: 'Approved' as const,
+            approved_status: 'Draft' as const,
             supersedes_revision: newRevision.supersedes_revision,
             notes: newRevision.notes,
-            is_current: true,
+            is_current: false,
             drawing_type: newRevision.drawing_type,
             markups: [],
           };
 
-          return {
-            ...dwg,
-            current_revision_id: revId,
-            revisions: [...updatedRevisions, addedRev],
-          };
+          return { ...dwg, revisions: [...dwg.revisions, addedRev] };
         }
         return dwg;
       })
@@ -1753,6 +1807,31 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     );
   };
 
+  // Client revision review: Draft -> Internal Review -> Approved (the server checks who may).
+  // Approving makes the revision current and supersedes the previously approved one.
+  const setDrawingRevisionStatus = (
+    drawingId: string,
+    revisionId: string,
+    status: 'Draft' | 'Internal Review' | 'Approved' | 'Rejected'
+  ) => {
+    setDrawings((prev) =>
+      prev.map((dwg) => {
+        if (dwg.id !== drawingId) return dwg;
+        const approving = status === 'Approved';
+        return {
+          ...dwg,
+          ...(approving ? { current_revision_id: revisionId } : {}),
+          revisions: dwg.revisions.map((r) => {
+            if (r.id === revisionId) return { ...r, approved_status: status, is_current: approving };
+            if (approving && r.approved_status === 'Approved') return { ...r, approved_status: 'Superseded' as const, is_current: false };
+            return r;
+          }),
+        };
+      })
+    );
+    addAuditLog(`Drawing Revision ${status}`, 'Drawing', drawingId, '', `${revisionId} -> ${status}`);
+  };
+
   // Drawing Intelligence & Production Review Functions
   const uploadDrawing = (drawingData: {
     project_id: string;
@@ -1774,9 +1853,10 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       file_url: drawingData.file_url || '/assets/drawings/sample-blueprint.svg',
       uploaded_date: new Date().toISOString().split('T')[0],
       uploaded_by: currentUser.name,
-      approved_status: 'Approved',
+      // Uploading never approves: the first revision waits for Internal Review and approval.
+      approved_status: 'Draft',
       notes: drawingData.notes || '',
-      is_current: true,
+      is_current: false,
       drawing_type: drawingData.drawing_type,
       markups: [],
     };
@@ -1791,7 +1871,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       file_url: newRev.file_url,
       current_revision_id: revisionId,
       created_at: new Date().toISOString(),
-      status: 'Approved',
+      status: 'Draft',
       uploaded_by: currentUser.name,
       notes: drawingData.notes,
       revisions: [newRev],
@@ -2806,31 +2886,32 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
 
   const resetToDemoData = () => {
     localStorage.clear();
-    if (coreDataSync.mode === 'database') {
-      // The database is shared: resetting the demo must not wipe it. Reload core data from it instead.
-      void coreDataSync.reloadFromDatabase();
-    } else {
+    // In database mode the database is shared and authoritative: resetting the demo must not
+    // touch database-backed collections (it reloads them instead); only local-only data resets.
+    const local = coreDataSync.mode !== 'database';
+    if (!local) void coreDataSync.reloadFromDatabase();
+    if (local) {
       setProjects(INITIAL_PROJECTS);
       setClients(INITIAL_CLIENTS);
       setWorkPackages(INITIAL_WORK_PACKAGES);
       setWorkItems(INITIAL_WORK_ITEMS);
     }
     setContractors(INITIAL_CONTRACTORS);
-    setDrawings(INITIAL_DRAWINGS);
+    if (local) setDrawings(INITIAL_DRAWINGS);
     setKnowledge(INITIAL_KNOWLEDGE);
-    setIssues(INITIAL_ISSUES);
-    setVariations(INITIAL_VARIATIONS);
-    setDocuments(INITIAL_DOCUMENTS);
+    if (local) setIssues(INITIAL_ISSUES);
+    if (local) setVariations(INITIAL_VARIATIONS);
+    if (local) setDocuments(INITIAL_DOCUMENTS);
     setNotifications(INITIAL_NOTIFICATIONS);
     setAuditLogs(INITIAL_AUDIT_LOGS);
-    setQcRecords(INITIAL_QC_RECORDS);
+    if (local) setQcRecords(INITIAL_QC_RECORDS);
     setAvailableUsers(DEMO_USERS);
-    setApprovals(INITIAL_APPROVALS);
-    setSuppliers(INITIAL_SUPPLIERS);
-    setPurchaseOrders(INITIAL_PURCHASE_ORDERS);
-    setMaterialRequests(INITIAL_MATERIAL_REQUESTS);
-    setFinancialClaims(INITIAL_CLAIMS);
-    setPayments(INITIAL_PAYMENTS);
+    if (local) setApprovals(INITIAL_APPROVALS);
+    if (local) setSuppliers(INITIAL_SUPPLIERS);
+    if (local) setPurchaseOrders(INITIAL_PURCHASE_ORDERS);
+    if (local) setMaterialRequests(INITIAL_MATERIAL_REQUESTS);
+    if (local) setFinancialClaims(INITIAL_CLAIMS);
+    if (local) setPayments(INITIAL_PAYMENTS);
     setGatewayContacts(INITIAL_COMMUNICATION_CONTACTS);
     setGatewayMessages(INITIAL_GATEWAY_MESSAGES);
     setConversationThreads(INITIAL_CONVERSATION_THREADS);
@@ -2838,38 +2919,38 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     setAiActionRequests(INITIAL_AI_ACTION_REQUESTS);
     setGatewaySettings(INITIAL_GATEWAY_SETTINGS);
     setSecurityTestCases(INITIAL_SECURITY_TEST_CASES);
-    setClientEnquiries(INITIAL_CLIENT_ENQUIRIES);
-    setCommercialTenders(INITIAL_COMMERCIAL_TENDERS);
-    setCommercialQuotations(INITIAL_COMMERCIAL_QUOTATIONS);
-    setPriceDatabase(INITIAL_PRICE_DATABASE);
-    setCommercialBaselines(INITIAL_PROJECT_COMMERCIAL_BASELINES);
-    setProjectCostLedger(INITIAL_PROJECT_COST_LEDGER);
-    setGoodsReceived(INITIAL_GOODS_RECEIVED);
-    setCommercialInvoices(INITIAL_COMMERCIAL_INVOICES);
-    setCostLeakAlerts(INITIAL_COST_LEAK_ALERTS);
-    setCashflowEntries(INITIAL_CASHFLOW_ENTRIES);
-    setProductionOrders(INITIAL_PRODUCTION_ORDERS);
-    setProductionParts(INITIAL_PRODUCTION_PARTS);
-    setProductionMaterials(INITIAL_PRODUCTION_MATERIALS);
-    setCncJobs(INITIAL_CNC_JOBS);
-    setCncFileVersions(INITIAL_CNC_FILE_VERSIONS);
-    setAssemblyJobs(INITIAL_ASSEMBLY_JOBS);
-    setFinishingJobs(INITIAL_FINISHING_JOBS);
-    setFactoryQCInspections(INITIAL_FACTORY_QC_INSPECTIONS);
-    setPackingPackages(INITIAL_PACKING_PACKAGES);
-    setProductionIssues(INITIAL_PRODUCTION_ISSUES);
-    setDeliveryRecords(INITIAL_DELIVERY_RECORDS);
-    setInstallationJobs(INITIAL_INSTALLATION_JOBS);
-    setSiteQCInspections(INITIAL_SITE_QC_INSPECTIONS);
-    setHandoverRecords(INITIAL_HANDOVER_RECORDS);
-    setSiteMeasurements(INITIAL_SITE_MEASUREMENTS);
-    setClientChangeRequests(INITIAL_CLIENT_CHANGE_REQUESTS);
-    setTasks(INITIAL_TASKS);
+    if (local) setClientEnquiries(INITIAL_CLIENT_ENQUIRIES);
+    if (local) setCommercialTenders(INITIAL_COMMERCIAL_TENDERS);
+    if (local) setCommercialQuotations(INITIAL_COMMERCIAL_QUOTATIONS);
+    if (local) setPriceDatabase(INITIAL_PRICE_DATABASE);
+    if (local) setCommercialBaselines(INITIAL_PROJECT_COMMERCIAL_BASELINES);
+    if (local) setProjectCostLedger(INITIAL_PROJECT_COST_LEDGER);
+    if (local) setGoodsReceived(INITIAL_GOODS_RECEIVED);
+    if (local) setCommercialInvoices(INITIAL_COMMERCIAL_INVOICES);
+    if (local) setCostLeakAlerts(INITIAL_COST_LEAK_ALERTS);
+    if (local) setCashflowEntries(INITIAL_CASHFLOW_ENTRIES);
+    if (local) setProductionOrders(INITIAL_PRODUCTION_ORDERS);
+    if (local) setProductionParts(INITIAL_PRODUCTION_PARTS);
+    if (local) setProductionMaterials(INITIAL_PRODUCTION_MATERIALS);
+    if (local) setCncJobs(INITIAL_CNC_JOBS);
+    if (local) setCncFileVersions(INITIAL_CNC_FILE_VERSIONS);
+    if (local) setAssemblyJobs(INITIAL_ASSEMBLY_JOBS);
+    if (local) setFinishingJobs(INITIAL_FINISHING_JOBS);
+    if (local) setFactoryQCInspections(INITIAL_FACTORY_QC_INSPECTIONS);
+    if (local) setPackingPackages(INITIAL_PACKING_PACKAGES);
+    if (local) setProductionIssues(INITIAL_PRODUCTION_ISSUES);
+    if (local) setDeliveryRecords(INITIAL_DELIVERY_RECORDS);
+    if (local) setInstallationJobs(INITIAL_INSTALLATION_JOBS);
+    if (local) setSiteQCInspections(INITIAL_SITE_QC_INSPECTIONS);
+    if (local) setHandoverRecords(INITIAL_HANDOVER_RECORDS);
+    if (local) setSiteMeasurements(INITIAL_SITE_MEASUREMENTS);
+    if (local) setClientChangeRequests(INITIAL_CLIENT_CHANGE_REQUESTS);
+    if (local) setTasks(INITIAL_TASKS);
     setAutomationRules(INITIAL_AUTOMATION_RULES);
     setAutomationEvents(INITIAL_AUTOMATION_EVENTS);
     setAutomationRuns(INITIAL_AUTOMATION_RUNS);
     setFailedAutomations(INITIAL_FAILED_AUTOMATIONS);
-    setEscalations(INITIAL_ESCALATIONS);
+    if (local) setEscalations(INITIAL_ESCALATIONS);
     setUserNotificationPreferences(INITIAL_USER_NOTIFICATION_PREFERENCES);
     setDailyBriefings(INITIAL_DAILY_BRIEFINGS);
     setWorkflowTemplates(INITIAL_WORKFLOW_TEMPLATES);
@@ -5832,6 +5913,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         addKnowledgeItem,
         uploadDrawing,
         addDrawingRevision,
+        setDrawingRevisionStatus,
         analyzeDrawingWithAI,
         approveAISuggestedWorkItem,
         compareDrawingRevisions,

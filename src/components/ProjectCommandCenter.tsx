@@ -28,6 +28,7 @@ import {
   Issue,
 } from '../types';
 import { canViewProjectFinancials, hasPermission } from '../utils/permissions';
+import { useServerFinancials } from '../services/serverFinancials';
 import { WorkPackageDetailModal } from './WorkPackageDetailModal';
 import { WorkItemDetailModal } from './WorkItemDetailModal';
 import { IssueModal } from './IssueModal';
@@ -101,6 +102,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
     resolveIssue,
     escalateIssue,
     approveVariation,
+    coreDataSync,
   } = useNW();
 
   // Active project resolution
@@ -111,6 +113,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
 
   // Permissions
   const canSeeFinancials = canViewProjectFinancials(currentUser);
+  const serverFinancials = useServerFinancials(canSeeFinancials ? project?.id : undefined, coreDataSync);
   const canEditProject =
     currentUser.role === 'Owner / CEO' ||
     currentUser.role === 'Admin' ||
@@ -214,13 +217,20 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   const criticalIssues = openIssues.filter((i) => i.priority === 'Critical');
 
   // Financial summary
-  const approvedVariationsTotal = projVariations
-    .filter((v) => v.status === 'Approved' || v.status === 'Implemented')
-    .reduce((sum, v) => sum + (v.client_amount || 0), 0);
-  const pendingVariationsTotal = projVariations
-    .filter((v) => v.status === 'Identified' || v.status === 'Costing' || v.status === 'Internal Approval' || v.status === 'Client Approval')
-    .reduce((sum, v) => sum + (v.client_amount || 0), 0);
-  const totalRevisedContract = project.contract_value + approvedVariationsTotal;
+  // Official contract figures come from the server in database mode (serverFinancials); the
+  // local sums below are only a preview (demo mode, or until the server answers).
+  const APPROVED_VO = ['Approved', 'Implemented', 'Closed'];
+  const approvedVariations = projVariations.filter((v) => APPROVED_VO.includes(v.status));
+  const approvedVariationsTotal =
+    serverFinancials?.approved_variations_total ?? approvedVariations.reduce((sum, v) => sum + (v.client_amount || 0), 0);
+  const approvedVariationsCount = serverFinancials?.approved_variations_count ?? approvedVariations.length;
+  const pendingVariationsTotal =
+    serverFinancials?.pending_variations_total ??
+    projVariations
+      .filter((v) => v.status === 'Identified' || v.status === 'Costing' || v.status === 'Internal Approval' || v.status === 'Client Approval')
+      .reduce((sum, v) => sum + (v.client_amount || 0), 0);
+  const baseContractValue = serverFinancials?.original_contract_value ?? project.contract_value;
+  const totalRevisedContract = serverFinancials?.current_contract_value ?? baseContractValue + approvedVariationsTotal;
 
   // 15 Work Item Status matrix counts
   const STATUS_LIST: WorkItemStatus[] = [
@@ -335,7 +345,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
     // 4. Drawing revision alerts / reviews
     projDrawings.forEach((drawing) => {
       drawing.revisions.forEach((rev) => {
-        if (rev.approved_status === 'Pending Review' || rev.approved_status === 'Review') {
+        if (rev.approved_status === 'Pending Review' || rev.approved_status === 'Review' || rev.approved_status === 'Internal Review' || rev.approved_status === 'Draft') {
           actions.push({
             id: `today-draw-${rev.id}`,
             priority: 'HIGH',
@@ -1874,7 +1884,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                     Base Contract Value
                   </div>
                   <div className="font-mono font-black text-xl text-slate-900 mt-1">
-                    RM {project.contract_value.toLocaleString()}
+                    RM {baseContractValue.toLocaleString()}
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">Awarded scope sum</div>
                 </div>
@@ -1887,7 +1897,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                     +RM {approvedVariationsTotal.toLocaleString()}
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
-                    {projVariations.filter((v) => v.status === 'Approved').length} VOs Approved
+                    {approvedVariationsCount} VOs Approved
                   </div>
                 </div>
 

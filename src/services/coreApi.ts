@@ -79,6 +79,64 @@ function resource<T extends { id: string }>(path: string) {
   };
 }
 
+/** Any synced collection's records, keyed by collection (see syncedCollections.ts). */
+export type SyncData = Record<string, Record<string, unknown>[]>;
+
+export interface SyncChanges {
+  upserts: Record<string, Record<string, unknown>[]>;
+  deletes: Record<string, string[]>;
+}
+
+export interface DataImportResult {
+  ok: boolean;
+  dryRun: boolean;
+  imported: boolean;
+  summary: Record<string, { received: number; new: number; skippedExisting: number }>;
+  problems: string[];
+}
+
+/** Unified data API (core chain + Phase 3 modules), one transaction per sync. */
+export const dataApi = {
+  status: () => request<{ databaseEmpty: boolean }>('/data/status'),
+  snapshot: () => request<SyncData>('/data/snapshot'),
+  sync: (changes: SyncChanges) => request<{ upserted: number; deleted: number }>('/data/sync', json('POST', changes)),
+  importData: async (data: SyncData, { dryRun = false } = {}): Promise<DataImportResult> => {
+    try {
+      return await request<DataImportResult>(`/data/import${dryRun ? '?dryRun=true' : ''}`, json('POST', data));
+    } catch (err) {
+      if (err instanceof CoreApiError && err.status === 422) return err.body as DataImportResult;
+      throw err;
+    }
+  },
+  auditLogs: (limit = 300) => request<Record<string, unknown>[]>(`/audit-logs?limit=${limit}`),
+  /** One collection as the server holds it (e.g. 'commercial-baselines'). */
+  list: <T = Record<string, unknown>>(path: string) => request<T[]>(`/${path}`),
+  /** The server's official contract value, costs and project gross profit for one project. */
+  profitability: (projectId: string) => request<ServerFinancials>(`/projects/${encodeURIComponent(projectId)}/profitability`),
+};
+
+/** GET /api/projects/:id/profitability (server/modules/reports.ts). */
+export interface ServerFinancials {
+  project_id: string;
+  original_contract_value: number;
+  approved_variations_total: number;
+  approved_variations_count: number;
+  current_contract_value: number;
+  pending_variations_total: number;
+  pending_variations_count: number;
+  selling_price: number;
+  estimated_final_revenue: number;
+  estimated_direct_cost: number;
+  committed_cost: number;
+  actual_cost: number;
+  forecast_final_cost: number;
+  cost_variance: number;
+  cost_variance_status: 'On Budget' | 'Minor Variance' | 'Forecast Over Budget' | 'Critical Overrun';
+  current_gross_profit: number;
+  project_gross_profit: number;
+  project_gross_margin_percent: number;
+}
+
 export const coreApi = {
   status: () => request<CoreStatus>('/core/status'),
   snapshot: () => request<CoreData>('/core/snapshot'),

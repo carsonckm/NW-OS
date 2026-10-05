@@ -1,10 +1,21 @@
 import type { PermissionKey } from '../../src/types';
 import { AccessContext, ForbiddenError } from '../auth/access';
-import type { Pool } from '../db/pool';
-import { CoreRepository, NotFoundError, ValidationError } from './repository';
+import type { Pool, PoolClient } from '../db/pool';
+import { CoreRepository, NotFoundError, ValidationError, type CoreAuthorize, type CoreWritten } from './repository';
 import { COLLECTION_ORDER, type CoreCollection, type CoreData } from './schema';
 
 type Row = Record<string, unknown>;
+
+/**
+ * Runs a REST write inside the caller's transaction: `authorize` replaces the plain
+ * permission check (adding the cross-module rules) and `onWritten` records the audit row,
+ * so the change and its audit entry commit or roll back together.
+ */
+export interface CoreWriteTx {
+  db: PoolClient;
+  authorize: CoreAuthorize;
+  onWritten: CoreWritten;
+}
 
 const VIEW: Record<CoreCollection, PermissionKey> = {
   clients: 'clients.view',
@@ -42,12 +53,15 @@ export class CoreService {
     return ctx.redact(collection, row);
   }
 
-  async create(ctx: AccessContext, collection: CoreCollection, input: Row) {
-    if (typeof input.id === 'string' && (await this.repo.find(collection, input.id))) {
+  async create(ctx: AccessContext, collection: CoreCollection, input: Row, tx?: CoreWriteTx) {
+    if (typeof input.id === 'string' && (await this.repo.find(collection, input.id, tx?.db))) {
       throw new ForbiddenError(`${collection} ${input.id} already exists`);
     }
-    const values = ctx.authorizeWrite(collection, undefined, await this.withPackageProject(ctx, collection, input))!;
-    return ctx.redact(collection, await this.repo.create<Row>(collection, values));
+    const prepared = await this.withPackageProject(ctx, collection, input, tx?.db);
+    const values = tx ? (await tx.authorize(collection, undefined, prepared, tx.db))! : ctx.authorizeWrite(collection, undefined, prepared)!;
+    const created = await this.repo.create<Row>(collection, values, tx?.db);
+    await tx?.onWritten(collection, undefined, created, tx.db);
+    return ctx.redact(collection, created);
   }
 
   /**
@@ -55,28 +69,32 @@ export class CoreService {
    * Permission comes first, and an out-of-scope package reads as missing, so the
    * answer never reveals whether a package id exists.
    */
-  private async withPackageProject(ctx: AccessContext, collection: CoreCollection, input: Row): Promise<Row> {
+  private async withPackageProject(ctx: AccessContext, collection: CoreCollection, input: Row, db?: PoolClient): Promise<Row> {
     if (collection !== 'workItems' || input.project_id || typeof input.work_package_id !== 'string') return input;
     ctx.require('work_items.create');
-    const wp = await this.repo.find<Row>('workPackages', input.work_package_id);
+    const wp = await this.repo.find<Row>('workPackages', input.work_package_id, db);
     if (!wp || !ctx.inScope('workPackages', wp)) {
       throw new ValidationError(`work package ${input.work_package_id} does not exist`);
     }
     return { ...input, project_id: wp.project_id };
   }
 
-  async update(ctx: AccessContext, collection: CoreCollection, id: string, patch: Row) {
-    const existing = await this.repo.find<Row>(collection, id);
+  async update(ctx: AccessContext, collection: CoreCollection, id: string, patch: Row, tx?: CoreWriteTx) {
+    const existing = await this.repo.find<Row>(collection, id, tx?.db, Boolean(tx));
     if (!existing || !ctx.inScope(collection, existing)) throw new NotFoundError(collection, id);
-    const values = ctx.authorizeWrite(collection, existing, patch)!;
-    return ctx.redact(collection, await this.repo.update<Row>(collection, id, values));
+    const values = tx ? (await tx.authorize(collection, existing, patch, tx.db))! : ctx.authorizeWrite(collection, existing, patch)!;
+    const updated = await this.repo.update<Row>(collection, id, values, tx?.db);
+    await tx?.onWritten(collection, existing, updated, tx.db);
+    return ctx.redact(collection, updated);
   }
 
-  async remove(ctx: AccessContext, collection: CoreCollection, id: string) {
-    const existing = await this.repo.find<Row>(collection, id);
+  async remove(ctx: AccessContext, collection: CoreCollection, id: string, tx?: CoreWriteTx) {
+    const existing = await this.repo.find<Row>(collection, id, tx?.db, Boolean(tx));
     if (!existing || !ctx.inScope(collection, existing)) throw new NotFoundError(collection, id);
-    ctx.authorizeWrite(collection, existing, undefined);
-    await this.repo.remove(collection, id);
+    if (tx) await tx.authorize(collection, existing, undefined, tx.db);
+    else ctx.authorizeWrite(collection, existing, undefined);
+    await this.repo.remove(collection, id, tx?.db);
+    await tx?.onWritten(collection, existing, undefined, tx.db);
   }
 
   async clientTree(ctx: AccessContext, clientId: string) {

@@ -2,7 +2,9 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../data/initialData';
-import type { CoreData } from './coreApi';
+import type { CoreData, SyncData } from './coreApi';
+
+const asSync = (d: CoreData) => d as unknown as SyncData;
 import { diffCoreData, useCoreDatabaseSync } from './coreSync';
 
 const demo = (): CoreData => ({
@@ -21,7 +23,7 @@ describe('diffCoreData', () => {
     next.clients = next.clients.slice(1);
     next.projects.push({ ...next.projects[0], id: 'proj-new' });
 
-    const diff = diffCoreData(prev, next);
+    const diff = diffCoreData(asSync(prev), asSync(next));
     expect(diff.upserts.workItems?.map((w) => w.id)).toEqual([prev.workItems[0].id]);
     expect(diff.upserts.projects?.map((p) => p.id)).toEqual(['proj-new']);
     expect(diff.deletes.clients).toEqual([prev.clients[0].id]);
@@ -29,7 +31,7 @@ describe('diffCoreData', () => {
   });
 
   it('reports nothing for identical data', () => {
-    expect(diffCoreData(demo(), demo()).count).toBe(0);
+    expect(diffCoreData(asSync(demo()), asSync(demo())).count).toBe(0);
   });
 });
 
@@ -60,7 +62,7 @@ describe('useCoreDatabaseSync', () => {
 
   const setup = (initial: CoreData) => {
     const setters = { clients: vi.fn(), projects: vi.fn(), workPackages: vi.fn(), workItems: vi.fn() };
-    const hook = renderHook(({ data }) => useCoreDatabaseSync(data, setters), { initialProps: { data: initial } });
+    const hook = renderHook(({ data }) => useCoreDatabaseSync(asSync(data), setters), { initialProps: { data: initial } });
     return { hook, setters };
   };
 
@@ -82,65 +84,67 @@ describe('useCoreDatabaseSync', () => {
     const dbData = demo();
     dbData.clients[0].company_name = 'From the database';
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
-    routes['/api/core/snapshot'] = () => ({ body: dbData });
+    routes['/api/data/snapshot'] = () => ({ body: dbData });
 
     const { hook, setters } = setup(demo());
     await waitFor(() => expect(hook.result.current.mode).toBe('database'));
     expect(setters.clients).toHaveBeenCalledWith(dbData.clients);
     expect(Object.keys(localStorage).some((k) => k.startsWith('nw_os_core_backup_'))).toBe(true);
-    expect(calls.some((c) => c.url.startsWith('/api/core/import'))).toBe(false);
+    expect(calls.some((c) => c.url.startsWith('/api/data/import'))).toBe(false);
   });
 
   it('imports local data when the database is empty', async () => {
     let imported = false;
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
-    routes['/api/core/snapshot'] = () => ({ body: imported ? demo() : empty() });
-    routes['/api/core/import'] = (_b, url) => {
+    routes['/api/data/snapshot'] = () => ({ body: imported ? demo() : empty() });
+    routes['/api/data/import'] = (_b, url) => {
       if (!url.includes('dryRun')) imported = true;
       return { body: { ok: true, problems: [] } };
     };
 
     const { hook } = setup(demo());
     await waitFor(() => expect(hook.result.current.mode).toBe('database'));
-    const importCalls = calls.filter((c) => c.url.startsWith('/api/core/import'));
-    expect(importCalls.map((c) => c.url)).toEqual(['/api/core/import?dryRun=true', '/api/core/import']);
+    const importCalls = calls.filter((c) => c.url.startsWith('/api/data/import'));
+    expect(importCalls.map((c) => c.url)).toEqual(['/api/data/import?dryRun=true', '/api/data/import']);
   });
 
   it('does not import when the database has data the user simply cannot see', async () => {
-    routes['/api/core/status'] = () => ({ body: { dataSource: 'database', databaseEmpty: false } });
-    routes['/api/core/snapshot'] = () => ({ body: empty() }); // scoped view, e.g. a Contractor
+    routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+    routes['/api/data/status'] = () => ({ body: { databaseEmpty: false } });
+    routes['/api/data/snapshot'] = () => ({ body: empty() }); // scoped view, e.g. a Contractor
 
     const { hook, setters } = setup(demo());
     await waitFor(() => expect(hook.result.current.mode).toBe('database'));
-    expect(calls.some((c) => c.url.startsWith('/api/core/import'))).toBe(false);
+    expect(calls.some((c) => c.url.startsWith('/api/data/import'))).toBe(false);
     expect(setters.workItems).toHaveBeenCalledWith([]);
   });
 
   it('never imports for a user without the import permission', async () => {
-    routes['/api/core/status'] = () => ({ body: { dataSource: 'database', databaseEmpty: true } });
-    routes['/api/core/snapshot'] = () => ({ body: empty() });
+    routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+    routes['/api/data/status'] = () => ({ body: { databaseEmpty: true } });
+    routes['/api/data/snapshot'] = () => ({ body: empty() });
     const setters = { clients: vi.fn(), projects: vi.fn(), workPackages: vi.fn(), workItems: vi.fn() };
-    const hook = renderHook(() => useCoreDatabaseSync(demo(), setters, { canImport: false }));
+    const hook = renderHook(() => useCoreDatabaseSync(asSync(demo()), setters, { canImport: false }));
 
     await waitFor(() => expect(hook.result.current.mode).toBe('database'));
-    expect(calls.some((c) => c.url.startsWith('/api/core/import'))).toBe(false);
+    expect(calls.some((c) => c.url.startsWith('/api/data/import'))).toBe(false);
   });
 
   it('does not import, and stays local, when local data fails validation', async () => {
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
-    routes['/api/core/snapshot'] = () => ({ body: empty() });
-    routes['/api/core/import'] = () => ({ status: 422, body: { ok: false, problems: ['projects p1: client_id "x" not found'] } });
+    routes['/api/data/snapshot'] = () => ({ body: empty() });
+    routes['/api/data/import'] = () => ({ status: 422, body: { ok: false, problems: ['projects p1: client_id "x" not found'] } });
 
     const { hook } = setup(demo());
     await waitFor(() => expect(hook.result.current.status).toBe('error'));
     expect(hook.result.current.mode).toBe('local');
-    expect(calls.filter((c) => c.url === '/api/core/import')).toHaveLength(0);
+    expect(calls.filter((c) => c.url === '/api/data/import')).toHaveLength(0);
   });
 
   it('writes only the changed records after an edit', async () => {
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
-    routes['/api/core/snapshot'] = () => ({ body: demo() });
-    routes['/api/core/sync'] = () => ({ body: { upserted: 1, deleted: 0 } });
+    routes['/api/data/snapshot'] = () => ({ body: demo() });
+    routes['/api/data/sync'] = () => ({ body: { upserted: 1, deleted: 0 } });
 
     const initial = demo();
     const { hook } = setup(initial);
@@ -148,9 +152,9 @@ describe('useCoreDatabaseSync', () => {
 
     const edited = { ...initial, workItems: initial.workItems.map((w, i) => (i === 0 ? { ...w, status: 'Completed' as const } : w)) };
     act(() => hook.rerender({ data: edited }));
-    await waitFor(() => expect(calls.some((c) => c.url === '/api/core/sync')).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/data/sync')).toBe(true));
 
-    const sync = calls.find((c) => c.url === '/api/core/sync')!.body as { upserts: CoreData };
+    const sync = calls.find((c) => c.url === '/api/data/sync')!.body as { upserts: CoreData };
     expect(sync.upserts.workItems.map((w) => w.id)).toEqual([initial.workItems[0].id]);
     expect(sync.upserts.clients).toBeUndefined();
     await waitFor(() => expect(hook.result.current.status).toBe('synced'));
@@ -158,9 +162,9 @@ describe('useCoreDatabaseSync', () => {
 
   it('retries record by record when a batch is rejected, saving what it can', async () => {
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
-    routes['/api/core/snapshot'] = () => ({ body: demo() });
+    routes['/api/data/snapshot'] = () => ({ body: demo() });
     // Any batch containing a client delete is refused (the client still has projects).
-    routes['/api/core/sync'] = (body) =>
+    routes['/api/data/sync'] = (body) =>
       (body as { deletes: { clients?: string[] } }).deletes?.clients?.length
         ? { status: 409, body: { error: 'foreign_key_violation', message: 'still referenced' } }
         : { body: { upserted: 1, deleted: 0 } };
@@ -178,10 +182,12 @@ describe('useCoreDatabaseSync', () => {
     await waitFor(() => expect(hook.result.current.status).toBe('error'));
 
     const singleItemWrite = calls.find(
-      (c) => c.url === '/api/core/sync' && (c.body as { upserts: CoreData }).upserts.workItems?.length === 1 &&
+      (c) => c.url === '/api/data/sync' && (c.body as { upserts: CoreData }).upserts.workItems?.length === 1 &&
         !(c.body as { deletes: { clients?: string[] } }).deletes.clients
     );
     expect(singleItemWrite).toBeDefined();
     expect(hook.result.current.message).toMatch(/1 change\(s\) not saved: delete clients/);
+    // The refused delete isn't left pending: the database's state is loaded again.
+    expect(calls.filter((c) => c.url === '/api/data/snapshot')).toHaveLength(2);
   });
 });

@@ -3,6 +3,7 @@ import { attachUser, csrfGuard, requireUser } from './auth/middleware';
 import { createAuthRouter, createUsersRouter } from './auth/routes';
 import { AuthStore } from './auth/store';
 import { createCoreRouter } from './core/routes';
+import { createModuleRouter } from './modules/routes';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -33,5 +34,7 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   }
 
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
+  // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
+  if (pool && store) app.use('/api', createModuleRouter({ pool, store }));
   return { store };
 }

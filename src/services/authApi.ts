@@ -3,6 +3,7 @@
  * can't read; the server decides who the user is and what they may do.
  */
 import type { PermissionKey, UserProfile, UserRole } from '../types';
+import { SYNCED_COLLECTIONS } from './syncedCollections';
 
 export interface SessionUser {
   id: string;
@@ -74,10 +75,10 @@ export function toUserProfile(user: SessionUser): UserProfile {
   };
 }
 
-// localStorage keys holding core-chain data. In database mode they are only a cache of
+// localStorage keys holding database-backed data. In database mode they are only a cache of
 // what the signed-in user may see, so they are cleared on sign-out and when a different
 // user signs in on the same browser.
-const CORE_CACHE_KEYS = ['clients', 'projects', 'workPackages', 'workItems', 'currentUser'].map((k) => `nw_os_data_v1_${k}`);
+const CORE_CACHE_KEYS = [...SYNCED_COLLECTIONS.map((c) => c.storageKey), 'currentUser', 'auditLogs'].map((k) => `nw_os_data_v1_${k}`);
 const CACHE_OWNER_KEY = 'nw_os_core_cache_owner';
 
 export function clearCoreCache() {

@@ -7,6 +7,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
+import { officialBaseline, useServerFinancials } from '../services/serverFinancials';
 import {
   CommercialQuotation,
   QuotationItem,
@@ -96,6 +97,7 @@ export const CommercialView: React.FC = () => {
     financialClaims,
     payments,
     purchaseOrders,
+    coreDataSync,
   } = useNW();
 
   const [activeSubTab, setActiveSubTab] = useState<CommercialSubTab>('profitability');
@@ -117,12 +119,17 @@ export const CommercialView: React.FC = () => {
     currentUser.role === 'Admin' ||
     currentUser.role === 'Accountant';
 
+  // In database mode the official totals are the server's (contract value, approved
+  // variations, committed / actual / forecast cost, project gross profit); the browser's
+  // own figures are only a preview (demo mode, or until the server answers).
+  const serverFinancials = useServerFinancials(selectedProjectId, coreDataSync);
   const activeProjectBaseline = useMemo(() => {
-    return (
-      commercialBaselines.find((b) => b.project_id === selectedProjectId) ||
-      commercialBaselines[0]
-    );
-  }, [commercialBaselines, selectedProjectId]);
+    const own = commercialBaselines.find((b) => b.project_id === selectedProjectId);
+    if (serverFinancials) {
+      return officialBaseline(own, serverFinancials, projects.find((p) => p.id === selectedProjectId));
+    }
+    return own || commercialBaselines[0];
+  }, [commercialBaselines, selectedProjectId, serverFinancials, projects]);
 
   const activeQuotation = useMemo(() => {
     return (
@@ -526,7 +533,7 @@ const ProfitabilitySection: React.FC<{
           </div>
 
           <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-300">
-            <span className="text-xs font-bold text-amber-900 block">Net Expected Gross Profit</span>
+            <span className="text-xs font-bold text-amber-900 block">Expected Project Gross Profit</span>
             {canSeeMargins ? (
               <>
                 <div className="text-lg font-black text-slate-950 mt-1">

@@ -33,10 +33,52 @@ overwritten with the signed-in user.
 
 Within scope, each action still needs its permission, e.g. `projects.create`,
 `work_items.edit`. A user with only `work_items.complete` (site supervisor, contractor) may
-change status, progress, notes and photos of work items, nothing else. Contract values are
+change status, progress, delivery and installation status, notes and photos of work items, nothing else; a production user (`production.update`) may change a work item's status, progress, production status and notes. Contract values are
 removed from responses (and ignored on writes) for roles that may not see project
 financials. Records outside a user's scope answer **404**, so their existence isn't revealed;
 a missing permission answers **403**; no session answers **401**.
+
+## Operational modules (Phase 3)
+
+Every module route runs the same checks: session, active user, the module's permission
+(`server/modules/registry.ts`), and scope. Records belong to a project (or a production
+order, which belongs to a project) and are only visible inside the user's project scope.
+Contractors additionally only see records tied to their own contractor id, work items or
+packages (drawings and documents of their projects excepted). Clients only see their own
+projects, and never purchasing, cost, production or internal costing records.
+Production Staff and Site Supervisors have no access to purchase orders, cost ledger,
+quotations, price database or profitability.
+
+Rules enforced on the server, whatever the browser sends:
+
+- **Drawings:** a revision is never overwritten. Uploading (`drawings.upload`, or
+  `drawings.create_production` for NW drawings) never approves: a client revision goes
+  Draft → Internal Review (`drawings.upload`) → Approved or Rejected (`drawings.approve`).
+  Approving makes it current and supersedes the previously approved revision; until then
+  production keeps using the approved one.
+- **Production:** an order must reference an approved, current client revision and an
+  approved NW production drawing linked to it. Orders on a superseded or unapproved revision
+  are rejected; existing ones are flagged and can be parked (On Hold / Blocked / Cancelled)
+  but not advanced. Putting an order On Hold or resuming it needs `production.create_orders`;
+  a completed or cancelled order can't be held, and a held order is resumed before completion.
+- **Delivery:** defaults to contractor-arranged. Recording receipt needs `delivery.receive`,
+  stores an append-only receipt with the signed-in receiver, and never starts installation.
+- **Site QC:** the inspector is the signed-in user. A Fail creates (or links) a
+  rectification issue, and the work item / installation can't be completed until a later
+  inspection passes.
+- **Approvals:** requester and decider come from the session; nobody approves their own
+  request; only Owner, `approvals.decide`, the assigned user or approver role may decide;
+  decisions are final.
+- **Variations:** Identified → Costing → Internal Approval → Client Approval → Approved →
+  Implemented → Closed, one step at a time (Costing may be skipped), each gated by
+  permission; amounts freeze once approved. Only approved variations change the current
+  contract value; the original contract value never changes.
+- **Commercial figures:** contract value, approved variations, committed / actual / forecast
+  cost and project gross profit are computed by the server; screens show the server's
+  figures in database mode (browser arithmetic is only a preview).
+- **Audit:** logins, user changes, every create/update/delete and each workflow step are
+  written to `audit_logs` in the same transaction as the change, and nobody can edit or
+  delete them.
 
 ## Accounts
 
@@ -52,8 +94,9 @@ a missing permission answers **403**; no session answers **401**.
 
 ## Known limits
 
-- Only the core chain (clients → work items) is server data. Every other module is still
-  browser-side demo data shipped in the JavaScript bundle; hiding its tabs is not security.
+- Users, notifications, automation rules and a few settings screens are still browser-side
+  (see the Phase 3 report). Demo data for the server is shipped in the JavaScript bundle
+  for demo mode; in database mode the server only returns what the user may see.
 - The login rate limit is in memory, per server process.
 - The User Management screen still edits browser-side demo users; real accounts are managed
   through the API or the CLI.

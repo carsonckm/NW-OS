@@ -366,7 +366,7 @@ export interface DrawingRevision {
   file_url: string;
   uploaded_date: string;
   uploaded_by: string;
-  approved_status: 'Pending Review' | 'Approved' | 'Superseded' | 'Rejected' | 'Draft' | 'Review';
+  approved_status: 'Draft' | 'Internal Review' | 'Approved' | 'Superseded' | 'Rejected' | 'Pending Review' | 'Review';
   supersedes_revision?: string;
   notes: string;
   is_current: boolean;
@@ -499,6 +499,7 @@ export type ProductionStatus =
   | 'Packing'
   | 'Ready for Delivery'
   | 'Completed'
+  | 'On Hold'
   | 'Blocked'
   | 'Cancelled';
 
@@ -546,6 +547,8 @@ export interface WorkItem {
   unit: string;
   drawing_id: string;
   drawing_revision: string;
+  /** Server-set: the exact client drawing revision this item was created from (never changes). */
+  source_drawing_revision_id?: string;
   client_drawing_id?: string;
   client_drawing_revision?: string;
   nw_production_drawing_id?: string;
@@ -667,6 +670,8 @@ export interface Variation {
   estimated_cost: number;
   client_amount: number;
   status: VariationStatus;
+  /** Server-set when the variation reaches Approved. */
+  approved_at?: string;
   requested_by: string;
   approved_by_owner?: string;
   approved_by_client?: string;
@@ -769,6 +774,12 @@ export interface ProductionOrder {
   approved_client_drawing_revision: string; // e.g. "A-103 Rev 4"
   approved_nw_production_drawing_id: string;
   approved_nw_production_drawing_revision: string; // e.g. "A-103-NW Rev 1"
+  /** Server-set: the drawing revision records this order is built from. */
+  client_drawing_revision_id?: string;
+  nw_drawing_revision_id?: string;
+  /** Server-set: 'invalid' when a referenced revision is missing, unapproved or superseded. */
+  drawing_check?: 'valid' | 'invalid';
+  drawing_check_reason?: string;
   production_method: string; // e.g. "NW-PM-Counter-001 Rev 2"
   material: string;
   finish: string;
@@ -1046,6 +1057,8 @@ export interface DeliveryRecord {
   package_ids?: string[];
   contractor_id: string;
   contractor_name: string;
+  /** Who arranges transport. Defaults to the contractor; NW OS records it, it never books transport. */
+  arranged_by?: 'Contractor' | 'NW' | 'Client' | 'Supplier';
   driver_name: string;
   driver_contact: string;
   vehicle_plate: string; // e.g. "WXX 8892"
@@ -1204,6 +1217,8 @@ export interface SiteQCInspection {
   inspector_role: string;
   inspection_date: string;
   result: 'Pass' | 'Pass with Minor Rectification' | 'Fail / Rectification Required';
+  /** Issue tracking the rectification; the server creates one for a failed inspection. */
+  rectification_issue_id?: string;
   qc_checklist?: SiteQCChecklist;
   level_and_alignment_pass: boolean;
   hardware_and_mechanism_pass: boolean;
