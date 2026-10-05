@@ -375,7 +375,7 @@ module.exports = (H) => {
   stage(24, 'Rectification', async () => {
     const admin = await fresh('admin');
     await tab(admin, 'Automation');
-    await admin.getByTestId('automation-rules').getByRole('button', { name: 'Run now' }).click();
+    await admin.getByTestId('automation-rules').getByRole('button', { name: 'Run all now' }).click();
     await admin.waitForTimeout(1500);
     const task = q(`select id||' '||assigned_user_id||' '||status from tasks where issue_id='${S.rectIssue}'`);
     const site = await fresh('site-supervisor');

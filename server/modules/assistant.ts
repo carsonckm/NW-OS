@@ -82,6 +82,7 @@ const FORBIDDEN: { re: RegExp; what: string; where: string }[] = [
 const INTENTS: { intent: string; re: RegExp }[] = [
   { intent: 'finance', re: /\b(profit|margin|cost|budget|cash ?flow|invoice|payment|revenue|untung|kos|bajet|利润|成本)\b/i },
   { intent: 'risk', re: /\b(risk|at risk|critical|health|why .*(late|behind|delay|red)|behind schedule|delayed|risiko|lewat|风险)\b/i },
+  { intent: 'knowledge', re: /\b(how (do|to|should|can) (we|i)|procedure|standard|best practice|lessons?|sop|knowledge|recommended way|cara|bagaimana|怎么)\b/i },
   { intent: 'work_item', re: /\b[A-Z]{2,5}-\d{2,4}\b/ },
   { intent: 'tasks', re: /\b(my tasks?|overdue|to ?do|what should i do|tugas|任务)\b/i },
   { intent: 'today', re: /\b(today|needs? me|decide|decisions?|pending|waiting for me|briefing|hari ini|今天)\b/i },
@@ -124,6 +125,7 @@ export class Assistant {
       out = { ...base, intent, project, answer: '' };
       if (intent === 'finance') await this.finance(ctx, out, project);
       else if (intent === 'risk') await this.risk(ctx, out, project, now);
+      else if (intent === 'knowledge') await this.knowledge(ctx, out, question);
       else if (intent === 'work_item') await this.workItem(ctx, out, question);
       else if (intent === 'tasks') await this.tasks(ctx, out, now);
       else if (intent === 'today') await this.today(ctx, out, now);
@@ -211,6 +213,36 @@ export class Assistant {
       out.push(rec);
     }
     return out;
+  }
+
+  /** Approved (published) articles only: drafts and archived revisions are never cited. */
+  private async knowledge(ctx: AccessContext, out: AssistantAnswer, question: string) {
+    if (!ctx.can('knowledge.view')) {
+      out.answer = 'The knowledge base is not available to your role.';
+      out.facts.push({ text: 'Knowledge base access needs knowledge.view.', confidence: 'Confirmed', basis: 'Role permissions' });
+      return;
+    }
+    const STOP = new Set(['how', 'should', 'what', 'when', 'where', 'which', 'with', 'this', 'that', 'there', 'their', 'have', 'from', 'about', 'procedure', 'standard', 'best', 'practice', 'lesson', 'lessons', 'knowledge', 'recommended', 'way', 'the', 'for', 'and', 'can', 'our']);
+    const words = [...new Set(question.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])].filter((w) => !STOP.has(w));
+    const rows = (await this.pool.query(`SELECT id, category, revision, data FROM knowledge_articles WHERE status = 'Approved'`)).rows;
+    const scored = rows
+      .map((r) => {
+        const hay = [r.data.title, r.data.problem, r.data.solution, r.data.procedure, r.data.description, r.category, ...(r.data.tags ?? [])].join(' ').toLowerCase();
+        return { r, score: words.filter((w) => hay.includes(w)).length };
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    if (!scored.length) {
+      out.answer = 'No approved NW knowledge covers this. Drafts are not official, so I won\'t quote them — ask the Production Manager, and consider writing it up.';
+      out.facts.push({ text: 'No approved knowledge article matched.', confidence: 'Unknown' });
+      return;
+    }
+    out.answer = `${scored.length} approved NW article(s) apply. Only approved knowledge is official.`;
+    for (const { r } of scored) {
+      const body = r.data.solution || r.data.description || '';
+      out.facts.push({ text: `${r.data.title} (${r.category}, rev ${r.revision}): ${body}${r.data.procedure ? ` Procedure: ${r.data.procedure}` : ''}`, confidence: 'Confirmed', source: { type: 'knowledge', id: r.id, tab: 'knowledge', project_id: null } });
+    }
   }
 
   private async finance(ctx: AccessContext, out: AssistantAnswer, project: AssistantAnswer['project']) {

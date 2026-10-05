@@ -10,6 +10,7 @@ import { AI_FORBIDDEN_ACTIONS } from './automation';
 import { AutomationEngine, ensureRules } from '../automation/engine';
 import { RULES, RULE_BY_KEY } from '../automation/rules';
 import { NullProvider, handleInbound, normalizePhone } from './whatsapp';
+import { DataService } from './service';
 
 const wrap =
   (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
@@ -215,6 +216,25 @@ export function createOpsRouter({ pool, store, engine = new AutomationEngine(poo
       res.json(summary);
     })
   );
+  // Who changed, ran or retried automation (the audit trail for the admin screen).
+  router.get(
+    '/automation/audit',
+    wrap(async (req, res) => {
+      needView(req);
+      const rule = typeof req.query.rule === 'string' ? req.query.rule : null;
+      res.json(
+        (
+          await pool.query(
+            `SELECT a.id::int AS id, a.action, a.entity_type, a.entity_id, a.actor_id, u.name AS actor_name, a.occurred_at, a.before, a.after
+             FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
+             WHERE a.action IN ('automation.rule.update', 'automation.run', 'automation.retry') AND ($1::text IS NULL OR a.entity_id = $1 OR a.entity_id = 'all' OR a.after->'runs' @> jsonb_build_array(jsonb_build_object('rule_key', $1::text)))
+             ORDER BY a.id DESC LIMIT 50`,
+            [rule]
+          )
+        ).rows
+      );
+    })
+  );
   router.post(
     '/automation/runs/:id/retry',
     wrap(async (req, res) => {
@@ -275,11 +295,12 @@ export function createOpsRouter({ pool, store, engine = new AutomationEngine(poo
   );
   // Test harness for administrators: runs an inbound message through the real pipeline
   // (identity from the registry only). A provider webhook would call handleInbound the same way.
+  const dataService = new DataService(pool);
   router.post(
     '/whatsapp/simulate-inbound',
     wrap(async (req, res) => {
       needManage(req);
-      res.json(await handleInbound(pool, req.body?.from, req.body?.text, NullProvider));
+      res.json(await handleInbound(pool, req.body?.from, req.body?.text, NullProvider, dataService));
     })
   );
   router.get(

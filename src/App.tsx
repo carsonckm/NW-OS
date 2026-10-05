@@ -36,6 +36,7 @@ import { DeliveryView } from './views/DeliveryView';
 import { AutomationView } from './views/AutomationView';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { OperatingAssistantView } from './views/OperatingAssistantView';
+import { CalendarView } from './views/CalendarView';
 import { hasPermission } from './utils/permissions';
 import { LoginScreen } from './components/LoginScreen';
 import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
@@ -136,6 +137,7 @@ const NWAppContent: React.FC = () => {
         {activeTab === 'variations' && <VariationsView />}
         {activeTab === 'knowledge' && <KnowledgeBaseView />}
         {activeTab === 'notifications' && <NotificationCenter />}
+        {activeTab === 'calendar' && coreDataSync.mode === 'database' && <CalendarView />}
         {activeTab === 'audit-logs' && <AuditArchitectureView />}
       </main>
 

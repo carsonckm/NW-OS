@@ -16,6 +16,7 @@ import {
   Truck,
 } from 'lucide-react';
 import { KnowledgeArticles } from './knowledge/KnowledgeArticles';
+import { RecurringProblems } from '../components/RecurringProblems';
 
 export const KnowledgeBaseView: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string>('standards');
@@ -42,7 +43,7 @@ export const KnowledgeBaseView: React.FC = () => {
       {/* Category Pills */}
       <div className="flex space-x-2 overflow-x-auto pb-1">
         {[
-          { id: 'standards', label: 'NW Production Standards' },
+          { id: 'standards', label: 'Knowledge & Recurring Problems' },
           { id: 'tolerances', label: 'Tolerances & Quality' },
           { id: 'drawings', label: 'Drawing Revisions Policy' },
           { id: 'carpentry', label: 'Carpentry & Joinery Splitting' },
@@ -164,7 +165,12 @@ export const KnowledgeBaseView: React.FC = () => {
           </div>
         )}
 
-        {activeCategory === 'standards' && <KnowledgeArticles />}
+        {activeCategory === 'standards' && (
+          <div className="space-y-4">
+            <RecurringProblems />
+            <KnowledgeArticles />
+          </div>
+        )}
 
         {activeCategory === 'ai-guardrails' && (
           <div className="space-y-4">

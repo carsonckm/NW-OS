@@ -20,7 +20,9 @@ import { dailyBriefing } from './briefing';
 import { ownerCenter, ownerDependency } from './ownerCenter';
 import { findRecord } from './store';
 import { Assistant } from './assistant';
-import { AI_PROPOSAL_TYPE, validateProposal } from './assistantActions';
+import { recurringFor } from './recurring';
+import { calendarFor } from './calendar';
+import { AI_PROPOSAL_TYPE, raiseProposal, validateProposal } from './assistantActions';
 import { DataService } from './service';
 
 const wrap =
@@ -66,6 +68,9 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/briefing',
     '/owner/*',
     '/assistant/*',
+    '/calendar',
+    '/recurring-problems',
+    '/recurring-problems/*',
     '/ai/assistant',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
@@ -314,6 +319,114 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   router.get('/briefing', wrap(async (req, res) => res.json(await dailyBriefing(pool, req.access!))));
   router.get('/owner/center', wrap(async (req, res) => res.json(await ownerCenter(pool, req.access!))));
   router.get('/owner/dependency', wrap(async (req, res) => res.json(await ownerDependency(pool, req.access!))));
+  // Operational calendar: recorded dates the user may see (filters: from, to, project_id, person_id, role, status, type).
+  router.get(
+    '/calendar',
+    wrap(async (req, res) => {
+      const q = req.query as Record<string, unknown>;
+      const pick = (k: string) => (typeof q[k] === 'string' && q[k] ? (q[k] as string) : undefined);
+      res.json(await calendarFor(pool, service, req.access!, { from: pick('from'), to: pick('to'), project_id: pick('project_id'), person_id: pick('person_id'), role: pick('role'), status: pick('status'), type: pick('type') }));
+    })
+  );
+
+  // ---------------- knowledge usage and recurring problems ----------------
+  const knowledgeDef = service.module('knowledge');
+  // Record that an approved article was applied (only approved knowledge is official).
+  router.post(
+    '/knowledge/:id/usage',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      const article = await service.get(ctx, knowledgeDef, req.params.id);
+      if (article.status !== 'Approved') throw new ValidationError('Only approved (published) knowledge can be applied');
+      const { project_id, entity_type, entity_id, note } = req.body ?? {};
+      if (project_id !== undefined && project_id !== null && !ctx.canSeeProject(project_id)) throw new ForbiddenError('Project not found or not accessible');
+      const row = (
+        await pool.query(
+          `INSERT INTO knowledge_usage (article_id, user_id, project_id, entity_type, entity_id, note) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::int AS id, used_at`,
+          [article.id, ctx.user.id, project_id ?? null, typeof entity_type === 'string' ? entity_type : null, typeof entity_id === 'string' ? entity_id : null, typeof note === 'string' ? note.slice(0, 500) : null]
+        )
+      ).rows[0];
+      await writeAudit(pool, actorOf(req), { action: 'knowledge.used', entityType: 'knowledge', entityId: String(article.id), projectId: project_id ?? null, after: { entity_type, entity_id } });
+      res.status(201).json(row);
+    })
+  );
+  router.get(
+    '/knowledge/:id/usage',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      const article = await service.get(ctx, knowledgeDef, req.params.id);
+      const rows = (
+        await pool.query(
+          `SELECT u.id::int AS id, u.user_id, us.name AS user_name, u.project_id, u.entity_type, u.entity_id, u.note, u.used_at
+           FROM knowledge_usage u LEFT JOIN users us ON us.id = u.user_id WHERE u.article_id = $1 ORDER BY u.used_at DESC LIMIT 100`,
+          [article.id]
+        )
+      ).rows;
+      // Usage on projects the reader can't see is counted but not shown.
+      res.json(rows.map((r) => (r.project_id && !ctx.canSeeProject(r.project_id) ? { id: r.id, used_at: r.used_at, hidden: true } : r)));
+    })
+  );
+
+  router.get('/recurring-problems', wrap(async (req, res) => res.json(await recurringFor(pool, req.access!))));
+  // A person decides what to do about a pattern; the detector never acts on its own.
+  const findPattern = async (req: Request) => {
+    const key = req.body?.pattern_key;
+    const pattern = (await recurringFor(pool, req.access!)).find((p) => p.key === key);
+    if (!pattern) throw new ValidationError('That pattern is not (or no longer) detected in your records');
+    return pattern;
+  };
+  router.post(
+    '/recurring-problems/review',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      if (!ctx.can('knowledge.edit') && !ctx.can('automation.manage_tasks')) throw new ForbiddenError('Missing permission: knowledge.edit or automation.manage_tasks');
+      const { decision, note } = req.body ?? {};
+      if (!['Action taken', 'Dismissed'].includes(decision)) throw new ValidationError('decision must be Action taken or Dismissed');
+      if (decision === 'Dismissed' && !(typeof note === 'string' && note.trim())) throw new ValidationError('Say why the pattern is dismissed');
+      const pattern = await findPattern(req);
+      await pool.query(
+        `INSERT INTO recurring_problem_reviews (pattern_key, decision, note, occurrences, decided_by) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (pattern_key) DO UPDATE SET decision = $2, note = $3, occurrences = $4, decided_by = $5, decided_at = now(), article_id = NULL`,
+        [pattern.key, decision, typeof note === 'string' ? note.slice(0, 1000) : null, pattern.occurrences, ctx.user.id]
+      );
+      await writeAudit(pool, actorOf(req), { action: 'recurring.review', entityType: 'recurring_problem', entityId: pattern.key, after: { decision, note, occurrences: pattern.occurrences } });
+      res.json({ ok: true });
+    })
+  );
+  // Starts a Lessons-Learned draft from the evidence; a person writes the solution and it is
+  // official only after a knowledge editor approves it.
+  router.post(
+    '/recurring-problems/draft-knowledge',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      const pattern = await findPattern(req);
+      const article = await service.transact(ctx, actorOf(req), async (h) => {
+        const id = `kb-rec-${randomUUID().slice(0, 8)}`;
+        const stored = await service.writeInTransaction(h, knowledgeDef, undefined, {
+          id,
+          title: `Lessons learned: ${pattern.title}`,
+          category: pattern.knowledge_category,
+          status: 'Draft',
+          problem: `${pattern.suggestion}\n\nSeen ${pattern.occurrences} times between ${pattern.first_seen.slice(0, 10)} and ${pattern.last_seen.slice(0, 10)}:\n${pattern.examples.map((e) => `- ${e.label} (${e.type} ${e.id})`).join('\n')}`,
+          solution: '',
+          procedure: '',
+          description: '',
+          tags: ['recurring', pattern.kind.replace(/_/g, '-')],
+          source_pattern_key: pattern.key,
+          created_at: new Date().toISOString(),
+        });
+        await h.db.query(
+          `INSERT INTO recurring_problem_reviews (pattern_key, decision, occurrences, decided_by, article_id) VALUES ($1, 'Knowledge drafted', $2, $3, $4)
+           ON CONFLICT (pattern_key) DO UPDATE SET decision = 'Knowledge drafted', note = NULL, occurrences = $2, decided_by = $3, decided_at = now(), article_id = $4`,
+          [pattern.key, pattern.occurrences, ctx.user.id, id]
+        );
+        await writeAudit(h.db, actorOf(req), { action: 'recurring.review', entityType: 'recurring_problem', entityId: pattern.key, after: { decision: 'Knowledge drafted', article_id: id } });
+        return stored;
+      });
+      res.status(201).json(article);
+    })
+  );
+
   // ---------------- AI operating assistant (answers from the user's own scope) ----------------
   const assistant = new Assistant(pool);
   router.post('/assistant/ask', wrap(async (req, res) => res.json(await assistant.ask(req.access!, actorOf(req), req.body ?? {}))));
@@ -336,35 +449,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
       const { action, params, rationale } = req.body ?? {};
       const checked = await validateProposal(pool, ctx, action, params);
       const u = ctx.user;
-      const created = await service.transact(ctx, actorOf(req), async (h) => {
-        const project = (await h.db.query('SELECT project_name FROM projects WHERE id = $1', [checked.project_id])).rows[0];
-        const id = `apr-ai-${randomUUID().slice(0, 8)}`;
-        const record = {
-          id,
-          approval_number: id.toUpperCase(),
-          approval_type: AI_PROPOSAL_TYPE,
-          title: `AI proposal: ${checked.summary}`,
-          description: typeof rationale === 'string' && rationale.trim() ? rationale.trim().slice(0, 2000) : 'Proposed by the NW OS assistant from live records.',
-          project_id: checked.project_id,
-          project_name: project?.project_name ?? '',
-          related_entity_type: 'ai_proposal',
-          related_entity_id: id,
-          // The assistant proposes; the person who asked (or the Owner) decides.
-          requested_by_name: 'NW OS Assistant',
-          requested_by_role: 'NW OS Assistant',
-          asked_by_id: u.id,
-          asked_by_name: u.name,
-          assigned_approver_id: u.id,
-          assigned_approver_name: u.name,
-          assigned_approver_role: u.role,
-          date_requested: new Date().toISOString(),
-          decision: 'Pending',
-          proposal: { action: checked.action, params: checked.params, summary: checked.summary },
-        };
-        await h.insertSystemRecord('approvals', record, `AI proposal for ${u.id}`);
-        await writeAudit(h.db, actorOf(req), { action: 'ai.proposal.create', entityType: 'approval', entityId: id, projectId: checked.project_id, after: record.proposal });
-        return record;
-      });
+      // The person who asked decides (the Owner can decide any proposal).
+      const created = await raiseProposal(service, ctx, actorOf(req), checked, { approver: { id: u.id, name: u.name, role: u.role }, rationale: typeof rationale === 'string' ? rationale : undefined, source: 'assistant' });
       res.status(201).json(created);
     })
   );

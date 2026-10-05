@@ -407,7 +407,17 @@ export type KnowledgeCategory =
   | 'Hardware Preferences'
   | 'Production Limitations'
   | 'Standard Dimensions'
-  | 'Practical Solutions';
+  | 'Practical Solutions'
+  // Phase 5 categories (new articles use these)
+  | 'Production'
+  | 'Hardware'
+  | 'Drawings'
+  | 'QC'
+  | 'Site Problems'
+  | 'Suppliers'
+  | 'Contractors'
+  | 'Commercial'
+  | 'Lessons Learned';
 
 export type KnowledgeStatus = 'Draft' | 'Review' | 'Approved' | 'Archived';
 
@@ -424,6 +434,17 @@ export interface NWProductionKnowledge {
   status: KnowledgeStatus;
   source_project_id?: string;
   created_at: string;
+  // Phase 5: structured, revisioned operating memory
+  problem?: string;
+  solution?: string;
+  procedure?: string;
+  project_type?: string;
+  tags?: string[];
+  revision?: number;
+  supersedes_id?: string;
+  superseded_by?: string;
+  usage_count?: number;
+  last_used_at?: string;
 }
 
 export type WorkPackageTrade =

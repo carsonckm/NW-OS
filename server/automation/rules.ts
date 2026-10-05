@@ -5,6 +5,7 @@
  * payments, and never make safety decisions. Thresholds come from the rule's stored
  * configuration (automation_rules.config), not from code.
  */
+import { detectRecurring } from '../modules/recurring';
 import type { PlannedAction, RuleContext, RuleDef } from './types';
 import { refreshStoredRisk } from '../modules/risk';
 import { writeAudit } from '../audit';
@@ -485,5 +486,35 @@ const projectRisk: RuleDef = {
   },
 };
 
-export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue];
+const recurringProblems: RuleDef = {
+  key: 'recurring_problems',
+  name: 'Recurring problems',
+  description: 'Looks for the same problem recurring (issue categories, site QC failures by contractor, factory QC checks, problem deliveries, supplier receipts) over the last 180 days.',
+  watches: ['issues', 'siteQCInspections', 'factoryQCInspections', 'deliveryRecords', 'goodsReceived'],
+  interval_minutes: 1440,
+  defaults: {},
+  actions: 'Tell knowledge editors who can see every project involved, once per new pattern and again only when it keeps growing.',
+  human_in_loop: 'A person decides: draft a lessons-learned article, record an action, or dismiss it. Nothing is changed automatically.',
+  async evaluate(rc) {
+    const out: PlannedAction[] = [];
+    for (const p of await detectRecurring(rc.pool, { canSee: () => true, can: () => true })) {
+      if (!p.open) continue;
+      let editors: string[] | undefined;
+      for (const pid of p.projects) {
+        const can = await rc.people.withPermission('knowledge.edit', pid);
+        editors = editors ? editors.filter((u) => can.includes(u)) : can;
+      }
+      if (!editors?.length) continue;
+      out.push({
+        kind: 'notification',
+        key: `recurring:${p.key}:${p.occurrences}`,
+        users: editors,
+        note: { project_id: p.projects.length === 1 ? p.projects[0] : null, link_tab: 'knowledge', entity_type: 'recurring_problem', entity_id: p.key, title: `Recurring problem: ${p.title}`, message: `${p.occurrences} times on ${p.projects.length} project(s). ${p.suggestion}`, type: 'information', priority: 'normal' },
+      });
+    }
+    return out;
+  },
+};
+
+export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue, recurringProblems];
 export const RULE_BY_KEY = new Map(RULES.map((r) => [r.key, r]));

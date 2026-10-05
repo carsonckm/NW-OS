@@ -533,6 +533,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
               show: hasPermission(currentUser, 'contractors.view'),
             },
             {
+              id: 'calendar',
+              label: 'Schedule',
+              show: coreDataSync.mode === 'database' && currentUser.role !== 'Client',
+            },
+            {
               id: 'knowledge',
               label: 'NW Knowledge Base',
               show: hasPermission(currentUser, 'knowledge.view'),

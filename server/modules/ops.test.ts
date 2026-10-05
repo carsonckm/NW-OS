@@ -84,7 +84,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 users, notifications, automation, k
 
     it('exposes the rules with their human-in-loop limits, and only managers can force a run', async () => {
       const rules = (await as['Site Supervisor'].get('/api/automation/rules').expect(200)).body;
-      expect(rules.rules.length).toBe(9);
+      expect(rules.rules.length).toBe(10);
       expect(rules.ai_forbidden_actions).toContain('Approve or reject drawings');
       expect((await as['Site Supervisor'].post('/api/automation/run')).status).toBe(403);
       await admin().post('/api/automation/run').expect(200);
@@ -93,7 +93,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 users, notifications, automation, k
   });
 
   describe('knowledge base', () => {
-    const article = { id: 'kb-p4', title: 'Edge band before CNC drilling', category: 'Joinery', description: 'x', reason: 'y', example: 'z', created_by: 'Forged', status: 'Draft', created_at: '' };
+    const article = { id: 'kb-p4', title: 'Edge band before CNC drilling', category: 'Production', description: 'x', reason: 'y', example: 'z', created_by: 'Forged', status: 'Draft', created_at: '' };
     it('lets proposers write drafts, only knowledge editors publish, and locks published articles', async () => {
       expect((await as['Production Manager'].post('/api/knowledge').send({ ...article, status: 'Approved' })).status).toBe(403);
       const created = (await as['Production Manager'].post('/api/knowledge').send(article).expect(201)).body;
