@@ -33,13 +33,38 @@ export function createOpsRouter({ pool, store, engine = new AutomationEngine(poo
   router.use(['/notifications', '/automation', '/whatsapp'], csrfGuard, attachUser(store), requireUser, loadAccess(pool));
 
   // ---------------- notifications: only ever the signed-in user's own ----------------
+  // Groups: action required, approval, warning, escalation, information.
+  const GROUP_SQL = `CASE
+      WHEN type IN ('escalation') THEN 'escalation'
+      WHEN type IN ('approval') THEN 'approval'
+      WHEN type IN ('warning', 'delivery') THEN 'warning'
+      WHEN type IN ('action', 'task', 'issue') THEN 'action'
+      ELSE 'information' END`;
   router.get(
     '/notifications',
     wrap(async (req, res) => {
+      const group = typeof req.query.group === 'string' ? req.query.group : null;
+      const unread = req.query.unread === 'true';
       const rows = (
         await pool.query(
-          `SELECT id, title, message, type, priority, project_id, link_tab, entity_type, entity_id, is_read, read_at, created_at
-           FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
+          `SELECT id, title, message, type, ${GROUP_SQL} AS "group", priority, project_id, link_tab, entity_type, entity_id, source,
+                  requires_ack, acknowledged_at, is_read, read_at, created_at
+           FROM notifications WHERE user_id = $1 AND ($2::text IS NULL OR ${GROUP_SQL} = $2) AND (NOT $3 OR NOT is_read)
+           ORDER BY (requires_ack AND acknowledged_at IS NULL) DESC, created_at DESC LIMIT 200`,
+          [req.auth!.user.id, group, unread]
+        )
+      ).rows;
+      res.json(rows);
+    })
+  );
+  router.get(
+    '/notifications/summary',
+    wrap(async (req, res) => {
+      const rows = (
+        await pool.query(
+          `SELECT ${GROUP_SQL} AS "group", count(*) FILTER (WHERE NOT is_read)::int AS unread, count(*)::int AS total,
+                  count(*) FILTER (WHERE requires_ack AND acknowledged_at IS NULL)::int AS to_acknowledge
+           FROM notifications WHERE user_id = $1 GROUP BY 1`,
           [req.auth!.user.id]
         )
       ).rows;
@@ -59,6 +84,28 @@ export function createOpsRouter({ pool, store, engine = new AutomationEngine(poo
       const r = await pool.query('UPDATE notifications SET is_read = true, read_at = coalesce(read_at, now()) WHERE id = $1 AND user_id = $2 RETURNING id', [req.params.id, req.auth!.user.id]);
       if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Notification not found' });
       res.json({ id: req.params.id, is_read: true });
+    })
+  );
+  router.post(
+    '/notifications/:id/acknowledge',
+    wrap(async (req, res) => {
+      const r = await pool.query(
+        `UPDATE notifications SET is_read = true, read_at = coalesce(read_at, now()), acknowledged_at = coalesce(acknowledged_at, now())
+         WHERE id = $1 AND user_id = $2 RETURNING id, acknowledged_at, entity_type, entity_id, rule_key`,
+        [req.params.id, req.auth!.user.id]
+      );
+      if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Notification not found' });
+      // Acknowledging an escalation notice acknowledges the escalation it announces.
+      const n = r.rows[0];
+      const esc = await pool.query(
+        `UPDATE escalations SET status = 'Acknowledged', acknowledged_by = $1, acknowledged_at = now(), updated_at = now(),
+           data = data || jsonb_build_object('status', 'Acknowledged', 'acknowledged_by', $2::text, 'acknowledged_at', now())
+         WHERE status = 'Open' AND source_record_id = $3 AND data->>'rule_key' = split_part($4, ':', 1)
+           AND level = nullif(substring($4 from ':L([0-9]+)$'), '')::int RETURNING id`,
+        [req.auth!.user.id, req.auth!.user.name, n.entity_id, n.rule_key ?? '']
+      );
+      for (const e of esc.rows) await writeAudit(pool, actorOf(req), { action: 'escalation.acknowledge', entityType: 'escalations', entityId: e.id });
+      res.json({ id: req.params.id, acknowledged_at: n.acknowledged_at, escalations_acknowledged: esc.rowCount });
     })
   );
 

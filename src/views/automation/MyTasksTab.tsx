@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useFocus } from '../../services/navigation';
 import {
   CheckCircle2,
   Clock,
@@ -28,6 +29,7 @@ import {
 } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
 import { TaskOriginIssue } from '../../components/IssueTasks';
+import { TaskWorkPanel } from '../../components/TaskWorkPanel';
 import { NWTask, TaskPriority, TaskStatus, TaskEscalationLevel, UserRole } from '../../types';
 
 export const MyTasksTab: React.FC = () => {
@@ -56,6 +58,10 @@ export const MyTasksTab: React.FC = () => {
 
   // Selected task drawer/modal
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(tasks[0]?.id || null);
+  const focus = useFocus(['task']);
+  useEffect(() => {
+    if (focus) setSelectedTaskId(focus.id);
+  }, [focus]);
   const [newCommentText, setNewCommentText] = useState('');
   const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
   const [showEscalateModal, setShowEscalateModal] = useState(false);
@@ -466,6 +472,7 @@ export const MyTasksTab: React.FC = () => {
                   </div>
                   <h2 className="text-base font-black text-slate-900">{selectedTask.title}</h2>
                   <TaskOriginIssue task={selectedTask} />
+                  <TaskWorkPanel task={selectedTask} />
                   <div className="text-xs text-slate-500 mt-1 flex items-center space-x-2">
                     <Building2 className="w-3.5 h-3.5 text-slate-400" />
                     <span>{selectedTask.project_name}</span>

@@ -247,6 +247,7 @@ const siteQcFailed: RuleDef = {
           work_item_code: q.item_code,
           installation_qc_id: q.id,
           source_event: 'installation.site_qc_failed',
+          requires_evidence: true,
           source_reason: `Site QC ${q.id} failed`,
           due_date: reinspect,
         });
@@ -299,6 +300,7 @@ const deliveryProblem: RuleDef = {
         project_id: d.project_id,
         delivery_id: d.id,
         source_event: 'delivery.problem',
+        requires_evidence: true,
         due_date: addDays(rc.today, 1),
       });
       if (task) out.push({ kind: 'task', key: `delivery_problem:${d.id}:task`, task });

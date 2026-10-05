@@ -110,10 +110,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 automation engine and scheduler', (
   it('does not run a rule twice at the same time (advisory lock)', async () => {
     const holder = await db.pool.connect();
     try {
-      await holder.query(`SELECT pg_advisory_lock(hashtext('nwos-automation:test_rule'))`);
+      await holder.query(`SELECT pg_advisory_lock(hashtext(current_schema() || ':nwos-automation:test_rule'))`);
       expect((await engine.runRule('test_rule', 'manual')).status).toBe('skipped');
     } finally {
-      await holder.query(`SELECT pg_advisory_unlock(hashtext('nwos-automation:test_rule'))`);
+      await holder.query(`SELECT pg_advisory_unlock(hashtext(current_schema() || ':nwos-automation:test_rule'))`);
       holder.release();
     }
     expect((await engine.runRule('test_rule', 'manual')).status).toBe('succeeded');

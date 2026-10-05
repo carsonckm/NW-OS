@@ -74,11 +74,14 @@ export const IssueTasksPanel: React.FC<{ issue: Issue }> = ({ issue }) => {
     }
   };
 
+  const [evidence, setEvidence] = useState<Record<string, string>>({});
   const complete = async (t: NWTask) => {
+    const needs = (t as NWTask & { requires_evidence?: boolean }).requires_evidence;
+    if (needs && !evidence[t.id]?.trim()) return setError(`Add what was done for "${t.title}" (a note or photo reference) before marking it done.`);
     setBusy(t.id);
     setError(null);
     try {
-      await records.update<NWTask>('tasks', t.id, { status: 'Completed', completed_date: new Date().toISOString() }, t);
+      await records.update<NWTask & { completion_evidence?: string }>('tasks', t.id, { status: 'Completed', completed_date: new Date().toISOString(), ...(needs ? { completion_evidence: evidence[t.id] } : {}) }, t);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -109,6 +112,15 @@ export const IssueTasksPanel: React.FC<{ issue: Issue }> = ({ issue }) => {
           </div>
           <div className="flex items-center gap-2">
             <Pill tone={statusTone(t.status)}>{t.status}</Pill>
+            {!DONE.has(t.status) && (t as NWTask & { requires_evidence?: boolean }).requires_evidence && (
+              <Input
+                value={evidence[t.id] ?? ''}
+                onChange={(e) => setEvidence({ ...evidence, [t.id]: e.target.value })}
+                placeholder="What was done"
+                aria-label={`Evidence for ${t.title}`}
+                className="w-48"
+              />
+            )}
             {!DONE.has(t.status) && (
               <Button tone="success" busy={busy === t.id} onClick={() => complete(t)}>
                 Mark done

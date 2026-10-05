@@ -8,6 +8,7 @@
  * are never sent to clients.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { useFocus } from '../services/navigation';
 import { GitPullRequest, Plus } from 'lucide-react';
 import { useNW } from '../context/NWContext';
 import type { Variation } from '../types';
@@ -33,6 +34,10 @@ interface ContractSummary {
 export const VariationsView: React.FC = () => {
   const { variations, projects, selectedProjectId, setSelectedProjectId, currentUser, coreDataSync } = useNW();
   const [selected, setSelected] = useState<string | null>(null);
+  const focus = useFocus(['variation']);
+  useEffect(() => {
+    if (focus) setSelected(focus.id);
+  }, [focus]);
   const [creating, setCreating] = useState(false);
   const [summary, setSummary] = useState<ContractSummary | null>(null);
   const can = (p: Parameters<typeof hasPermission>[1]) => hasPermission(currentUser, p);

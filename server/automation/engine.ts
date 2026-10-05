@@ -52,14 +52,14 @@ export async function ensureRules(pool: Pool) {
   }
 }
 
-async function insertNotifications(db: PoolClient, users: string[], note: NoteSpec, ruleKey: string) {
+async function insertNotifications(db: PoolClient, users: string[], note: NoteSpec, ruleKey: string, source: string) {
   let n = 0;
   for (const userId of new Set(users)) {
     const res = await db.query(
-      `INSERT INTO notifications (id, user_id, title, message, type, priority, project_id, link_tab, entity_type, entity_id, rule_key)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11 WHERE EXISTS (SELECT 1 FROM users WHERE id = $2 AND is_active)
+      `INSERT INTO notifications (id, user_id, title, message, type, priority, project_id, link_tab, entity_type, entity_id, rule_key, source, requires_ack)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 WHERE EXISTS (SELECT 1 FROM users WHERE id = $2 AND is_active)
        ON CONFLICT (user_id, rule_key) DO NOTHING`,
-      [`ntf-${randomUUID()}`, userId, note.title, note.message, note.type, note.priority, note.project_id, note.link_tab, note.entity_type, note.entity_id, ruleKey]
+      [`ntf-${randomUUID()}`, userId, note.title, note.message, note.type, note.priority, note.project_id, note.link_tab, note.entity_type, note.entity_id, ruleKey, source, note.type === 'escalation']
     );
     n += res.rowCount ?? 0;
   }
@@ -111,16 +111,17 @@ export class AutomationEngine {
       if (a.kind === 'notification') {
         const users = [];
         for (const u of a.users) if (await people.canSee(u, a.note.project_id)) users.push(u);
-        await insertNotifications(h.db, users, a.note, a.key);
+        await insertNotifications(h.db, users, a.note, a.key, rule.key);
       } else if (a.kind === 'task') {
         const exists = (await h.db.query('SELECT 1 FROM tasks WHERE id = $1', [a.task.id])).rowCount;
-        if (!exists) await h.insertSystemRecord('tasks', a.task, `${rule.key}: ${String(a.task.source_event ?? '')}`);
+        if (!exists) await h.insertSystemRecord('tasks', { ...a.task, source_rule: rule.key }, `${rule.key}: ${String(a.task.source_event ?? '')}`);
         const assignee = String(a.task.assigned_user_id);
         await insertNotifications(
           h.db,
           [assignee],
           a.note ?? { title: `New task: ${String(a.task.title)}`, message: `Due ${String(a.task.due_date ?? '')}. Raised by automation (${rule.name}).`, type: 'action', priority: a.task.priority === 'Urgent' ? 'urgent' : 'high', project_id: (a.task.project_id as string) ?? null, link_tab: 'automation', entity_type: 'task', entity_id: String(a.task.id) },
-          `${a.key}:assigned`
+          `${a.key}:assigned`,
+          rule.key
         );
       } else if (a.kind === 'escalation') {
         const id = `esc-auto-${randomUUID()}`;
@@ -135,6 +136,7 @@ export class AutomationEngine {
             requires_acknowledgement: a.record.is_critical,
             rule_key: rule.key,
             level: a.level,
+            status: 'Open',
             created_at: this.clock().toISOString(),
           },
           `${rule.key}: escalation level ${a.level}`
@@ -145,7 +147,7 @@ export class AutomationEngine {
         }
         const users = [];
         for (const u of a.users) if (await people.canSee(u, a.record.project_id)) users.push(u);
-        await insertNotifications(h.db, users, a.note, a.key);
+        await insertNotifications(h.db, users, a.note, a.key, rule.key);
       }
       return true;
     });
@@ -157,7 +159,7 @@ export class AutomationEngine {
     if (!rule) throw new Error(`Unknown automation rule ${key}`);
     const lockClient = await this.pool.connect();
     try {
-      const locked = (await lockClient.query(`SELECT pg_try_advisory_lock(hashtext('nwos-automation:' || $1)) AS ok`, [key])).rows[0].ok;
+      const locked = (await lockClient.query(`SELECT pg_try_advisory_lock(hashtext(current_schema() || ':nwos-automation:' || $1)) AS ok`, [key])).rows[0].ok;
       if (!locked) return { rule: key, run_id: null, status: 'skipped', actions_taken: 0 };
       try {
         const cfgRow = (await this.pool.query('SELECT enabled, config, consecutive_failures FROM automation_rules WHERE key = $1', [key])).rows[0];
@@ -181,6 +183,15 @@ export class AutomationEngine {
             }
           }
           if (firstError) throw firstError;
+          // Escalations this rule raised whose condition no longer holds are resolved.
+          const active = [...new Set(planned.filter((a) => a.kind === 'escalation').map((a) => (a as Extract<PlannedAction, { kind: 'escalation' }>).record.source_record_id))];
+          const resolved = await this.pool.query(
+            `UPDATE escalations SET status = 'Resolved', updated_at = now(),
+               data = data || jsonb_build_object('status', 'Resolved', 'resolved_at', now(), 'resolution_action', 'Condition cleared')
+             WHERE data->>'rule_key' = $1 AND status <> 'Resolved' AND NOT (source_record_id = ANY($2)) RETURNING id`,
+            [key, active]
+          );
+          for (const r of resolved.rows) taken.push({ kind: 'escalation_resolved', key: r.id });
           await this.pool.query(`UPDATE automation_runs SET status = 'succeeded', finished_at = now(), actions_taken = $2, actions = $3 WHERE id = $1`, [runId, taken.length, JSON.stringify(taken)]);
           await this.pool.query(
             `UPDATE automation_rules SET last_run_at = now(), consecutive_failures = 0,
@@ -200,7 +211,7 @@ export class AutomationEngine {
           return { rule: key, run_id: runId, status: 'failed', actions_taken: taken.length, error: message };
         }
       } finally {
-        await lockClient.query(`SELECT pg_advisory_unlock(hashtext('nwos-automation:' || $1))`, [key]);
+        await lockClient.query(`SELECT pg_advisory_unlock(hashtext(current_schema() || ':nwos-automation:' || $1))`, [key]);
       }
     } finally {
       lockClient.release();

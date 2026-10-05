@@ -37,6 +37,7 @@ import { AutomationView } from './views/AutomationView';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { LoginScreen } from './components/LoginScreen';
 import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
+import { NotificationCenter } from './views/notifications/NotificationCenter';
 import { NAVIGATE_EVENT, type NavigateDetail } from './services/navigation';
 import {
   authApi,
@@ -132,6 +133,7 @@ const NWAppContent: React.FC = () => {
         {activeTab === 'issues' && <IssuesView />}
         {activeTab === 'variations' && <VariationsView />}
         {activeTab === 'knowledge' && <KnowledgeBaseView />}
+        {activeTab === 'notifications' && <NotificationCenter />}
         {activeTab === 'audit-logs' && <AuditArchitectureView />}
       </main>
 

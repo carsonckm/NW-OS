@@ -381,6 +381,8 @@ module.exports = (H) => {
     const site = await fresh('site-supervisor');
     await tab(site, 'Issues & Escalations');
     await L.vis(site.getByText(new RegExp(`Rectification: BAR-${S.RUN}`))).click();
+    const evidence = site.getByTestId('issue-tasks').getByLabel(/^Evidence for /);
+    if (await evidence.count()) await evidence.first().fill('Re-levelled the bar top with packers; level reading photo IMG_301');
     await site.getByTestId('issue-tasks').getByRole('button', { name: 'Mark done' }).click();
     await L.settle(site);
     const pm = await fresh('project-manager');

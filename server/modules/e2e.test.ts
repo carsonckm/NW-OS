@@ -167,7 +167,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     await runAutomation(db.pool, '2027-01-08');
     const task = await one(`SELECT id, status, assigned_user_id FROM tasks WHERE issue_id = $1`, [failed.rectification_issue_id]);
     expect(task).toMatchObject({ status: 'Open', assigned_user_id: 'user-site' });
-    await ok(site().patch(`/api/tasks/${task.id}`).send({ status: 'Completed' }), 200);
+    await ok(site().patch(`/api/tasks/${task.id}`).send({ status: 'Completed', completion_evidence: 'Re-levelled with packers; photo of digital level reading attached' }), 200);
     await ok(pm().patch(`/api/issues/${failed.rectification_issue_id}`).send({ status: 'Resolved', resolution_notes: 'Re-levelled the counter' }), 200);
     await ok(site().post('/api/site-qc').send(qc('e2e-sqc2', 'Pass', '2027-01-10')), 201);
     await ok(site().patch('/api/installation-jobs/e2e-inst').send({ status: 'Completed' }), 200);
