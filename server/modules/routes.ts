@@ -148,14 +148,19 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/variations/:id/transition',
     wrap(async (req, res) => {
       const def = service.module('variations');
-      const { status } = req.body ?? {};
+      const { status, note, client_approval_reference } = req.body ?? {};
       if (typeof status !== 'string') throw new ValidationError('status is required');
       const result = await service.transact(req.access!, actorOf(req), async (h) => {
         const variation = await findRecord(h.db, def, req.params.id, true);
         if (!variation || !h.ctx.canSeeProject(variation.project_id)) throw new ForbiddenError('Variation not found or not accessible');
         checkTransition(h, String(variation.status), status);
-        await service.writeInTransaction(h, def, variation, { ...variation, status });
-        return findRecord(h.db, def, req.params.id);
+        await service.writeInTransaction(h, def, variation, {
+          ...variation,
+          status,
+          ...(typeof note === 'string' && note ? { transition_note: note } : {}),
+          ...(typeof client_approval_reference === 'string' ? { client_approval_reference } : {}),
+        });
+        return service.redact(h.ctx, def, await findRecord(h.db, def, req.params.id));
       });
       res.json(result);
     })

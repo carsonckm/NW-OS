@@ -115,6 +115,8 @@ export const MODULES: ModuleDef[] = [
     perms: { view: 'variations.view', create: 'variations.create', edit: ['variations.create', 'variations.approve', 'variations.client_approve'], delete: null },
     required: ['project_id', 'variation_number', 'status'],
     hooks: variationHooks,
+    // Internal cost and notes are not for clients (or anyone without internal costing).
+    hiddenFields: { permission: 'commercial.costing', fields: ['estimated_cost', 'internal_notes', 'cost_breakdown'] },
   },
   {
     key: 'clientChangeRequests',

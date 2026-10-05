@@ -679,6 +679,23 @@ export interface Variation {
   schedule_impact_days: number;
   created_at: string;
   updated_at?: string;
+  // Phase 4 workflow (server-kept fields are marked)
+  reason?: string;
+  scope_change?: string;
+  client_reference?: string;
+  client_change_request_id?: string;
+  supporting_documents?: string[];
+  /** Internal only; the server hides it (and estimated_cost) from clients. */
+  internal_notes?: string;
+  created_by_id?: string; // server
+  created_by_name?: string; // server
+  history?: { from?: string; to: string; by_id: string; by_name: string; role: string; at: string; note?: string; reference?: string }[]; // server
+  internal_approved_by_name?: string; // server
+  internal_approved_at?: string; // server
+  client_approved_by_name?: string; // server
+  client_approved_at?: string; // server
+  client_approval_reference?: string;
+  rejection_reason?: string;
 }
 
 export interface NotificationItem {

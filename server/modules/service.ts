@@ -54,7 +54,15 @@ export class DataService {
 
   private visible(ctx: AccessContext, def: ModuleDef, rows: Row[], orders: OrderInfo) {
     if (!hasAny(ctx, def.perms.view)) return [];
-    return rows.filter((r) => inModuleScope(ctx, def, r, orders));
+    return rows.filter((r) => inModuleScope(ctx, def, r, orders)).map((r) => this.redact(ctx, def, r));
+  }
+
+  /** Removes the module's hidden fields for users without the permission to see them. */
+  redact<T extends Row | undefined>(ctx: AccessContext, def: ModuleDef, record: T): T {
+    if (!record || !def.hiddenFields || ctx.can(def.hiddenFields.permission)) return record;
+    const out: Row = { ...record };
+    for (const f of def.hiddenFields.fields) delete out[f];
+    return out as T;
   }
 
   async list(ctx: AccessContext, def: ModuleDef, filter: Record<string, string | undefined>) {
@@ -67,7 +75,7 @@ export class DataService {
     requireAny(ctx, def.perms.view, `viewing ${def.key}`);
     const record = await findRecord(this.pool, def, id);
     if (!record || !inModuleScope(ctx, def, record, await loadOrderInfo(this.pool))) throw notFound(`${def.key} ${id}`);
-    return record;
+    return this.redact(ctx, def, record);
   }
 
   /** Everything this user may see: core chain plus every module collection. */
@@ -127,6 +135,14 @@ export class DataService {
       throw new ForbiddenError(`${def.key} ${recordId(def, existing)} not found or not accessible`);
     }
     if (h.mode !== 'import') requireAny(h.ctx, existing ? def.perms.edit : def.perms.create, `${existing ? 'editing' : 'creating'} ${def.key}`);
+    // A user who can't see hidden fields can't change them either: keep the stored values.
+    if (def.hiddenFields && h.mode !== 'import' && !h.ctx.can(def.hiddenFields.permission)) {
+      incoming = { ...incoming };
+      for (const f of def.hiddenFields.fields) {
+        if (existing && f in existing) incoming[f] = existing[f];
+        else delete incoming[f];
+      }
+    }
 
     const values = def.hooks?.beforeWrite ? await def.hooks.beforeWrite(h, existing, incoming) : incoming;
     if (h.mode !== 'import' && !inModuleScope(h.ctx, def, values, await this.ordersFor(h.db, values.production_order_id))) {
@@ -232,7 +248,7 @@ export class DataService {
     return this.inTransaction(ctx, actor, 'rest', async (h) => {
       if (await findRecord(h.db, def, recordId(def, record))) throw new ForbiddenError(`${def.key} ${recordId(def, record)} already exists`);
       await this.writeModule(h, def, undefined, record);
-      return findRecord(h.db, def, recordId(def, record));
+      return this.redact(ctx, def, await findRecord(h.db, def, recordId(def, record)));
     });
   }
 
@@ -242,7 +258,7 @@ export class DataService {
       if (!existing || !inModuleScope(ctx, def, existing, await this.ordersFor(h.db))) throw notFound(`${def.key} ${id}`);
       if (def.idField in patch && patch[def.idField] !== id) throw new ValidationError(`${def.idField} cannot be changed`);
       await this.writeModule(h, def, existing, { ...existing, ...patch, [def.idField]: id });
-      return findRecord(h.db, def, id);
+      return this.redact(ctx, def, await findRecord(h.db, def, id));
     });
   }
 

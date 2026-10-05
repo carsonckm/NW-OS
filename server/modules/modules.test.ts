@@ -469,12 +469,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
 
   // --------------------------------------------------------------- variations
   describe('variations and contract value', () => {
-    const variation = { id: 'vo-new', project_id: 'proj-2', variation_number: 'VO-NEW', title: 'Extra shelving', description: 'x', estimated_cost: 6000, client_amount: 10000, status: 'Identified', requested_by: 'PM', schedule_impact_days: 2, created_at: '2026-10-01' };
+    const variation = { id: 'vo-new', project_id: 'proj-1', variation_number: 'VO-NEW', title: 'Extra shelving', description: 'x', estimated_cost: 6000, client_amount: 10000, status: 'Identified', requested_by: 'PM', schedule_impact_days: 2, created_at: '2026-10-01' };
 
     it('a proposed variation never changes the contract value', async () => {
-      const before = (await owner().get('/api/projects/proj-2/contract-summary').expect(200)).body;
-      await owner().post('/api/variations').send(variation).expect(201);
-      const after = (await owner().get('/api/projects/proj-2/contract-summary').expect(200)).body;
+      const before = (await owner().get('/api/projects/proj-1/contract-summary').expect(200)).body;
+      await as['Project Manager'].post('/api/variations').send(variation).expect(201);
+      const after = (await owner().get('/api/projects/proj-1/contract-summary').expect(200)).body;
       expect(after.current_contract_value).toBe(before.current_contract_value);
       expect(after.pending_variations_total).toBe(before.pending_variations_total + 10000);
       expect(after.original_contract_value).toBe(before.original_contract_value);
@@ -491,17 +491,47 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       // Internal approval needs variations.approve (Owner), not the PM.
       expect((await as['Project Manager'].post('/api/variations/vo-new/transition').send({ status: 'Client Approval' })).status).toBe(403);
       await owner().post('/api/variations/vo-new/transition').send({ status: 'Client Approval' }).expect(200);
-      const before = (await owner().get('/api/projects/proj-2/contract-summary')).body;
-      await owner().post('/api/variations/vo-new/transition').send({ status: 'Approved' }).expect(200);
-      const after = (await owner().get('/api/projects/proj-2/contract-summary')).body;
+      const before = (await owner().get('/api/projects/proj-1/contract-summary')).body;
+      // Client approval is the client's (separate from the Owner's internal approval).
+      await as['Client'].post('/api/variations/vo-new/transition').send({ status: 'Approved' }).expect(200);
+      const after = (await owner().get('/api/projects/proj-1/contract-summary')).body;
       expect(after.approved_variations_total).toBe(before.approved_variations_total + 10000);
       expect(after.current_contract_value).toBe(after.original_contract_value + after.approved_variations_total);
-      const project = (await owner().get('/api/projects/proj-2')).body;
+      const project = (await owner().get('/api/projects/proj-1')).body;
       expect(project.contract_value).toBe(after.original_contract_value); // original stays separate
     });
 
     it('freezes amounts once approved', async () => {
       expect((await owner().patch('/api/variations/vo-new').send({ client_amount: 99999 })).status).toBe(403);
+    });
+
+    it('never lets the person who raised a variation approve it, and keeps the two approvals separate', async () => {
+      await owner().post('/api/variations').send({ ...variation, id: 'vo-own', variation_number: 'VO-OWN', status: 'Internal Approval' }).expect(201);
+      const self = await owner().post('/api/variations/vo-own/transition').send({ status: 'Client Approval' });
+      expect(self.status).toBe(403);
+      expect(self.body.message).toMatch(/you raised/);
+      await as['Project Manager'].post('/api/variations').send({ ...variation, id: 'vo-sep', variation_number: 'VO-SEP', status: 'Internal Approval' }).expect(201);
+      await owner().post('/api/variations/vo-sep/transition').send({ status: 'Client Approval', note: 'Within budget' }).expect(200);
+      // Staff recording the client's approval need its reference, and can't be the internal approver.
+      expect((await owner().post('/api/variations/vo-sep/transition').send({ status: 'Approved' })).status).toBe(400);
+      const same = await owner().post('/api/variations/vo-sep/transition').send({ status: 'Approved', client_approval_reference: 'Signed VO-SEP 2026-10-06' });
+      expect(same.status).toBe(403);
+      expect(same.body.message).toMatch(/other than the internal approver/);
+      const done = await as['Client'].post('/api/variations/vo-sep/transition').send({ status: 'Approved' }).expect(200);
+      expect(done.body).toMatchObject({ internal_approved_by_id: 'user-owner', client_approved_by_id: 'user-client', created_by_id: 'user-pm' });
+      expect(done.body.history.map((e: Row) => `${e.to}:${e.by_id}`)).toEqual(['Internal Approval:user-pm', 'Client Approval:user-owner', 'Approved:user-client']);
+      expect(done.body.history[1].note).toBe('Within budget');
+    });
+
+    it('hides the internal cost from the client', async () => {
+      const seen = (await as['Client'].get('/api/variations/vo-sep').expect(200)).body;
+      expect(seen.estimated_cost).toBeUndefined();
+      expect(seen.client_amount).toBe(10000);
+      expect((await as['Client'].get('/api/variations').expect(200)).body.every((v: Row) => v.estimated_cost === undefined)).toBe(true);
+      expect((await owner().get('/api/variations/vo-sep').expect(200)).body.estimated_cost).toBe(6000);
+      // Writing it back without the hidden field doesn't erase it.
+      await as['Client'].post('/api/data/sync').send({ upserts: { variations: [{ ...seen, description: 'client note' }] } });
+      expect((await db.pool.query(`SELECT estimated_cost::float AS c FROM variations WHERE id = 'vo-sep'`)).rows[0].c).toBe(6000);
     });
 
     it('lets the client accept a variation on their own project only', async () => {

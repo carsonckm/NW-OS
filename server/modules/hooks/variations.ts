@@ -45,16 +45,61 @@ export function checkTransition(h: HookContext, from: string, to: string) {
   if (!needed.some((p) => h.ctx.can(p))) throw new ForbiddenError(`Missing permission to move a variation to ${to}: ${needed.join(' or ')}`);
 }
 
+type HistoryEntry = { from?: string; to: string; by_id: string; by_name: string; role: string; at: string; note?: string; reference?: string };
+
+const SERVER_FIELDS = [
+  'created_by_id', 'created_by_name', 'history', 'approved_at',
+  'internal_approved_by_id', 'internal_approved_by_name', 'internal_approved_at',
+  'client_approved_by_id', 'client_approved_by_name', 'client_approved_at',
+];
+
+/**
+ * Who may take the two approval steps:
+ * - Internal approval (Internal Approval -> Client Approval): variations.approve, and never
+ *   the person who raised the variation.
+ * - Client approval (Client Approval -> Approved): the client (a Client user of the project),
+ *   or staff recording the client's signed approval (a reference is required) who did not
+ *   give the internal approval. The two approvals are always separate people.
+ */
+function checkApprovers(h: HookContext, existing: Row, to: string, incoming: Row) {
+  const me = h.ctx.user;
+  if (to === 'Client Approval' && existing.created_by_id === me.id) {
+    throw new ForbiddenError('You cannot internally approve a variation you raised');
+  }
+  if (to === 'Approved') {
+    if (me.role !== 'Client') {
+      if (!String(incoming.client_approval_reference ?? '').trim()) {
+        throw new ValidationError("Record the client's approval reference (signed VO / letter) when approving on the client's behalf");
+      }
+      if (existing.internal_approved_by_id === me.id) {
+        throw new ForbiddenError('Client approval must be recorded by someone other than the internal approver');
+      }
+    }
+  }
+}
+
 export const variationHooks: ModuleHooks = {
   async beforeWrite(h, existing, incoming) {
     if (h.mode === 'import') return incoming;
     const to = String(incoming.status);
+    const me = h.ctx.user;
+    const now = new Date().toISOString();
+    const entry = (from: string | undefined, note?: string, reference?: string): HistoryEntry => ({
+      ...(from ? { from } : {}), to, by_id: me.id, by_name: me.name, role: me.role, at: now,
+      ...(note ? { note } : {}), ...(reference ? { reference } : {}),
+    });
     if (!existing) {
       if (!['Identified', 'Costing', 'Internal Approval'].includes(to)) {
         throw new ForbiddenError('A new variation starts at Identified, Costing or Internal Approval; it cannot be created approved');
       }
-      return incoming;
+      const created: Row = { ...incoming, created_by_id: me.id, created_by_name: me.name, created_at: incoming.created_at || now };
+      for (const f of SERVER_FIELDS.slice(2)) delete created[f];
+      created.history = [entry(undefined, 'Raised')];
+      return created;
     }
+    // Server-kept fields never come from the browser.
+    const values: Row = { ...incoming };
+    for (const f of SERVER_FIELDS) values[f] = existing[f];
     const from = String(existing.status);
     if (APPROVED_STATES.has(from) || from === 'Rejected') {
       for (const f of MONEY) {
@@ -62,15 +107,22 @@ export const variationHooks: ModuleHooks = {
       }
     }
     checkTransition(h, from, to);
-    if (from === to) return incoming;
-    const values = { ...incoming, ...(to === 'Approved' ? { approved_at: new Date().toISOString() } : {}) };
+    if (from === to) return values;
+    checkApprovers(h, existing, to, incoming);
+    const note = typeof incoming.transition_note === 'string' ? incoming.transition_note : undefined;
+    const reference = typeof incoming.client_approval_reference === 'string' ? incoming.client_approval_reference : undefined;
+    delete values.transition_note;
+    values.history = [...((existing.history as HistoryEntry[]) ?? []), entry(from, note, to === 'Approved' ? reference : undefined)];
+    if (to === 'Client Approval') Object.assign(values, { internal_approved_by_id: me.id, internal_approved_by_name: me.name, internal_approved_at: now });
+    if (to === 'Approved') Object.assign(values, { approved_at: now, client_approved_by_id: me.id, client_approved_by_name: me.name, client_approved_at: now });
+    if (to === 'Rejected') values.rejection_reason = note ?? incoming.rejection_reason;
     await writeAudit(h.db, h.actor, {
       action: 'variation.transition',
       entityType: 'variation',
       entityId: existing.id as string,
       projectId: existing.project_id as string,
       before: { status: from },
-      after: { status: to, client_amount: incoming.client_amount },
+      after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}) },
     });
     return values;
   },
