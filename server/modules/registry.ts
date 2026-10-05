@@ -6,6 +6,7 @@ import { productionOrderHooks } from './hooks/production';
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
 import { quotationHooks } from './hooks/commercial';
+import { goodsReceivedHooks, invoiceHooks, purchaseOrderHooks } from './hooks/purchasing';
 import type { ModuleDef } from './types';
 
 /**
@@ -376,6 +377,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'purchasing.view', create: 'purchasing.create', edit: ['purchasing.manage_pos', 'purchasing.create'], delete: null },
     required: ['project_id', 'status'],
+    // Server-computed total; major purchases need approval to issue; received states only from goods received.
+    hooks: purchaseOrderHooks,
   },
   {
     key: 'goodsReceived',
@@ -386,6 +389,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'purchasing.view', create: ['purchasing.manage_pos', 'delivery.receive'], edit: 'purchasing.manage_pos', delete: null },
     required: ['project_id'],
+    // Per-line received / short / damaged / wrong; receiver from the session; never edited afterwards.
+    hooks: goodsReceivedHooks,
   },
   {
     key: 'materialRequests',
@@ -422,6 +427,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'finance.view', create: ['finance.edit', 'commercial.edit'], edit: ['finance.edit', 'finance.record_payments'], delete: null },
     required: ['project_id'],
+    // 3-way match; finance approval (not the recorder); approval posts actual cost once.
+    hooks: invoiceHooks,
   },
   {
     key: 'costLeakAlerts',

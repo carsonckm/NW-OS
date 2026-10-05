@@ -9,6 +9,7 @@ import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
 import { officialBaseline, useServerFinancials } from '../services/serverFinancials';
 import { EnquiriesPanel, QuotationsPanel, TendersPanel } from './commercial/SalesWorkflow';
+import { AddCostButton, BudgetEditor, InvoicesPanel } from './commercial/CostControl';
 import {
   CommercialQuotation,
   QuotationItem,
@@ -325,6 +326,11 @@ export const CommercialView: React.FC = () => {
 
       {/* RENDER SUBSECTION */}
       {activeSubTab === 'profitability' && (
+        <div className="flex justify-end">
+          <BudgetEditor projectId={selectedProjectId} />
+        </div>
+      )}
+      {activeSubTab === 'profitability' && (
         <ProfitabilitySection
           baseline={activeProjectBaseline}
           alerts={costLeakAlerts}
@@ -356,6 +362,11 @@ export const CommercialView: React.FC = () => {
       )}
 
       {activeSubTab === 'project-cost' && (
+        <div className="flex justify-end">
+          <AddCostButton projectId={selectedProjectId} />
+        </div>
+      )}
+      {activeSubTab === 'project-cost' && (
         <ProjectCostSection
           costs={projectCostLedger}
           projects={projects}
@@ -372,9 +383,7 @@ export const CommercialView: React.FC = () => {
         <ClaimsSection claims={financialClaims} projectId={selectedProjectId} />
       )}
 
-      {activeSubTab === 'invoices' && (
-        <InvoicesSection invoices={commercialInvoices} projectId={selectedProjectId} />
-      )}
+      {activeSubTab === 'invoices' && <InvoicesPanel projectId={selectedProjectId} />}
 
       {activeSubTab === 'payments' && (
         <PaymentsSection payments={payments} projectId={selectedProjectId} />
@@ -807,59 +816,6 @@ const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims,
             </div>
           </div>
         ))}
-      </div>
-    </div>
-  );
-};
-
-// =========================================================================
-// SUBSECTION 10: INVOICES
-// =========================================================================
-const InvoicesSection: React.FC<{ invoices: CommercialInvoice[]; projectId: string }> = ({ invoices, projectId }) => {
-  return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <h3 className="text-sm font-black text-slate-900">Commercial Invoices Registry</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-extrabold border-b border-slate-200">
-            <tr>
-              <th className="py-2.5 px-3">Invoice No.</th>
-              <th className="py-2.5 px-3">Type</th>
-              <th className="py-2.5 px-3">Party Name</th>
-              <th className="py-2.5 px-3">Due Date</th>
-              <th className="py-2.5 px-3 text-right">Total Amount</th>
-              <th className="py-2.5 px-3 text-right">Paid</th>
-              <th className="py-2.5 px-3">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {invoices.map((inv) => (
-              <tr key={inv.id} className="hover:bg-slate-50/80">
-                <td className="py-3 px-3 font-bold text-slate-900">{inv.invoice_number}</td>
-                <td className="py-3 px-3 text-slate-600">{inv.invoice_type}</td>
-                <td className="py-3 px-3 font-semibold text-slate-900">{inv.party_name}</td>
-                <td className="py-3 px-3 text-slate-500">{inv.due_date}</td>
-                <td className="py-3 px-3 text-right font-black text-slate-950">
-                  RM {inv.total_amount.toLocaleString()}
-                </td>
-                <td className="py-3 px-3 text-right font-bold text-emerald-700">
-                  RM {inv.paid_amount.toLocaleString()}
-                </td>
-                <td className="py-3 px-3">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                      inv.status === 'Paid'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {inv.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   );
