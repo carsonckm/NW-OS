@@ -196,6 +196,15 @@ export class DataService {
         const derived = await derivedProductionStatus(h.db, String(existing?.id ?? values.id));
         if (derived) values.production_status = derived;
       }
+      // A production user (no work_items.edit) may only link an item to an order made for that item.
+      if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
+        const itemId = String(existing?.id ?? values.id);
+        const orderId = String(values.production_order_id);
+        h.defer(async () => {
+          const order = (await h.db.query('SELECT work_item_id FROM production_orders WHERE id = $1', [orderId])).rows[0];
+          if (!order || order.work_item_id !== itemId) throw new ValidationError(`Production order ${orderId} is not an order for work item ${itemId}`);
+        });
+      }
       // The revision an item was created from is fixed at creation.
       if (existing) values.source_drawing_revision_id = existing.source_drawing_revision_id ?? undefined;
       else if (!values.source_drawing_revision_id) {

@@ -1,0 +1,19 @@
+# Browser acceptance runs
+
+Playwright scripts that drive the real UI against a PostgreSQL-backed dev server and check
+each step in the database. They are not part of `npm test` (they need a running server, a
+seeded database and a Chromium); the same 34 steps run in CI through the API in
+`server/modules/e2e.test.ts`.
+
+Prerequisites: `DATABASE_URL=… npm run db:migrate`, `npm run auth:seed-dev` (dev users,
+password `dev-password-123`), `DATABASE_URL=… CORE_DATA_SOURCE=database npm run dev`, and
+Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed globally).
+
+- `node scripts/acceptance/run.cjs` — the 34-step project from client enquiry to closure,
+  one role per step, through the UI. `node scripts/acceptance/run.cjs 20 26` reruns a range
+  (ids are kept in `out/state.json`). Each step's evidence is written to `out/log.jsonl`.
+- `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
+  reporting page errors and failed API calls.
+
+`PGDATABASE` selects the database the checks read (default `nwos_dev`). The last full run is
+recorded in `docs/phase4-acceptance-run.txt`.

@@ -76,6 +76,10 @@ export const productionOrderHooks: ModuleHooks = {
   // Keep the work item's production status in step with its order, in the same transaction.
   async afterWrite(h, _existing, stored) {
     if (h.mode === 'import' || typeof stored.work_item_id !== 'string') return;
+    if (!_existing) {
+      // A new order becomes the item's current order (the link is the server's, not the browser's).
+      await h.db.query('UPDATE work_items SET production_order_id = $2, updated_at = now() WHERE id = $1', [stored.work_item_id, stored.id]);
+    }
     const status = await derivedProductionStatus(h.db, stored.work_item_id);
     if (!status) return;
     await h.db.query(

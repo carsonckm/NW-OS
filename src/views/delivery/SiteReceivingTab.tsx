@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   PackageCheck,
   CheckCircle2,
@@ -52,6 +52,14 @@ export const SiteReceivingTab: React.FC<SiteReceivingTabProps> = ({
   const [notes, setNotes] = useState('All cartons inspected. Crate foam intact, zero external scratches.');
   const [receiverSignature, setReceiverSignature] = useState(`${currentUser.name} (Clerk of Works)`);
   const [receiptSuccessMsg, setReceiptSuccessMsg] = useState('');
+
+  // A different delivery starts a fresh intake (counts come from that delivery, not the previous one).
+  useEffect(() => {
+    setConditionStatus('All In Order');
+    setPackagesReceived(currentDelivery?.package_count || 1);
+    setDamagedQuantity(0);
+    setMissingQuantity(0);
+  }, [activeDeliveryId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleQuickConditionClick = (condition: DeliveryReceipt['condition_status']) => {
     setConditionStatus(condition);

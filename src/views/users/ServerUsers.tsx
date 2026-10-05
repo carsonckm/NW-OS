@@ -32,6 +32,8 @@ export interface ServerUser {
 
 const ROLES = Object.keys(ROLE_DEFINITIONS) as UserRole[];
 const PROJECT_SCOPED: UserRole[] = ['Project Manager', 'Site Supervisor', 'Production Staff', 'Contractor', 'Client'];
+// Sees every project unless limited to the ones assigned here (server: AccessContext).
+const OPTIONALLY_SCOPED: UserRole[] = ['Production Manager'];
 
 const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () => void }> = ({ user, onClose, onSaved }) => {
   const { projects, clients, contractors } = useNW();
@@ -143,8 +145,8 @@ const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () =
           </Field>
         )}
       </div>
-      {PROJECT_SCOPED.includes(f.role) && (
-        <Field label="Assigned projects" hint="This role only sees the projects assigned here.">
+      {(PROJECT_SCOPED.includes(f.role) || OPTIONALLY_SCOPED.includes(f.role)) && (
+        <Field label="Assigned projects" hint={OPTIONALLY_SCOPED.includes(f.role) ? 'Leave all unticked to see every project; ticking limits this user to those projects.' : 'This role only sees the projects assigned here.'}>
           <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
             {projects.map((p) => (
               <label key={p.id} className="flex items-center gap-2 text-xs">
@@ -233,7 +235,7 @@ export const ServerUserManagement: React.FC = () => {
                     <div className="text-[11px] text-slate-500">{u.email}{u.is_dev_seed ? ' · dev seed' : ''}</div>
                   </td>
                   <td className="pr-3">{u.role}</td>
-                  <td className="pr-3 text-[11px]">{PROJECT_SCOPED.includes(u.role) ? u.assigned_project_ids.map(projectName).join(', ') || 'none' : 'all (company-wide)'}</td>
+                  <td className="pr-3 text-[11px]">{PROJECT_SCOPED.includes(u.role) ? u.assigned_project_ids.map(projectName).join(', ') || 'none' : OPTIONALLY_SCOPED.includes(u.role) && u.assigned_project_ids.length ? u.assigned_project_ids.map(projectName).join(', ') : 'all (company-wide)'}</td>
                   <td className="pr-3 text-[11px]">{u.last_login ? new Date(u.last_login).toLocaleString() : 'never'}</td>
                   <td className="pr-3">
                     <Pill tone={u.is_active ? 'good' : 'neutral'}>{u.is_active ? 'Active' : 'Deactivated'}</Pill>

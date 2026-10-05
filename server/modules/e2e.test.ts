@@ -107,6 +107,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     const order = { ...D.productionOrders[0], id: 'e2e-po', order_number: 'PO-E2E', project_id: s.project, project_name: 'Horizon Sky Lounge', work_package_id: s.wp, work_item_id: s.item, work_item_code: 'BAR-01', contractor_id: 'con-1', status: 'Not Started', current_stage: 'Not Started', approved_client_drawing_id: 'e2e-dwg', approved_client_drawing_revision: 'E2E-101 Rev 1', approved_nw_production_drawing_id: 'e2e-nwd', approved_nw_production_drawing_revision: 'E2E-101-NW Rev 1', stage_history: [] };
     const res = await ok(prodMgr().post('/api/production-orders').send(order), 201);
     expect(res.body).toMatchObject({ client_drawing_revision_id: 'e2e-rev1', nw_drawing_revision_id: 'e2e-nwd', drawing_check: 'valid' });
+    // The item links to its order (set by the server); a production user can't point it at another item's order.
+    expect((await one(`SELECT production_order_id FROM work_items WHERE id = $1`, [s.item])).production_order_id).toBe('e2e-po');
+    await ok(prodMgr().patch(`/api/work-items/${s.item}`).send({ production_order_id: 'e2e-po' }), 200);
+    expect((await prodMgr().patch(`/api/work-items/${s.item}`).send({ production_order_id: 'po-102' })).status).toBe(400);
   });
 
   it('14-15. material request and a purchase order approved as a major purchase', async () => {
@@ -148,6 +152,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     const receipt = { id: 'e2e-rcpt', delivery_id: 'e2e-del', delivery_number: 'DEL-E2E', project_id: s.project, project_name: 'Horizon Sky Lounge', receiving_user_id: 'forged', receiving_user_name: 'Forged', receiving_role: 'Owner / CEO', received_at: '2027-01-05T10:00:00Z', condition_status: 'Good Condition', packages_expected: 1, packages_received: 1, damaged_quantity: 0, missing_quantity: 0, photos: ['unload.jpg'], receiver_signature: 'sig' };
     await ok(site().patch('/api/deliveries/e2e-del').send({ status: 'Received / Confirmed', site_receipt: receipt }), 200);
     expect(await one(`SELECT receiver_id FROM delivery_receipts WHERE id = 'e2e-rcpt'`)).toEqual({ receiver_id: 'user-site' });
+    expect(await one(`SELECT delivery_status, installation_status FROM work_items WHERE id = $1`, [s.item])).toEqual({ delivery_status: 'Delivered', installation_status: 'Not Started' });
   });
 
   it('22. installation', async () => {
