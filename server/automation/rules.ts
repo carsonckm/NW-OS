@@ -6,6 +6,8 @@
  * configuration (automation_rules.config), not from code.
  */
 import type { PlannedAction, RuleContext, RuleDef } from './types';
+import { refreshStoredRisk } from '../modules/risk';
+import { writeAudit } from '../audit';
 
 type Row = Record<string, any>;
 
@@ -455,5 +457,33 @@ const invoiceOverdue: RuleDef = {
   },
 };
 
-export const RULES: RuleDef[] = [drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue];
+
+const projectRisk: RuleDef = {
+  key: 'project_risk',
+  name: 'Project risk',
+  description: 'Recomputes every project\'s risk level from live signals (overdue tasks, blocked production, material shortages, late deliveries, failed QC, open issues, client waits, cost).',
+  watches: ['tasks', 'productionOrders', 'materialRequests', 'deliveryRecords', 'siteQCInspections', 'installationJobs', 'issues', 'variations', 'goodsReceived', 'commercialInvoices', 'projectCostLedger', 'purchaseOrders'],
+  interval_minutes: 30,
+  defaults: { notify_owner_on: 'Critical' },
+  actions: 'Stores the level and its reasons on the project (audited); tells the PM when a project becomes At Risk or Critical, and the Owner when it becomes Critical.',
+  human_in_loop: 'An indicator only: it never changes the project status, schedule or contract.',
+  async evaluate(rc) {
+    const out: PlannedAction[] = [];
+    const changed = await refreshStoredRisk(rc.pool, rc.now);
+    for (const c of changed) {
+      await writeAudit(rc.pool, { id: null, name: 'NW OS Automation', role: 'system' }, { action: 'project.risk_change', entityType: 'projects', entityId: c.project_id, projectId: c.project_id, before: { risk_status: c.from }, after: { risk_status: c.to, reasons: c.reasons } });
+      if (c.to !== 'At Risk' && c.to !== 'Critical') continue;
+      const users = [...rc.people.pm(c.project_id), ...(c.to === 'Critical' && rc.config.notify_owner_on !== 'never' ? rc.people.owners() : [])];
+      out.push({
+        kind: 'notification',
+        key: `project_risk:${c.project_id}:${c.from ?? 'none'}>${c.to}:${rc.today}`,
+        users,
+        note: { title: `${rc.people.projectName(c.project_id)} is now ${c.to}`, message: c.reasons.slice(0, 3).join('; '), type: 'warning', priority: c.to === 'Critical' ? 'urgent' : 'high', project_id: c.project_id, link_tab: 'projects', entity_type: 'project', entity_id: c.project_id },
+      });
+    }
+    return out;
+  },
+};
+
+export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue];
 export const RULE_BY_KEY = new Map(RULES.map((r) => [r.key, r]));

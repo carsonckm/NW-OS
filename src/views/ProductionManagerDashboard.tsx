@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { DailyBriefing } from '../components/DailyBriefing';
 import { useNW } from '../context/NWContext';
 import {
   Layers,
@@ -47,6 +48,7 @@ export const ProductionManagerDashboard: React.FC<ProductionManagerDashboardProp
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <DailyBriefing />
       {/* Welcome Banner */}
       <div className="bg-gradient-to-r from-rose-950 to-slate-900 rounded-2xl p-6 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

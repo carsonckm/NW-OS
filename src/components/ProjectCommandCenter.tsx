@@ -692,7 +692,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
               {/* Risk Status Dropdown */}
               <div className="relative">
                 <button
-                  disabled={!canEditProject}
+                  disabled={!canEditProject || coreDataSync.mode === 'database'}
+                  title={coreDataSync.mode === 'database' ? `Computed by the risk engine${project.risk_reason ? `: ${project.risk_reason}` : ''}` : undefined}
                   onClick={() => setIsEditingRisk(!isEditingRisk)}
                   className={`px-2.5 py-0.5 rounded-md border text-[11px] font-bold uppercase tracking-wider flex items-center space-x-1.5 shadow-2xs ${getRiskColor(
                     project.risk_status || (project.is_at_risk ? 'At Risk' : 'On Track')
@@ -700,7 +701,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                 >
                   <AlertTriangle className="w-3 h-3" />
                   <span>{project.risk_status || (project.is_at_risk ? 'At Risk' : 'On Track')}</span>
-                  {canEditProject && <ChevronDown className="w-3 h-3" />}
+                  {canEditProject && coreDataSync.mode !== 'database' && <ChevronDown className="w-3 h-3" />}
                 </button>
 
                 {isEditingRisk && (

@@ -69,7 +69,8 @@ export async function profitability(pool: Pool, ctx: AccessContext, projectId: s
   return computeProfitability(pool, projectId);
 }
 
-async function computeProfitability(pool: Db, projectId: string) {
+/** Profitability without an access check (callers check access themselves). */
+export async function computeProfitability(pool: Db, projectId: string) {
   const contract = await computeContract(pool, projectId);
   const [baseline, quotation, pos, ledger] = await Promise.all([
     pool.query('SELECT original_budget_direct_cost FROM commercial_baselines WHERE project_id = $1', [projectId]),

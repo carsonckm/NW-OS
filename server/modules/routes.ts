@@ -14,6 +14,8 @@ import { writeAudit } from '../audit';
 import { MODULES } from './registry';
 import { contractSummary, profitability } from './reports';
 import { exceptionsFor, projectOverview } from './exceptions';
+import { portfolioRisk, projectRiskFor } from './risk';
+import { dailyBriefing } from './briefing';
 import { findRecord } from './store';
 import { DataService } from './service';
 
@@ -54,7 +56,10 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/projects/:id/contract-summary',
     '/projects/:id/profitability',
     '/projects/:id/overview',
+    '/projects/:id/risk',
     '/exceptions',
+    '/risk',
+    '/briefing',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
@@ -293,6 +298,13 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
 
   router.get('/projects/:id/contract-summary', wrap(async (req, res) => res.json(await contractSummary(pool, req.access!, req.params.id))));
   router.get('/exceptions', wrap(async (req, res) => res.json(await exceptionsFor(pool, req.access!))));
+  // Risk is NW-internal: clients and contractors don't get it.
+  const staffOnly = (req: Request) => {
+    if (['Client', 'Contractor'].includes(req.auth!.user.role)) throw new ForbiddenError('Project risk is for NW staff');
+  };
+  router.get('/risk', wrap(async (req, res) => { staffOnly(req); res.json(await portfolioRisk(pool, req.access!)); }));
+  router.get('/projects/:id/risk', wrap(async (req, res) => { staffOnly(req); res.json(await projectRiskFor(pool, req.access!, req.params.id)); }));
+  router.get('/briefing', wrap(async (req, res) => res.json(await dailyBriefing(pool, req.access!))));
   router.get('/projects/:id/overview', wrap(async (req, res) => res.json(await projectOverview(pool, req.access!, req.params.id))));
   router.get('/projects/:id/profitability', wrap(async (req, res) => res.json(await profitability(pool, req.access!, req.params.id))));
 

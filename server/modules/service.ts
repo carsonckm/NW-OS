@@ -201,6 +201,12 @@ export class DataService {
       }
       const values = h.ctx.authorizeWrite(collection, existing, incoming);
       if (values && collection === 'projects' && h.mode !== 'import') this.checkProjectCompletion(h, existing, values);
+      // Risk is computed by the server (risk engine), never set from the browser.
+      if (values && collection === 'projects' && h.mode !== 'import') {
+        values.risk_status = existing?.risk_status ?? null;
+        values.is_at_risk = existing?.is_at_risk ?? null;
+        values.risk_reason = existing?.risk_reason ?? null;
+      }
       if (!values || collection !== 'workItems') return values;
       // Production status comes from the production order, never from the browser.
       if (h.mode !== 'import' && 'production_status' in values && (existing || values.id)) {

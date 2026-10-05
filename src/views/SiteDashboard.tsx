@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { DailyBriefing } from '../components/DailyBriefing';
 import { useNW } from '../context/NWContext';
 import { WorkItem } from '../types';
 import {
@@ -42,6 +43,7 @@ export const SiteDashboard: React.FC = () => {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto px-4 sm:px-6 py-6 text-slate-800">
+      <DailyBriefing />
       {/* Site Header */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
