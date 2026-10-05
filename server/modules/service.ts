@@ -6,8 +6,8 @@ import { COLLECTION_ORDER, type CoreCollection } from '../core/schema';
 import { CoreService } from '../core/service';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import { findClientRevision } from './hooks/drawings';
-import { derivedProductionStatus } from './hooks/production';
 import { hasOpenFailedSiteQc } from './hooks/site';
+import { deriveWorkItem } from './workItemStatus';
 import { MODULES, MODULE_BY_KEY } from './registry';
 import { inModuleScope, loadOrderInfo, requireAny, hasAny, type OrderInfo } from './scope';
 import { deleteRecord, findRecord, listRecords, recordId, validateRecord, writeRecord } from './store';
@@ -208,11 +208,6 @@ export class DataService {
         values.risk_reason = existing?.risk_reason ?? null;
       }
       if (!values || collection !== 'workItems') return values;
-      // Production status comes from the production order, never from the browser.
-      if (h.mode !== 'import' && 'production_status' in values && (existing || values.id)) {
-        const derived = await derivedProductionStatus(h.db, String(existing?.id ?? values.id));
-        if (derived) values.production_status = derived;
-      }
       // A production user (no work_items.edit) may only link an item to an order made for that item.
       if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
         const itemId = String(existing?.id ?? values.id);
@@ -238,6 +233,9 @@ export class DataService {
           }
         });
       }
+      // Production, delivery, installation and the overall status come from their records
+      // (orders, deliveries, installation jobs, site QC), never from the browser.
+      if (h.mode !== 'import' && existing) Object.assign(values, await deriveWorkItem(h.db, String(existing.id), values));
       return values;
     };
   }
