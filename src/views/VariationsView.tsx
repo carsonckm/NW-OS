@@ -1,180 +1,383 @@
 /**
- * NW OS Variations & Scope Register (VO Management)
- * Tracks internal costs, client claims, schedule adjustments, and dual-party approval signatures.
+ * Variations: Identified -> Costing -> Internal Approval -> Client Approval -> Approved ->
+ * Implemented -> Closed (or Rejected before approval).
+ *
+ * Every step goes through POST /api/variations/:id/transition; the server decides who may
+ * take it (no self-approval; client approval separate from internal approval), keeps the
+ * history, freezes approved amounts and computes the contract value. Internal cost and notes
+ * are never sent to clients.
  */
-
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { GitPullRequest, Plus } from 'lucide-react';
 import { useNW } from '../context/NWContext';
-import {
-  FileCheck,
-  DollarSign,
-  Calendar,
-  CheckCircle2,
-  Clock,
-  Plus,
-  ShieldCheck,
-  Building2,
-  FileText,
-} from 'lucide-react';
+import type { Variation } from '../types';
+import { hasPermission } from '../utils/permissions';
+import { api } from '../services/coreApi';
+import { actionErrorOf, useRecords } from '../services/records';
+import { FormError } from '../components/ui/FormError';
+import { Button, Field, Input, Modal, newId, Pill, rm, Section, Select, TextArea } from '../components/ui/forms';
+
+const FLOW = ['Identified', 'Costing', 'Internal Approval', 'Client Approval', 'Approved', 'Implemented', 'Closed'];
+const REASONS = ['Client request', 'Site condition', 'Design change', 'Drawing revision', 'Authority requirement', 'Other'];
+const tone = (s: string) => (['Approved', 'Implemented', 'Closed'].includes(s) ? 'good' : s === 'Rejected' ? 'bad' : s === 'Client Approval' || s === 'Internal Approval' ? 'warn' : 'neutral');
+
+interface ContractSummary {
+  original_contract_value: number;
+  approved_variations_total: number;
+  current_contract_value: number;
+  pending_variations_total: number;
+  approved_variations_count: number;
+  pending_variations_count: number;
+}
 
 export const VariationsView: React.FC = () => {
-  const { variations, currentUser, approveVariation } = useNW();
+  const { variations, projects, selectedProjectId, setSelectedProjectId, currentUser, coreDataSync } = useNW();
+  const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [summary, setSummary] = useState<ContractSummary | null>(null);
+  const can = (p: Parameters<typeof hasPermission>[1]) => hasPermission(currentUser, p);
+  const rows = useMemo(
+    () => variations.filter((v) => !selectedProjectId || v.project_id === selectedProjectId).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
+    [variations, selectedProjectId]
+  );
+  const current = rows.find((v) => v.id === selected) ?? rows[0];
 
-  const totalInternalCost = variations.reduce((sum, v) => sum + v.estimated_cost, 0);
-  const totalClientClaim = variations.reduce((sum, v) => sum + v.client_amount, 0);
+  // The official contract value is the server's.
+  useEffect(() => {
+    if (coreDataSync.mode !== 'database' || !selectedProjectId || !can('commercial.view')) return setSummary(null);
+    let cancelled = false;
+    api.get<ContractSummary>(`/projects/${encodeURIComponent(selectedProjectId)}/contract-summary`).then(
+      (s) => !cancelled && setSummary(s),
+      () => !cancelled && setSummary(null)
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId, coreDataSync.mode, coreDataSync.lastSyncedAt, variations]);
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-slate-200">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="mx-auto max-w-7xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="flex items-center space-x-2">
-            <span className="px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-widest">
-              Commercial Governance
-            </span>
-            <span className="text-xs text-slate-400">Strict Contract Control</span>
-          </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-100 mt-1">
-            Variation Orders (VO Register)
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Human approval required for any financial commitment, drawing adjustment, or scope extension.
-          </p>
+          <h2 className="flex items-center gap-2 text-lg font-black text-slate-900">
+            <GitPullRequest className="h-5 w-5 text-amber-600" /> Variations
+          </h2>
+          <p className="text-xs text-slate-500">Raise, cost, approve internally, get the client's approval, implement and close</p>
         </div>
-
-        {/* Financial Badges */}
-        <div className="flex items-center space-x-3">
-          <div className="px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 text-right">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-              Internal Scope Cost
-            </span>
-            <span className="text-sm font-bold text-amber-400 font-mono">
-              RM {totalInternalCost.toLocaleString()}
-            </span>
-          </div>
-
-          <div className="px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 text-right">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-              Client Billable Claim
-            </span>
-            <span className="text-sm font-bold text-emerald-400 font-mono">
-              RM {totalClientClaim.toLocaleString()}
-            </span>
-          </div>
+        <div className="flex items-center gap-2">
+          <Select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)} aria-label="Variations project" className="w-72">
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.project_number} · {p.project_name}
+              </option>
+            ))}
+          </Select>
+          {can('variations.create') && (
+            <Button tone="primary" onClick={() => setCreating(true)}>
+              <Plus className="h-3.5 w-3.5" /> New variation
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Variations List */}
-      <div className="grid grid-cols-1 gap-4">
-        {variations.map((vo) => (
-          <div
-            key={vo.id}
-            className="p-5 sm:p-6 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors shadow-lg space-y-4"
-          >
-            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-              <div className="space-y-1.5 flex-1">
-                <div className="flex items-center space-x-2.5">
-                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                    {vo.variation_number}
-                  </span>
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${
-                      vo.status === 'Approved'
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                        : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                    }`}
-                  >
-                    {vo.status}
-                  </span>
-                </div>
-
-                <h3 className="text-base font-bold text-slate-100">{vo.title}</h3>
-                <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
-                  {vo.description}
-                </p>
-
-                <div className="pt-2 flex flex-wrap gap-4 text-xs text-slate-400">
-                  <span>Requested By: <strong className="text-slate-200">{vo.requested_by}</strong></span>
-                  <span>Date: <strong className="text-slate-200">{vo.created_at?.split('T')[0]}</strong></span>
-                  <span>Schedule Impact: <strong className="text-amber-400 font-mono">+{vo.schedule_impact_days} Days</strong></span>
-                </div>
-              </div>
-
-              {/* Financial Box */}
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 shrink-0 w-full md:w-56 space-y-2">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-400">Internal Cost:</span>
-                  <span className="text-slate-200 font-mono font-semibold">RM {vo.estimated_cost}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-400">Client Amount:</span>
-                  <span className="text-emerald-400 font-mono font-bold">RM {vo.client_amount}</span>
-                </div>
-                <div className="pt-2 border-t border-slate-850 flex justify-between text-[11px]">
-                  <span className="text-slate-500">Gross Margin:</span>
-                  <span className="text-amber-300 font-mono">
-                    RM {(vo.client_amount - vo.estimated_cost).toLocaleString()}
-                  </span>
-                </div>
-              </div>
+      {summary && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="contract-summary">
+          {[
+            ['Original contract', rm(summary.original_contract_value), 'Never changes'],
+            ['Approved variations', rm(summary.approved_variations_total), `${summary.approved_variations_count} approved`],
+            ['Current contract value', rm(summary.current_contract_value), 'Original + approved'],
+            ['Pending variations', rm(summary.pending_variations_total), `${summary.pending_variations_count} not yet approved`],
+          ].map(([label, value, note]) => (
+            <div key={label} className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="text-[10px] font-bold uppercase text-slate-400">{label}</div>
+              <div className="mt-1 text-sm font-black text-slate-900">{value}</div>
+              <div className="text-[11px] text-slate-500">{note}</div>
             </div>
+          ))}
+        </div>
+      )}
 
-            {/* Approval Status Matrix */}
-            <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-4 text-xs">
-                {/* Owner approval */}
-                <div className="flex items-center space-x-2">
-                  <div
-                    className={`w-3.5 h-3.5 rounded-full flex items-center justify-center ${
-                      vo.approved_by_owner ? 'bg-emerald-500 text-slate-950' : 'bg-slate-700 text-slate-400'
-                    }`}
-                  >
-                    {vo.approved_by_owner && <CheckCircle2 className="w-3 h-3" />}
-                  </div>
-                  <span className={vo.approved_by_owner ? 'text-slate-200' : 'text-slate-500'}>
-                    Owner Approval (Dato’ Nicholas Wong)
-                  </span>
-                </div>
-
-                {/* Client approval */}
-                <div className="flex items-center space-x-2">
-                  <div
-                    className={`w-3.5 h-3.5 rounded-full flex items-center justify-center ${
-                      vo.approved_by_client ? 'bg-emerald-500 text-slate-950' : 'bg-slate-700 text-slate-400'
-                    }`}
-                  >
-                    {vo.approved_by_client && <CheckCircle2 className="w-3 h-3" />}
-                  </div>
-                  <span className={vo.approved_by_client ? 'text-slate-200' : 'text-slate-500'}>
-                    Client Signature (Datin Serena Tan)
-                  </span>
-                </div>
-              </div>
-
-              {/* Action Buttons based on logged in role */}
-              <div className="flex items-center space-x-2">
-                {!vo.approved_by_owner && currentUser.role === 'Owner / CEO' && (
-                  <button
-                    onClick={() => approveVariation(vo.id, false)}
-                    className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg shadow-sm"
-                  >
-                    Owner Sign-Off
-                  </button>
-                )}
-
-                {vo.approved_by_owner && !vo.approved_by_client && currentUser.role === 'Client' && (
-                  <button
-                    onClick={() => approveVariation(vo.id, true)}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-sm"
-                  >
-                    Client Formal Approval
-                  </button>
-                )}
-              </div>
-            </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Section title={`Variations (${rows.length})`}>
+          <div className="space-y-1.5">
+            {rows.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                onClick={() => setSelected(v.id)}
+                data-testid={`variation-${v.variation_number}`}
+                className={`flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-xs ${current?.id === v.id ? 'bg-amber-50 ring-1 ring-amber-300' : 'hover:bg-slate-50'}`}
+              >
+                <span>
+                  <span className="font-mono font-bold">{v.variation_number}</span>
+                  <span className="block text-[11px] text-slate-600">{v.title}</span>
+                </span>
+                <span className="text-right">
+                  <Pill tone={tone(v.status)}>{v.status}</Pill>
+                  <span className="block text-[11px] font-bold text-slate-700">{rm(v.client_amount)}</span>
+                </span>
+              </button>
+            ))}
+            {!rows.length && <p className="text-xs text-slate-400">No variations on this project.</p>}
           </div>
-        ))}
+        </Section>
+        <div className="lg:col-span-2">{current && <VariationDetail v={current} />}</div>
       </div>
+      {creating && <VariationForm projectId={selectedProjectId} onClose={() => setCreating(false)} onSaved={setSelected} />}
     </div>
+  );
+};
+
+const VariationDetail: React.FC<{ v: Variation }> = ({ v }) => {
+  const { currentUser } = useNW();
+  const records = useRecords();
+  const can = (p: Parameters<typeof hasPermission>[1]) => hasPermission(currentUser, p);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [reference, setReference] = useState('');
+  const [editing, setEditing] = useState(false);
+  const isClient = currentUser.role === 'Client';
+  const costing = can('commercial.costing');
+
+  const move = async (status: string) => {
+    setError(null);
+    setBusy(status);
+    try {
+      await records.action(`/variations/${v.id}/transition`, { status, note: note || undefined, client_approval_reference: reference || undefined }, { apply: 'variations' });
+      setNote('');
+      setReference('');
+    } catch (err) {
+      setError(actionErrorOf(err).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const stage = v.status;
+  const preApproval = ['Identified', 'Costing', 'Internal Approval', 'Client Approval'].includes(stage);
+  const actions: { status: string; label: string; tone?: 'primary' | 'success' | 'danger'; show: boolean }[] = [
+    { status: 'Costing', label: 'Start costing', show: stage === 'Identified' && can('variations.create') },
+    { status: 'Internal Approval', label: 'Send for internal approval', tone: 'primary', show: ['Identified', 'Costing'].includes(stage) && can('variations.create') },
+    { status: 'Client Approval', label: 'Approve internally → send to client', tone: 'success', show: stage === 'Internal Approval' && can('variations.approve') },
+    { status: 'Approved', label: isClient ? 'Accept variation' : "Record client's approval", tone: 'success', show: stage === 'Client Approval' && can('variations.client_approve') },
+    { status: 'Implemented', label: 'Mark implemented', tone: 'primary', show: stage === 'Approved' && (can('variations.approve') || can('variations.create')) },
+    { status: 'Closed', label: 'Close', show: stage === 'Implemented' && can('variations.approve') },
+    { status: 'Rejected', label: isClient ? 'Decline' : 'Reject', tone: 'danger', show: preApproval && (can('variations.approve') || (stage === 'Client Approval' && can('variations.client_approve'))) },
+  ];
+
+  return (
+    <Section
+      title={`${v.variation_number} · ${v.title}`}
+      subtitle={[v.reason, v.client_reference && `Client ref ${v.client_reference}`, v.created_by_name && `raised by ${v.created_by_name}`].filter(Boolean).join(' · ') || undefined}
+      actions={<Pill tone={tone(stage)}>{stage}</Pill>}
+    >
+      <div className="flex flex-wrap gap-1 text-[10px]">
+        {FLOW.map((s, i) => (
+          <span key={s} className={`rounded-full px-2 py-0.5 font-bold ${s === stage ? 'bg-amber-500 text-slate-950' : FLOW.indexOf(stage) > i ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}`}>
+            {s}
+          </span>
+        ))}
+        {stage === 'Rejected' && <span className="rounded-full bg-rose-100 px-2 py-0.5 font-bold text-rose-800">Rejected</span>}
+      </div>
+      <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-3">
+        <div className="rounded-xl bg-slate-50 p-3">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Selling price (client)</div>
+          <div className="text-sm font-black">{rm(v.client_amount)}</div>
+        </div>
+        {costing && (
+          <div className="rounded-xl bg-rose-50 p-3">
+            <div className="text-[10px] font-bold uppercase text-rose-400">Internal cost</div>
+            <div className="text-sm font-black text-rose-800">{rm(v.estimated_cost)}</div>
+          </div>
+        )}
+        <div className="rounded-xl bg-slate-50 p-3">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Schedule impact</div>
+          <div className="text-sm font-black">{v.schedule_impact_days} days</div>
+        </div>
+      </div>
+      <div className="space-y-2 text-xs">
+        <p className="text-slate-700">{v.description}</p>
+        {v.scope_change && (
+          <p>
+            <span className="font-bold">Scope change: </span>
+            {v.scope_change}
+          </p>
+        )}
+        {!!v.supporting_documents?.length && (
+          <p>
+            <span className="font-bold">Documents: </span>
+            {v.supporting_documents.join(', ')}
+          </p>
+        )}
+        {costing && v.internal_notes && <p className="rounded-lg bg-rose-50 p-2 text-rose-800">Internal: {v.internal_notes}</p>}
+        {v.rejection_reason && <p className="text-rose-700">Rejected: {v.rejection_reason}</p>}
+      </div>
+
+      {actions.some((a) => a.show) && (
+        <div className="space-y-2 rounded-xl border border-slate-200 p-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Field label="Note for this step (optional)">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} aria-label="Variation step note" />
+            </Field>
+            {stage === 'Client Approval' && !isClient && (
+              <Field label="Client approval reference" hint="Signed VO, letter or email reference — required when recording on the client's behalf">
+                <Input value={reference} onChange={(e) => setReference(e.target.value)} aria-label="Client approval reference" />
+              </Field>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {actions
+              .filter((a) => a.show)
+              .map((a) => (
+                <Button key={a.status} tone={a.tone ?? 'secondary'} busy={busy === a.status} onClick={() => move(a.status)}>
+                  {a.label}
+                </Button>
+              ))}
+            {preApproval && stage !== 'Client Approval' && can('variations.create') && <Button onClick={() => setEditing(true)}>Edit</Button>}
+          </div>
+          <FormError error={error} onDismiss={() => setError(null)} />
+        </div>
+      )}
+
+      <div>
+        <div className="mb-1 text-[10px] font-extrabold uppercase text-slate-400">History</div>
+        <ol className="space-y-1 text-xs" data-testid="variation-history">
+          {(v.history ?? []).map((h, i) => (
+            <li key={i} className="flex flex-wrap gap-2">
+              <span className="text-slate-400">{h.at.slice(0, 16).replace('T', ' ')}</span>
+              <span className="font-bold">{h.from ? `${h.from} → ${h.to}` : h.to}</span>
+              <span>
+                by {h.by_name} ({h.role})
+              </span>
+              {h.note && <span className="text-slate-600">“{h.note}”</span>}
+              {h.reference && <span className="text-slate-600">ref {h.reference}</span>}
+            </li>
+          ))}
+          {!v.history?.length && <li className="text-slate-400">Recorded before history was kept.</li>}
+        </ol>
+      </div>
+      {editing && <VariationForm projectId={v.project_id} variation={v} onClose={() => setEditing(false)} />}
+    </Section>
+  );
+};
+
+const VariationForm: React.FC<{ projectId: string; variation?: Variation; onClose: () => void; onSaved?: (id: string) => void }> = ({ projectId, variation, onClose, onSaved }) => {
+  const { variations, projects, clientChangeRequests, currentUser } = useNW();
+  const records = useRecords();
+  const costing = hasPermission(currentUser, 'commercial.costing');
+  const project = projects.find((p) => p.id === (variation?.project_id ?? projectId));
+  const count = variations.filter((x) => x.project_id === project?.id).length;
+  const [f, setF] = useState<Partial<Variation>>(
+    variation ?? {
+      project_id: project?.id,
+      variation_number: `VO-${String(count + 1).padStart(3, '0')}`,
+      title: '',
+      description: '',
+      reason: 'Client request',
+      estimated_cost: 0,
+      client_amount: 0,
+      schedule_impact_days: 0,
+      status: 'Identified',
+      requested_by: currentUser.name,
+      supporting_documents: [],
+    }
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k: keyof Variation) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
+  const save = async () => {
+    setError(null);
+    if (!f.title?.trim() || !f.description?.trim()) return setError('Title and description are required.');
+    const record = { ...f, estimated_cost: Number(f.estimated_cost) || 0, client_amount: Number(f.client_amount) || 0, schedule_impact_days: Number(f.schedule_impact_days) || 0 };
+    setBusy(true);
+    try {
+      if (variation) await records.update('variations', variation.id, record, variation);
+      else {
+        const created = await records.create('variations', { ...record, id: newId('vo'), created_at: new Date().toISOString() });
+        onSaved?.(String(created.id));
+      }
+      onClose();
+    } catch (err) {
+      setError(actionErrorOf(err).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={variation ? `Edit ${variation.variation_number}` : `New variation · ${project?.project_name ?? ''}`}
+      onClose={onClose}
+      footer={
+        <>
+          <FormError error={error} />
+          <Button onClick={onClose}>Cancel</Button>
+          <Button tone="primary" busy={busy} onClick={save}>
+            Save variation
+          </Button>
+        </>
+      }
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="VO number">
+          <Input value={f.variation_number ?? ''} onChange={set('variation_number')} />
+        </Field>
+        <Field label="Reason">
+          <Select value={f.reason ?? ''} onChange={set('reason')}>
+            {REASONS.map((r) => (
+              <option key={r}>{r}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Title" className="sm:col-span-2">
+          <Input value={f.title ?? ''} onChange={set('title')} aria-label="Variation title" />
+        </Field>
+        <Field label="Client request / reference">
+          <Input value={f.client_reference ?? ''} onChange={set('client_reference')} />
+        </Field>
+        <Field label="Linked client change request">
+          <Select value={f.client_change_request_id ?? ''} onChange={set('client_change_request_id')}>
+            <option value="">—</option>
+            {clientChangeRequests
+              .filter((c) => c.project_id === f.project_id)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.request_code}
+                </option>
+              ))}
+          </Select>
+        </Field>
+        {costing && (
+          <Field label="Internal cost (RM)" hint="Never shown to the client">
+            <Input type="number" value={f.estimated_cost ?? 0} onChange={set('estimated_cost')} aria-label="Variation internal cost" />
+          </Field>
+        )}
+        <Field label="Selling price to client (RM)">
+          <Input type="number" value={f.client_amount ?? 0} onChange={set('client_amount')} aria-label="Variation selling price" />
+        </Field>
+        <Field label="Schedule impact (days)">
+          <Input type="number" value={f.schedule_impact_days ?? 0} onChange={set('schedule_impact_days')} />
+        </Field>
+      </div>
+      <Field label="Description">
+        <TextArea value={f.description ?? ''} onChange={set('description')} aria-label="Variation description" />
+      </Field>
+      <Field label="Scope change">
+        <TextArea value={f.scope_change ?? ''} onChange={set('scope_change')} rows={2} />
+      </Field>
+      <Field label="Supporting documents" hint="One file name or link per line">
+        <TextArea
+          value={(f.supporting_documents ?? []).join('\n')}
+          onChange={(e) => setF((p) => ({ ...p, supporting_documents: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) }))}
+          rows={2}
+        />
+      </Field>
+      {costing && (
+        <Field label="Internal notes" hint="Never shown to the client">
+          <TextArea value={f.internal_notes ?? ''} onChange={set('internal_notes')} rows={2} />
+        </Field>
+      )}
+    </Modal>
   );
 };

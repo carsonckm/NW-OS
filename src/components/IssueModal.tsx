@@ -6,6 +6,9 @@
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { Issue, IssueCategory, EscalationLevel } from '../types';
+import { useRecords } from '../services/records';
+import { FormError } from './ui/FormError';
+import { IssueTasksPanel, openTasksOf } from './IssueTasks';
 import {
   AlertTriangle,
   Sparkles,
@@ -39,7 +42,10 @@ export const IssueModal: React.FC<IssueModalProps> = ({
     createIssue,
     resolveIssue,
     escalateIssue,
+    tasks,
   } = useNW();
+  const records = useRecords();
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const [rawText, setRawText] = useState(existingIssue?.description || '');
   const [title, setTitle] = useState(existingIssue?.title || '');
@@ -122,11 +128,27 @@ export const IssueModal: React.FC<IssueModalProps> = ({
     onClose();
   };
 
-  const handleResolve = () => {
+  const handleResolve = async () => {
     if (!existingIssue || !resolutionNotes.trim()) return;
-    resolveIssue(existingIssue.id, resolutionNotes.trim());
-    onClose();
+    if (!records.live) {
+      resolveIssue(existingIssue.id, resolutionNotes.trim());
+      onClose();
+      return;
+    }
+    // The server decides: it needs a resolution note and refuses while linked tasks are open.
+    setIsResolving(true);
+    setResolveError(null);
+    try {
+      await records.update<Issue>('issues', existingIssue.id, { status: 'Resolved', resolution_notes: resolutionNotes.trim() }, existingIssue);
+      onClose();
+    } catch (err) {
+      setResolveError((err as Error).message);
+    } finally {
+      setIsResolving(false);
+    }
   };
+  const openLinked = existingIssue ? openTasksOf(tasks, existingIssue.id) : [];
+  const isClosed = existingIssue?.status === 'Resolved' || existingIssue?.status === 'Closed';
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -172,8 +194,16 @@ export const IssueModal: React.FC<IssueModalProps> = ({
               </div>
             </div>
 
+            <IssueTasksPanel issue={existingIssue} />
+
+            {isClosed && existingIssue.resolution_notes && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                <strong>{existingIssue.status}:</strong> {existingIssue.resolution_notes}
+              </div>
+            )}
+
             {/* Owner Decision Section */}
-            {(currentUser.role === 'Owner / CEO' || currentUser.role === 'Project Manager') && (
+            {!isClosed && (currentUser.role === 'Owner / CEO' || currentUser.role === 'Project Manager') && (
               <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-300 space-y-3">
                 <div className="flex items-center space-x-2 text-xs font-bold text-amber-900">
                   <ShieldAlert className="w-4 h-4 text-amber-600" />
@@ -182,7 +212,7 @@ export const IssueModal: React.FC<IssueModalProps> = ({
                   </span>
                 </div>
 
-                {existingIssue.id === 'issue-1' && (
+                {existingIssue.id === 'issue-1' && !records.live && (
                   <div className="p-3 bg-white rounded-lg border border-amber-200 text-xs text-slate-700 space-y-2 shadow-2xs">
                     <p className="font-bold text-amber-900">
                       Recommendation for Cashier Counter CAR-003:
@@ -218,10 +248,16 @@ export const IssueModal: React.FC<IssueModalProps> = ({
                   />
                 </div>
 
+                {openLinked.length > 0 && (
+                  <p className="text-[11px] font-bold text-amber-900">
+                    {openLinked.length} linked task(s) still open. Finish or cancel them before resolving.
+                  </p>
+                )}
+                <FormError error={resolveError} onDismiss={() => setResolveError(null)} />
                 <div className="flex justify-end space-x-2">
                   <button
                     onClick={handleResolve}
-                    disabled={!resolutionNotes.trim()}
+                    disabled={!resolutionNotes.trim() || isResolving}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-xs cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4" />

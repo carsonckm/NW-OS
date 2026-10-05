@@ -86,6 +86,18 @@ export const deliveryHooks: ModuleHooks = {
       ]
     );
     if (h.mode !== 'import') {
+      // The items on this delivery are now on site (or arrived with a problem). Their
+      // installation status is untouched: receiving never starts installation.
+      const problem =
+        ['Short Quantity', 'Damaged', 'Wrong Item'].includes(String(receipt.condition_status)) ||
+        Number(receipt.damaged_quantity) > 0 ||
+        Number(receipt.missing_quantity) > 0;
+      const itemStatus = problem ? 'Delivery Issue' : 'Delivered';
+      await h.db.query(
+        `UPDATE work_items SET delivery_status = $2, updated_at = now()
+         WHERE id IN (SELECT work_item_id FROM delivery_items WHERE delivery_id = $1) AND delivery_status IS DISTINCT FROM $2`,
+        [id, itemStatus]
+      );
       await writeAudit(h.db, h.actor, {
         action: 'delivery.receipt',
         entityType: 'delivery',

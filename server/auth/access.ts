@@ -60,7 +60,8 @@ const EXECUTION_FIELDS = new Set([
  * production order through the factory updates the item's production status, and at QC /
  * ready for delivery / completion its status and progress.
  */
-const PRODUCTION_FIELDS = new Set(['status', 'progress_percent', 'production_status', 'notes', 'updated_at']);
+// production_order_id: the link to the item's own order (checked against the order on the server).
+const PRODUCTION_FIELDS = new Set(['status', 'progress_percent', 'production_status', 'production_order_id', 'notes', 'updated_at']);
 const FINANCIAL_FIELDS: Partial<Record<CoreCollection, string[]>> = { projects: ['contract_value'] };
 
 /**

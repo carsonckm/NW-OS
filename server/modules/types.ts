@@ -75,6 +75,12 @@ export interface ModuleDef {
   perms: ModulePerms;
   /** Records the server writes itself (e.g. receipts); the API and sync can only read them. */
   readOnly?: boolean;
+  /**
+   * Fields some readers may not see (e.g. a variation's internal cost for clients). Removed
+   * from every response for users without `permission`, and kept unchanged when such a user
+   * writes the record back.
+   */
+  hiddenFields?: { permission: PermissionKey; fields: string[] };
   /** Column the list is ordered by (default created_at). */
   orderBy?: string;
   /** Fields that must be present and non-empty in every record. */

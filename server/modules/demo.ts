@@ -55,5 +55,6 @@ export function demoData(): Record<string, Row[]> {
     cashflowEntries: rows(D.INITIAL_CASHFLOW_ENTRIES),
     financialClaims: rows(D.INITIAL_CLAIMS),
     payments: rows(D.INITIAL_PAYMENTS),
+    knowledge: rows(D.INITIAL_KNOWLEDGE),
   };
 }

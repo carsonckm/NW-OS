@@ -4,6 +4,7 @@ import { createAuthRouter, createUsersRouter } from './auth/routes';
 import { AuthStore } from './auth/store';
 import { createCoreRouter } from './core/routes';
 import { createModuleRouter } from './modules/routes';
+import { createOpsRouter } from './modules/opsRoutes';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -26,6 +27,9 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
       if (req.body && typeof req.body === 'object') {
         Object.assign(req.body, { userRole: role, role, userName: name, reportedBy: name });
         if (req.body.user && typeof req.body.user === 'object') req.body.user = { ...req.body.user, id, name, role };
+        // The legacy gateway simulator identifies senders from a contact list; never take that
+        // list from the browser. Real sender identity comes from /api/whatsapp (server registry).
+        if (req.baseUrl === '/api/gateway' || req.originalUrl.startsWith('/api/gateway')) req.body.contacts = [];
       }
       next();
     });
@@ -36,5 +40,7 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));
+  // Phase 4: notifications, automation, WhatsApp gateway.
+  if (pool && store) app.use('/api', createOpsRouter({ pool, store }));
   return { store };
 }

@@ -679,6 +679,23 @@ export interface Variation {
   schedule_impact_days: number;
   created_at: string;
   updated_at?: string;
+  // Phase 4 workflow (server-kept fields are marked)
+  reason?: string;
+  scope_change?: string;
+  client_reference?: string;
+  client_change_request_id?: string;
+  supporting_documents?: string[];
+  /** Internal only; the server hides it (and estimated_cost) from clients. */
+  internal_notes?: string;
+  created_by_id?: string; // server
+  created_by_name?: string; // server
+  history?: { from?: string; to: string; by_id: string; by_name: string; role: string; at: string; note?: string; reference?: string }[]; // server
+  internal_approved_by_name?: string; // server
+  internal_approved_at?: string; // server
+  client_approved_by_name?: string; // server
+  client_approved_at?: string; // server
+  client_approval_reference?: string;
+  rejection_reason?: string;
 }
 
 export interface NotificationItem {
@@ -1969,7 +1986,8 @@ export type QuotationStatus =
   | 'Accepted'
   | 'Rejected'
   | 'Expired'
-  | 'Superseded';
+  | 'Superseded'
+  | 'Cancelled';
 
 export type CostSource =
   | 'Material Price'
@@ -2065,6 +2083,28 @@ export interface CommercialQuotation {
   low_margin_warning?: boolean;
   created_at: string;
   updated_at: string;
+  // Phase 4 sales workflow (server-set fields are marked)
+  site_address?: string;
+  attention_to?: string;
+  scope_summary?: string;
+  /** Client-facing terms and notes (shown on the client quotation). */
+  terms?: string;
+  client_notes?: string;
+  /** Internal only: never on the client quotation. */
+  internal_notes?: string;
+  attachments?: string[];
+  prepared_by_id?: string; // server
+  approved_by_id?: string; // server
+  approved_by_name?: string; // server
+  approved_at?: string; // server
+  submitted_at?: string; // server
+  awarded_at?: string; // server
+  awarded_by?: string; // server
+  converted_project_id?: string; // server
+  previous_version_id?: string;
+  superseded_by_id?: string;
+  lost_reason?: string;
+  cancel_reason?: string;
 }
 
 export interface ClientEnquiry {
@@ -2080,6 +2120,17 @@ export interface ClientEnquiry {
   status: 'New' | 'Reviewing' | 'Tender Invited' | 'Quoted' | 'Won' | 'Lost' | 'Cancelled';
   assigned_estimator: string;
   notes?: string;
+  // Phase 4 sales workflow
+  contact_person?: string;
+  contact_phone?: string;
+  contact_email?: string;
+  site_address?: string;
+  source?: string;
+  assigned_user_id?: string;
+  follow_up_date?: string;
+  documents?: string[];
+  /** Set when the work is awarded and converted to a project. */
+  project_id?: string;
 }
 
 export interface CommercialTender {
@@ -2096,6 +2147,16 @@ export interface CommercialTender {
   status: 'In Preparation' | 'Submitted' | 'Shortlisted' | 'Awarded' | 'Regretted' | 'Lost';
   documents: string[];
   assigned_lead: string;
+  // Phase 4 sales workflow
+  tender_reference?: string;
+  site_address?: string;
+  scope?: string;
+  bq_reference?: string;
+  bq_notes?: string;
+  assigned_user_id?: string;
+  submission_record?: { submitted_at: string; submitted_by: string; method: string; reference?: string };
+  notes?: string;
+  project_id?: string;
 }
 
 export interface PriceDatabaseRecord {
@@ -2307,6 +2368,7 @@ export interface NWTask {
   id: string;
   task_number: string; // e.g. "TSK-2026-081"
   title: string;
+  issue_id?: string; // issue this task was raised from (server-validated, immutable)
   description: string;
   project_id: string;
   project_name: string;

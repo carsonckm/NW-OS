@@ -14,6 +14,7 @@ import {
   Award,
   Plus,
 } from 'lucide-react';
+import { AutomationRulesPanel } from './automation/ServerAutomation';
 import { useNW } from '../context/NWContext';
 import { AutomationDashboardTab } from './automation/AutomationDashboardTab';
 import { MyTasksTab } from './automation/MyTasksTab';
@@ -148,6 +149,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <AutomationRulesPanel />
       {/* Module Title Header */}
       <div className="bg-slate-900 text-white rounded-2xl p-6 sm:p-8 shadow-xl border border-slate-800 relative overflow-hidden">
         <div className="absolute right-0 top-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />

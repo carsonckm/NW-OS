@@ -22,6 +22,7 @@ import {
   Layers,
   ChevronRight,
 } from 'lucide-react';
+import { ExceptionsPanel } from '../components/ServerOverview';
 import { IssueModal } from '../components/IssueModal';
 
 interface OwnerDashboardProps {
@@ -34,9 +35,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
     issues,
     variations,
     workItems,
-    resolveIssue,
-    approveVariation,
+    qcRecords,
+    coreDataSync,
   } = useNW();
+  const live = coreDataSync.mode === 'database';
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   const [aiBriefing, setAiBriefing] = useState<string>('');
   const [loadingBriefing, setLoadingBriefing] = useState(false);
@@ -47,18 +50,19 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
     (i) => (i.escalation_level === 'Owner' || i.priority === 'Critical') && i.status !== 'Resolved'
   );
   const atRiskProjects = projects.filter((p) => p.is_at_risk);
-  const pendingOwnerVariations = variations.filter(
-    (v) => v.status === 'Internal Approval' || !v.approved_by_owner
-  );
+  const pendingOwnerVariations = variations.filter((v) => v.status === 'Internal Approval');
 
   const todayDeliveries = workItems.filter(
-    (w) => w.delivery_status === 'Scheduled' || w.scheduled_delivery_date === '2026-09-09'
+    (w) => w.delivery_status === 'Scheduled' || w.scheduled_delivery_date === todayStr
   );
   const todayInstallations = workItems.filter(
     (w) => w.installation_status === 'In Progress' || w.status === 'Installation In Progress'
   );
 
   const totalContractValue = projects.reduce((sum, p) => sum + p.contract_value, 0);
+  // Factory QC pass rate from the recorded inspections (no figure when there are none).
+  const decidedQc = qcRecords.filter((q) => q.result === 'Passed' || q.result === 'Failed' || q.result === 'Correction Required');
+  const qcPassRate = decidedQc.length ? `${Math.round((decidedQc.filter((q) => q.result === 'Passed').length / decidedQc.length) * 100)}%` : '—';
 
   // Fetch AI Briefing on mount
   useEffect(() => {
@@ -150,13 +154,17 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
               ) : (
                 <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
                   {aiBriefing ||
-                    'Active projects progressing steadily. Project Aurora (Pavilion) has 1 critical site dimension variance on Cashier Counter CAR-003 awaiting Owner exception approval. Project Horizon is monitoring walnut veneer lead times. Deliveries and installations scheduled today are running on track.'}
+                    (live
+                      ? 'No AI briefing is available right now. The list below is computed from the database and shows everything that needs a decision.'
+                      : 'Demo briefing (illustrative): Project Aurora has a site dimension variance on CAR-003 awaiting an Owner decision.')}
                 </p>
               )}
             </div>
           </div>
         </div>
       </div>
+
+      {live && <ExceptionsPanel title="What needs your attention" ownerFirst limit={15} />}
 
       {/* SECTION 1: CRITICAL DECISIONS REQUIRING OWNER ACTION (The #1 Priority) */}
       <div className="space-y-4">
@@ -192,7 +200,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
                         {issue.priority} Exception
                       </span>
                       <span className="text-xs font-mono text-slate-500">
-                        Target: Cashier Counter CAR-003 (Project Aurora)
+                        {projects.find((p) => p.id === issue.project_id)?.project_name ?? ''}
+                        {issue.work_item_id ? ` · ${workItems.find((w) => w.id === issue.work_item_id)?.item_code ?? ''}` : ''}
                       </span>
                     </div>
 
@@ -206,9 +215,6 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
                       <div>
                         <strong className="text-amber-900 font-bold">PM Recommendation:</strong>{' '}
                         <span className="text-slate-800">{issue.action_required}</span>
-                        <div className="text-[11px] text-slate-600 mt-0.5">
-                          Variation VO-002: Trimming 100mm off non-functional end plinth allows installation without delaying grand opening. Internal cost RM 650, Client cost RM 0.
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -216,16 +222,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
                   {/* 1-Click Action Hub */}
                   <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0 lg:w-60">
                     <button
-                      onClick={() => {
-                        resolveIssue(
-                          issue.id,
-                          'Owner Approved Variation VO-002: Trim 100mm off Module B end plinth to match 2300mm site condition.'
-                        );
-                      }}
+                      onClick={() => setSelectedIssueForModal(issue)}
                       className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center space-x-2 cursor-pointer"
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>Approve 100mm Trim (VO-002)</span>
+                      <span>Decide &amp; record resolution</span>
                     </button>
 
                     <button
@@ -233,14 +234,14 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
                       className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs rounded-xl border border-slate-300 transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
                     >
                       <Layers className="w-3.5 h-3.5 text-slate-600" />
-                      <span>Review Drawing A-103 Rev 2</span>
+                      <span>Open drawings</span>
                     </button>
 
                     <button
                       onClick={() => setSelectedIssueForModal(issue)}
                       className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-xl border border-slate-300 transition-colors text-center cursor-pointer shadow-2xs"
                     >
-                      View Full Audit Trail
+                      View details &amp; linked tasks
                     </button>
                   </div>
                 </div>
@@ -318,7 +319,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
           </div>
 
           <div className="space-y-3">
-            {variations.slice(0, 3).map((vo) => (
+            {pendingOwnerVariations.length === 0 && <p className="text-xs text-slate-500">No variations waiting for internal approval.</p>}
+            {pendingOwnerVariations.slice(0, 3).map((vo) => (
               <div key={vo.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-800 font-mono">{vo.variation_number}</span>
@@ -339,10 +341,10 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
                 </div>
                 {vo.status !== 'Approved' && (
                   <button
-                    onClick={() => approveVariation(vo.id, true)}
+                    onClick={() => onNavigate('variations')}
                     className="w-full py-1.5 text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg font-bold transition-colors shadow-2xs cursor-pointer"
                   >
-                    Approve VO
+                    Review in Variations
                   </button>
                 )}
               </div>
@@ -379,7 +381,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({ onNavigate }) =>
           </div>
           <div>
             <span className="text-[11px] text-slate-500 block font-medium">Factory QC Pass Rate</span>
-            <span className="text-lg font-bold text-slate-900">92%</span>
+            <span className="text-lg font-bold text-slate-900">{qcPassRate}</span>
           </div>
         </div>
 

@@ -73,6 +73,9 @@ export const FinanceView: React.FC = () => {
   const estimatedProfit = hasServerFigures
     ? serverFigures.reduce((sum, f) => sum + f!.project_gross_profit, 0)
     : totalContractValue * 0.284;
+  // Demo mode has no server: the 28.4% is an illustration and is labelled as such. In
+  // database mode only server figures are shown.
+  const isDemoFigure = coreDataSync.mode !== 'database';
   const estimatedMarginPercent = hasServerFigures
     ? serverSelling > 0 ? Math.round((estimatedProfit / serverSelling) * 1000) / 10 : 0
     : 28.4;
@@ -149,9 +152,19 @@ export const FinanceView: React.FC = () => {
           {canSeeMargins ? (
             <>
               <div className="text-xl font-black text-amber-700">
-                {estimatedMarginPercent}% <span className="text-xs font-semibold text-slate-500">(RM {Math.round(estimatedProfit).toLocaleString()})</span>
+                {isDemoFigure || hasServerFigures ? (
+                  <>
+                    {estimatedMarginPercent}% <span className="text-xs font-semibold text-slate-500">(RM {Math.round(estimatedProfit).toLocaleString()})</span>
+                  </>
+                ) : (
+                  '—'
+                )}
               </div>
-              <span className="text-[11px] text-emerald-600 font-semibold block">Protected Executive Visibility</span>
+              {isDemoFigure ? (
+                <span className="text-[11px] text-amber-700 font-semibold block" data-testid="demo-figure">Demo figure (illustrative, not project data)</span>
+              ) : (
+                <span className="text-[11px] text-emerald-600 font-semibold block">Server-calculated project gross profit</span>
+              )}
             </>
           ) : (
             <>
@@ -246,7 +259,8 @@ export const FinanceView: React.FC = () => {
                       </td>
                       {canSeeMargins && (
                         <td className="py-3.5 px-4 text-right font-black text-amber-700">
-                          {official(proj.id)?.project_gross_margin_percent ?? estimatedMarginPercent}%
+                          {official(proj.id)?.project_gross_margin_percent ?? (isDemoFigure ? estimatedMarginPercent : '—')}
+                          {official(proj.id) || isDemoFigure ? '%' : ''}
                         </td>
                       )}
                     </tr>

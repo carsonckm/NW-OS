@@ -18,6 +18,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
+import { navigateTo } from '../services/navigation';
+import { ProjectServerOverview } from './ServerOverview';
 import {
   Project,
   WorkPackage,
@@ -82,7 +84,7 @@ interface ProjectCommandCenterProps {
 export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   projectId,
   onBackToPortfolio,
-  onNavigateToTab,
+  onNavigateToTab: onNavigateToTabProp,
 }) => {
   const {
     currentUser,
@@ -110,6 +112,9 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   const project =
     projects.find((p) => p.id === targetId) ||
     projects[0];
+  // Workflow links always work: the host can override, otherwise open the app tab for this project.
+  const onNavigateToTab = onNavigateToTabProp ?? ((tab: string) => navigateTo(tab, project?.id));
+  const isStaff = currentUser.role !== 'Client' && currentUser.role !== 'Contractor';
 
   // Permissions
   const canSeeFinancials = canViewProjectFinancials(currentUser);
@@ -822,6 +827,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           </div>
         </div>
       </div>
+
+      {isStaff && project && <ProjectServerOverview projectId={project.id} />}
 
       {/* 2. PROJECT HEALTH HEADER (6 Summary Cards) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">

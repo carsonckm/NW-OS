@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
+import { GoodsReceivedButton, GoodsReceivedHistory } from './commercial/CostControl';
 import { PurchaseOrder, MaterialRequest, Supplier, POStatus } from '../types';
 import { hasPermission } from '../utils/permissions';
 import {
@@ -37,7 +38,6 @@ export const PurchasingView: React.FC = () => {
     materialRequests,
     suppliers,
     createPurchaseOrder,
-    updatePOStatus,
     createMaterialRequest,
     userProjects,
     projects,
@@ -339,19 +339,12 @@ export const PurchasingView: React.FC = () => {
                       </span>
                     </div>
 
-                    {po.status === 'Issued' && (
-                      <button
-                        onClick={() => {
-                          updatePOStatus(po.id, 'Goods Received', new Date().toISOString().split('T')[0]);
-                        }}
-                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors shadow-2xs"
-                      >
-                        <PackageCheck className="w-3.5 h-3.5" />
-                        <span>Confirm Goods Received</span>
-                      </button>
-                    )}
+                    {/* Goods are received line by line; the server updates the PO status. */}
+                    <GoodsReceivedButton po={po} />
                   </div>
                 </div>
+
+                <GoodsReceivedHistory po={po} />
 
                 {/* Items preview table */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl overflow-hidden mt-2">

@@ -1,0 +1,39 @@
+1 [UI: Commercial › Enquiries › New Enquiry (PM)] enquiry enq-muvf76nvr7vp status=New
+2 [UI: Enquiry › Create Tender (PM)] tender tdr-muvf77l72ice enquiry_id=enq-muvf76nvr7vp; enquiry now Tender Invited
+3 [UI: Tender › Quote (PM)] quotation QT-2026-005-V1 status=Draft
+4 [UI: quotation line material/labour cost (PM); priced by server] subtotal=60000 cost=32000.00 GP=28000
+5 [UI: Submit for review (PM) › Approve internally (Accountant) › Submit to client (PM) › Client quotation] early submit refused inline: "The quotation needs internal approval before it is submitted to the client
+×"; approved_by=user-accountant; status=Submitted; client copy shows internal cost/margin: false
+6 [UI: Award (won) (PM)] quotation status=Accepted
+7 [UI: Convert to project (Owner)] project proj-5cb94565-f036-409e-b441-1e9b8b8a7f82 Awarded contract=60000.00 client=client-2; budget=32000.00; enquiry=Won; landed on project page: true
+8a [UI: project status badge (Owner); Users › Edit › Assigned projects (Admin)] project Active pm=user-pm site=user-site; assigned: user-prod-staff,user-prod-mgr
+8 [UI: Drawings › + Upload New Drawing (PM)] drawing dwg-1791215098175 project=proj-5cb94565-f036-409e-b441-1e9b8b8a7f82; revisions Rev 1:Draft:current=false
+9 [UI: Drawing viewer › Submit for Internal Review (PM)] Rev 1:Internal Review by Marcus Lee; PM sees Approve button: false
+10 [UI: Drawing viewer › Approve Revision (Owner)] Rev 1:Approved:current=true approved_by=Dato’ Nicholas Wong
+11 [UI: Project command center › + New Work Package (PM)] work package wp-1791215107815 BAR JOINERY 57609 contractor=con-1 status=Assigned
+12 [UI: Project command center › New Work Item (PM)] work item item-1791215109867 package=wp-1791215107815 drawing=dwg-1791215098175 rev=rev-1791215098175 status=Assigned
+10b [UI: + Create NW Drawing (PM) › Authorize & Stamp APPROVED FOR PRODUCTION (Owner)] NW drawing nwd-1791215115556 Approved for_production=true linked=rev-1791215098175
+13 [UI: Production › New Production Order (Production Manager)] order PO-2026-014 status=Not Started check=valid client_rev=rev-1791215098175 nw_rev=nwd-1791215115556
+14 [UI: Purchasing › Material Request (Purchasing)] material request mr-1791215131641 MR-2026-023 project=proj-5cb94565-f036-409e-b441-1e9b8b8a7f82 status=Pending
+15 [UI: Purchasing › Create Purchase Order (Purchasing) › Approvals › Approve Request (Owner)] PO PO-2026-047: created Pending Approval total=22000.00; approval apr-1791215133611 APR-2026-07 -> Approved; PO now Issued; committed cost 22000
+16 [UI: Purchasing › Goods received on the PO (PM; the Site Supervisor role has no purchasing view)] after 18/20: PO Partially Received; after remaining 2: PO Goods Received; GRNs GRN-PO-2026-047-1 by user-pm, GRN-PO-2026-047-2 by user-pm
+17 [UI: Production Orders › Update Stage (Production Staff)] stages Cutting → CNC → Edge Banding → Assembly → Finishing → QC; now QC / item production_status=QC
+18 [UI: Production › QC Inspection › Conduct Factory QC Inspection (Production Staff)] factory QC qc-fac-1791215176833 Passed; order Packing / item production_status=Packing
+19 [UI: Packing › New Dispatch Package (Production Staff) › Update Stage → Ready for Delivery (Production Manager)] packages PKG-006; order Ready for Delivery / item production_status=Ready for Delivery
+20 [UI: Delivery & Site › Ready for Delivery › Arrange Delivery (PM)] delivery DEL-2026-017 status=Scheduled project=proj-5cb94565-f036-409e-b441-1e9b8b8a7f82; items item-1791215109867; item delivery_status=Scheduled
+21 [UI: Delivery & Site › Site Receiving › Confirm Site Receiving (Site Supervisor)] receipt rec-1791215198877 receiver=user-site condition=All In Order; delivery Delivered; installation jobs for item: 0 (receipt never starts installation)
+22 [UI: Installation › Schedule installation (PM) › ▶ Start (Site Supervisor)] job INS-MUVFA9UC In Progress supervisor=user-site
+23 [UI: Site QC & Snagging › Record inspection (Site Supervisor)] inspection sqc-muvfaiz4t9bf Fail / Rectification Required inspector=Suresh Kumar; rectification issue issue-rect-sqc-muvfaiz4t9bf (Reported); completing the installation now -> 403 "Installation cannot be completed: the latest site QC failed and needs rectification and re-inspection"
+24 [UI: Automation › Run now (Admin) › Issue › Mark done (Site Supervisor) › Resolve (PM)] automation raised task tsk-auto-sqc-muvfaiz4t9bf user-site Open; task now Completed; issue Resolved by user-pm
+25 [UI: Site QC › Re-inspect › Record pass › Installation ✅ Complete (Site Supervisor)] inspections Fail / Rectification Required → Pass; installation Completed
+26 [UI: Client Handover › Prepare handover › Endorse (PM, with the client present)] handover ho-muvfb3yngc7z: Draft → Formal CPC Handover Signed nw_signed_by=user-pm; project status still Active
+27 [UI: Variations › New variation › Send for internal approval (PM) › Approve internally (Owner)] VO-001: Client Approval internal_by=user-owner; PM offered internal approval: false; contract unchanged while pending: original 60000, approved VOs 0, current 60000 → original 60000, approved VOs 0, current 60000
+28 [UI: Users › New user (Admin, Horizon client account) › Variations › Accept variation (Client)] VO-001: Approved client_by=user-f2f7fe39-ecdc-41c7-8cc7-c86b2909546d; client saw internal cost 3,000: false; contract now original 60000, approved VOs 5000, current 65000
+29 [UI: Commercial › Invoices › Record supplier invoice (Accountant) › Approve (Owner)] invoice TC-57609: recorded Pending Approval match=Matched; recorder's own approval refused: "You cannot approve an invoice you recorded
+×"; now Approved by user-owner
+30 [UI: Commercial › Project Cost (Accountant); figures from the server] before invoice: selling 65000, budget 32000, committed 22000, actual 0, forecast 32000, GP 33000 (50.77%); after: selling 65000, budget 32000, committed 22000, actual 22000, forecast 32000, GP 33000 (50.77%); ledger cst-inv-inv-muvfbq603hdw Incurred 22000.00
+31 [UI: Commercial › Claims (IPC) › New claim › Mark Submitted › Mark Certified (Accountant)] claim IPC-57609-01 Certified claimed=65000 retention=3250 net=61750
+32 [UI: Commercial › Payments › Record payment, settling the claim (Accountant)] payment TRF-57609 61750 Client Inflow; claim now Paid paid 2026-10-05
+33 [UI: Commercial › Profitability (Owner); server-computed] selling 65000, budget 32000, committed 22000, actual 22000, forecast 32000, GP 33000 (50.77%); screen shows actual/forecast/GP: true/true/true; forged browser totals sync 200 -> server GP still 33000; site supervisor profitability -> 403
+34 [UI: Projects › status badge → Completed → Closed (Owner)] Completed → Closed; audit actions on the project: 84; exceptions still listed for it: 0
+API refusals seen (expected ones are deliberate checks): {"project-manager":["PATCH /api/quotations/qt-muvf79759q77 403","GET /api/drawings/dwg-1791215098175/production-usage 404"],"accountant":["PATCH /api/invoices/inv-muvfbq603hdw 403"],"owner-ceo":[],"admin":[],"production-manager":[],"purchasing":[],"production-staff":[],"site-supervisor":["PATCH /api/installation-jobs/inst-muvfa9ucelr6 403","GET /api/projects/proj-5cb94565-f036-409e-b441-1e9b8b8a7f82/profitability 403"],"lim57609":[]}

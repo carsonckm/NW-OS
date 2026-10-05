@@ -156,3 +156,12 @@ export const coreApi = {
   workPackages: resource<WorkPackage>('work-packages'),
   workItems: resource<WorkItem>('work-items'),
 };
+
+/** Any authenticated JSON call under /api (Phase 4 workflow actions). */
+export const api = {
+  get: <T>(path: string) => request<T>(path),
+  post: <T>(path: string, body: unknown = {}) => request<T>(path, json('POST', body)),
+  patch: <T>(path: string, body: unknown) => request<T>(path, json('PATCH', body)),
+  put: <T>(path: string, body: unknown) => request<T>(path, json('PUT', body)),
+  delete: (path: string) => request<void>(path, { method: 'DELETE' }),
+};

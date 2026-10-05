@@ -6,6 +6,7 @@ import { COLLECTION_ORDER, type CoreCollection } from '../core/schema';
 import { CoreService } from '../core/service';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import { findClientRevision } from './hooks/drawings';
+import { derivedProductionStatus } from './hooks/production';
 import { hasOpenFailedSiteQc } from './hooks/site';
 import { MODULES, MODULE_BY_KEY } from './registry';
 import { inModuleScope, loadOrderInfo, requireAny, hasAny, type OrderInfo } from './scope';
@@ -53,7 +54,15 @@ export class DataService {
 
   private visible(ctx: AccessContext, def: ModuleDef, rows: Row[], orders: OrderInfo) {
     if (!hasAny(ctx, def.perms.view)) return [];
-    return rows.filter((r) => inModuleScope(ctx, def, r, orders));
+    return rows.filter((r) => inModuleScope(ctx, def, r, orders)).map((r) => this.redact(ctx, def, r));
+  }
+
+  /** Removes the module's hidden fields for users without the permission to see them. */
+  redact<T extends Row | undefined>(ctx: AccessContext, def: ModuleDef, record: T): T {
+    if (!record || !def.hiddenFields || ctx.can(def.hiddenFields.permission)) return record;
+    const out: Row = { ...record };
+    for (const f of def.hiddenFields.fields) delete out[f];
+    return out as T;
   }
 
   async list(ctx: AccessContext, def: ModuleDef, filter: Record<string, string | undefined>) {
@@ -66,7 +75,7 @@ export class DataService {
     requireAny(ctx, def.perms.view, `viewing ${def.key}`);
     const record = await findRecord(this.pool, def, id);
     if (!record || !inModuleScope(ctx, def, record, await loadOrderInfo(this.pool))) throw notFound(`${def.key} ${id}`);
-    return record;
+    return this.redact(ctx, def, record);
   }
 
   /** Everything this user may see: core chain plus every module collection. */
@@ -126,6 +135,14 @@ export class DataService {
       throw new ForbiddenError(`${def.key} ${recordId(def, existing)} not found or not accessible`);
     }
     if (h.mode !== 'import') requireAny(h.ctx, existing ? def.perms.edit : def.perms.create, `${existing ? 'editing' : 'creating'} ${def.key}`);
+    // A user who can't see hidden fields can't change them either: keep the stored values.
+    if (def.hiddenFields && h.mode !== 'import' && !h.ctx.can(def.hiddenFields.permission)) {
+      incoming = { ...incoming };
+      for (const f of def.hiddenFields.fields) {
+        if (existing && f in existing) incoming[f] = existing[f];
+        else delete incoming[f];
+      }
+    }
 
     const values = def.hooks?.beforeWrite ? await def.hooks.beforeWrite(h, existing, incoming) : incoming;
     if (h.mode !== 'import' && !inModuleScope(h.ctx, def, values, await this.ordersFor(h.db, values.production_order_id))) {
@@ -172,7 +189,22 @@ export class DataService {
         throw new ForbiddenError(`${collection} ${String(existing.id)} not found or not accessible`);
       }
       const values = h.ctx.authorizeWrite(collection, existing, incoming);
+      if (values && collection === 'projects' && h.mode !== 'import') this.checkProjectCompletion(h, existing, values);
       if (!values || collection !== 'workItems') return values;
+      // Production status comes from the production order, never from the browser.
+      if (h.mode !== 'import' && 'production_status' in values && (existing || values.id)) {
+        const derived = await derivedProductionStatus(h.db, String(existing?.id ?? values.id));
+        if (derived) values.production_status = derived;
+      }
+      // A production user (no work_items.edit) may only link an item to an order made for that item.
+      if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
+        const itemId = String(existing?.id ?? values.id);
+        const orderId = String(values.production_order_id);
+        h.defer(async () => {
+          const order = (await h.db.query('SELECT work_item_id FROM production_orders WHERE id = $1', [orderId])).rows[0];
+          if (!order || order.work_item_id !== itemId) throw new ValidationError(`Production order ${orderId} is not an order for work item ${itemId}`);
+        });
+      }
       // The revision an item was created from is fixed at creation.
       if (existing) values.source_drawing_revision_id = existing.source_drawing_revision_id ?? undefined;
       else if (!values.source_drawing_revision_id) {
@@ -191,6 +223,32 @@ export class DataService {
       }
       return values;
     };
+  }
+
+  /**
+   * A project is marked Completed / Closed only by a person, and only when its handover is
+   * signed and no site QC failure is still open. Closed comes after Completed.
+   */
+  private checkProjectCompletion(h: HookContext, existing: Row | undefined, values: Row) {
+    const to = values.project_status;
+    if (to !== 'Completed' && to !== 'Closed') return;
+    if (existing?.project_status === to) return;
+    if (to === 'Closed' && existing?.project_status !== 'Completed') throw new ForbiddenError('A project is closed after it is completed');
+    const id = String(values.id ?? existing?.id);
+    h.defer(async () => {
+      const signed = await h.db.query(
+        `SELECT 1 FROM handover_records WHERE project_id = $1 AND status IN ('Formal CPC Handover Signed', 'In DLP Period') LIMIT 1`,
+        [id]
+      );
+      if (!signed.rowCount) throw new ForbiddenError('The project can be completed once its handover is signed');
+      const failed = await h.db.query(
+        `SELECT DISTINCT ON (work_item_id) work_item_id, result FROM site_qc_inspections
+         WHERE project_id = $1 ORDER BY work_item_id, coalesce(inspected_at, '') DESC, created_at DESC, id DESC`,
+        [id]
+      );
+      const open = failed.rows.filter((r) => r.result === 'Fail / Rectification Required');
+      if (open.length) throw new ForbiddenError(`The project has ${open.length} work item(s) whose latest site QC failed`);
+    });
   }
 
   private coreWritten(h: HookContext) {
@@ -226,7 +284,7 @@ export class DataService {
     return this.inTransaction(ctx, actor, 'rest', async (h) => {
       if (await findRecord(h.db, def, recordId(def, record))) throw new ForbiddenError(`${def.key} ${recordId(def, record)} already exists`);
       await this.writeModule(h, def, undefined, record);
-      return findRecord(h.db, def, recordId(def, record));
+      return this.redact(ctx, def, await findRecord(h.db, def, recordId(def, record)));
     });
   }
 
@@ -236,7 +294,7 @@ export class DataService {
       if (!existing || !inModuleScope(ctx, def, existing, await this.ordersFor(h.db))) throw notFound(`${def.key} ${id}`);
       if (def.idField in patch && patch[def.idField] !== id) throw new ValidationError(`${def.idField} cannot be changed`);
       await this.writeModule(h, def, existing, { ...existing, ...patch, [def.idField]: id });
-      return findRecord(h.db, def, id);
+      return this.redact(ctx, def, await findRecord(h.db, def, id));
     });
   }
 
@@ -264,6 +322,11 @@ export class DataService {
 
   coreRemove(ctx: AccessContext, collection: CoreCollection, id: string, actor: AuditActor) {
     return this.inTransaction(ctx, actor, 'rest', (h) => this.core.remove(ctx, collection, id, this.coreTx(h)));
+  }
+
+  /** Creates a core record (e.g. a project) inside a domain action's transaction, audited. */
+  createCoreInTransaction(h: HookContext, collection: CoreCollection, input: Row) {
+    return this.core.create(h.ctx, collection, input, this.coreTx(h));
   }
 
   /** Runs `fn` with a hook context in its own transaction (domain endpoints). */

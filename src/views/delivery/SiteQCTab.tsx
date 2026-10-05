@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
 import { SiteQCInspection, SnagItem, QCEvalResult } from '../../types';
+import { SiteQCForm, latestSiteQc } from './SiteWorkflow';
 
 export const SiteQCTab: React.FC = () => {
   const {
@@ -30,6 +31,8 @@ export const SiteQCTab: React.FC = () => {
     siteQCInspections[0]?.id || ''
   );
   const [showNewInspectionModal, setShowNewInspectionModal] = useState(false);
+  const [reinspect, setReinspect] = useState<SiteQCInspection | null>(null);
+  const canInspect = ['Owner / CEO', 'Project Manager', 'Site Supervisor'].includes(currentUser.role);
 
   const activeInspection =
     siteQCInspections.find((i) => i.id === selectedInspectionId) ||
@@ -49,6 +52,15 @@ export const SiteQCTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {(showNewInspectionModal || reinspect) && (
+        <SiteQCForm
+          reinspectionOf={reinspect ?? undefined}
+          onClose={() => {
+            setShowNewInspectionModal(false);
+            setReinspect(null);
+          }}
+        />
+      )}
       {/* Header */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -66,6 +78,24 @@ export const SiteQCTab: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          {canInspect && activeInspection?.result === 'Fail / Rectification Required' && latestSiteQc(siteQCInspections, activeInspection.work_item_id)?.id === activeInspection.id && (
+            <button
+              type="button"
+              onClick={() => setReinspect(activeInspection)}
+              className="px-3 py-1.5 rounded-lg border border-purple-300 bg-purple-50 text-xs font-bold text-purple-900 hover:bg-purple-100"
+            >
+              Re-inspect {activeInspection.work_item_code}
+            </button>
+          )}
+          {canInspect && (
+            <button
+              type="button"
+              onClick={() => setShowNewInspectionModal(true)}
+              className="px-3 py-1.5 rounded-lg bg-purple-600 text-xs font-bold text-white hover:bg-purple-700"
+            >
+              Record inspection
+            </button>
+          )}
           <select
             value={selectedInspectionId}
             onChange={(e) => setSelectedInspectionId(e.target.value)}

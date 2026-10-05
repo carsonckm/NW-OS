@@ -1,66 +1,23 @@
 import type express from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PACKAGES } from '../../src/data/initialData';
-import { AccessContext } from '../auth/access';
-import type { AuthUser } from '../auth/store';
+import { readdirSync } from 'fs';
+import { INITIAL_CLIENTS } from '../../src/data/initialData';
 import { migrate } from '../db/migrate';
-import { buildApp, seedUsers, signIn, type SeedUser } from '../test/app';
-import { createTestDb, TEST_DATABASE_URL, type TestDb } from '../test/db';
-import { demoData } from './demo';
+import { buildApp, signIn } from '../test/app';
+import { TEST_DATABASE_URL, type TestDb } from '../test/db';
+import { setupDemoWorld, unrelatedProject, USERS } from '../test/demoWorld';
 import { MODULES } from './registry';
-import { DataService } from './service';
 
 type Row = Record<string, any>;
-
-const USERS: SeedUser[] = [
-  { id: 'user-owner', role: 'Owner / CEO', email: 'owner@test.local' },
-  { id: 'user-admin', role: 'Admin', email: 'admin@test.local' },
-  { id: 'user-pm', role: 'Project Manager', email: 'pm@test.local' },
-  { id: 'user-site', role: 'Site Supervisor', email: 'site@test.local' },
-  { id: 'user-purchasing', role: 'Purchasing', email: 'purchasing@test.local' },
-  { id: 'user-accountant', role: 'Accountant', email: 'accountant@test.local' },
-  { id: 'user-prod-mgr', role: 'Production Manager', email: 'prodmgr@test.local' },
-  { id: 'user-prod-staff', role: 'Production Staff', email: 'staff@test.local', assigned: ['proj-1'] },
-  { id: 'user-contractor', role: 'Contractor', email: 'contractor@test.local', contractor_id: 'con-1' },
-  { id: 'user-client', role: 'Client', email: 'client@test.local', client_id: 'client-1' },
-];
-
-const SYSTEM: AuthUser = {
-  id: 'system-import', name: 'System', email: 'system@test.local', role: 'Owner / CEO', is_active: true, is_dev_seed: false,
-  client_id: null, contractor_id: null, phone: null, department: null, title: null, created_at: '', updated_at: '', last_login: null,
-};
-
-/** An unrelated project (client-3, other PM, contractor con-9) for cross-project tests. */
-function unrelatedProject(): Record<string, Row[]> {
-  const project = { ...INITIAL_PROJECTS[0], id: 'proj-x', project_number: 'NW-2026-999', project_name: 'Unrelated', client_id: 'client-3', project_manager_id: 'someone-else', site_supervisor_id: 'someone-else' };
-  const wp = { ...INITIAL_WORK_PACKAGES[0], id: 'wp-x', project_id: 'proj-x', contractor_id: 'con-9' };
-  const item = { ...INITIAL_WORK_ITEMS[0], id: 'item-x', project_id: 'proj-x', work_package_id: 'wp-x', contractor_id: 'con-9', drawing_id: 'dwg-x', drawing_revision: 'Rev 1' };
-  const drawing = {
-    id: 'dwg-x', project_id: 'proj-x', drawing_number: 'X-1', title: 'Unrelated drawing', category: 'Joinery', current_revision_id: 'rev-x1', created_at: '2026-01-01',
-    revisions: [{ id: 'rev-x1', drawing_id: 'dwg-x', revision: 'Rev 1', title: 'X', file_url: '/x.pdf', uploaded_date: '2026-01-01', uploaded_by: 'PM', approved_status: 'Approved', notes: '', is_current: true, drawing_type: 'Client / Designer Drawing', markups: [] }],
-  };
-  const delivery = { id: 'del-x', delivery_number: 'DEL-X', project_id: 'proj-x', project_name: 'Unrelated', work_package_id: 'wp-x', work_package_name: 'X', work_item_ids: ['item-x'], work_item_codes: ['X'], production_order_ids: [], contractor_id: 'con-9', contractor_name: 'Other', driver_name: '', driver_contact: '', vehicle_plate: '', vehicle_type: '', delivery_date: '2026-10-10', delivery_time: '10:00', estimated_arrival: '11:00', destination_site: 'X', special_instructions: '', package_count: 1, status: 'Scheduled', status_history: [], loading_checklist: {}, scanned_packages: [], qr_code: 'X', barcode: 'X', photos: [] };
-  return { projects: [project], workPackages: [wp], workItems: [item], drawings: [drawing], deliveryRecords: [delivery] };
-}
 
 describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
   let db: TestDb;
   let app: express.Express;
-  const as: Record<string, request.Agent> = {};
+  let as: Record<string, request.Agent> = {};
 
   beforeAll(async () => {
-    db = await createTestDb();
-    const service = new DataService(db.pool);
-    const ctx = await AccessContext.load(db.pool, SYSTEM);
-    const demo = demoData();
-    const extra = unrelatedProject();
-    for (const [k, rows] of Object.entries(extra)) demo[k] = [...(demo[k] ?? []), ...rows];
-    const imported = await service.importData(ctx, demo, {}, { id: SYSTEM.id });
-    expect(imported.problems).toEqual([]);
-    await seedUsers(db.pool, USERS);
-    app = buildApp(db.pool);
-    for (const u of USERS) as[u.role] = await signIn(app, u.email);
+    ({ db, app, as } = await setupDemoWorld());
   });
   afterAll(async () => {
     await db?.close();
@@ -73,7 +30,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
     it('applies every migration once (re-running is a no-op)', async () => {
       expect(await migrate(db.pool)).toEqual([]);
       const applied = (await db.pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map((r) => r.name);
-      expect(applied).toEqual(['001_core_chain.sql', '002_auth.sql', '003_audit_drawings_documents.sql', '004_workflow.sql', '005_production.sql', '006_delivery_site.sql', '007_commercial.sql', '008_revision_review_on_hold.sql']);
+      expect(applied).toEqual(readdirSync('db/migrations').filter((f) => f.endsWith('.sql')).sort());
     });
 
     it('has a table with the registered columns for every module', async () => {
@@ -410,6 +367,37 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       });
     });
 
+    describe('work item production status', () => {
+      const itemOf = async (orderId: string) =>
+        (await db.pool.query(`SELECT work_item_id FROM production_orders WHERE id = $1`, [orderId])).rows[0].work_item_id as string;
+      const itemStatus = async (itemId: string) =>
+        (await db.pool.query(`SELECT production_status FROM work_items WHERE id = $1`, [itemId])).rows[0].production_status;
+
+      it('follows the production order in the same transaction', async () => {
+        await as['Production Manager'].patch('/api/production-orders/po-102').send({ status: 'Blocked' }).expect(200);
+        expect(await itemStatus(await itemOf('po-102'))).toBe('Blocked');
+      });
+
+      it('ignores a production status the browser sends for the work item', async () => {
+        const id = await itemOf('po-102');
+        await owner().patch(`/api/work-items/${id}`).send({ production_status: 'Completed' }).expect(200);
+        expect(await itemStatus(id)).toBe('Blocked');
+      });
+
+      it('stays consistent when a mixed batch is refused and the item is saved on its own', async () => {
+        const id = await itemOf('po-102');
+        const item = (await owner().get(`/api/work-items/${id}`).expect(200)).body;
+        const order = (await owner().get('/api/production-orders/po-102').expect(200)).body;
+        // Staff may not put an order On Hold, so the whole batch is refused...
+        const batch = await as['Production Staff'].post('/api/data/sync').send({ upserts: { workItems: [{ ...item, production_status: 'On Hold' }], productionOrders: [{ ...order, status: 'On Hold' }] } });
+        expect(batch.status).toBe(403);
+        expect(await itemStatus(id)).toBe('Blocked');
+        // ...and the browser's record-by-record retry of the item can't diverge from the order.
+        await as['Production Staff'].post('/api/data/sync').send({ upserts: { workItems: [{ ...item, production_status: 'On Hold' }] } }).expect(200);
+        expect(await itemStatus(id)).toBe('Blocked');
+      });
+    });
+
     it('keeps production records away from roles without production.view', async () => {
       expect((await as['Client'].get('/api/production-orders')).status).toBe(403);
     });
@@ -481,12 +469,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
 
   // --------------------------------------------------------------- variations
   describe('variations and contract value', () => {
-    const variation = { id: 'vo-new', project_id: 'proj-2', variation_number: 'VO-NEW', title: 'Extra shelving', description: 'x', estimated_cost: 6000, client_amount: 10000, status: 'Identified', requested_by: 'PM', schedule_impact_days: 2, created_at: '2026-10-01' };
+    const variation = { id: 'vo-new', project_id: 'proj-1', variation_number: 'VO-NEW', title: 'Extra shelving', description: 'x', estimated_cost: 6000, client_amount: 10000, status: 'Identified', requested_by: 'PM', schedule_impact_days: 2, created_at: '2026-10-01' };
 
     it('a proposed variation never changes the contract value', async () => {
-      const before = (await owner().get('/api/projects/proj-2/contract-summary').expect(200)).body;
-      await owner().post('/api/variations').send(variation).expect(201);
-      const after = (await owner().get('/api/projects/proj-2/contract-summary').expect(200)).body;
+      const before = (await owner().get('/api/projects/proj-1/contract-summary').expect(200)).body;
+      await as['Project Manager'].post('/api/variations').send(variation).expect(201);
+      const after = (await owner().get('/api/projects/proj-1/contract-summary').expect(200)).body;
       expect(after.current_contract_value).toBe(before.current_contract_value);
       expect(after.pending_variations_total).toBe(before.pending_variations_total + 10000);
       expect(after.original_contract_value).toBe(before.original_contract_value);
@@ -503,17 +491,47 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       // Internal approval needs variations.approve (Owner), not the PM.
       expect((await as['Project Manager'].post('/api/variations/vo-new/transition').send({ status: 'Client Approval' })).status).toBe(403);
       await owner().post('/api/variations/vo-new/transition').send({ status: 'Client Approval' }).expect(200);
-      const before = (await owner().get('/api/projects/proj-2/contract-summary')).body;
-      await owner().post('/api/variations/vo-new/transition').send({ status: 'Approved' }).expect(200);
-      const after = (await owner().get('/api/projects/proj-2/contract-summary')).body;
+      const before = (await owner().get('/api/projects/proj-1/contract-summary')).body;
+      // Client approval is the client's (separate from the Owner's internal approval).
+      await as['Client'].post('/api/variations/vo-new/transition').send({ status: 'Approved' }).expect(200);
+      const after = (await owner().get('/api/projects/proj-1/contract-summary')).body;
       expect(after.approved_variations_total).toBe(before.approved_variations_total + 10000);
       expect(after.current_contract_value).toBe(after.original_contract_value + after.approved_variations_total);
-      const project = (await owner().get('/api/projects/proj-2')).body;
+      const project = (await owner().get('/api/projects/proj-1')).body;
       expect(project.contract_value).toBe(after.original_contract_value); // original stays separate
     });
 
     it('freezes amounts once approved', async () => {
       expect((await owner().patch('/api/variations/vo-new').send({ client_amount: 99999 })).status).toBe(403);
+    });
+
+    it('never lets the person who raised a variation approve it, and keeps the two approvals separate', async () => {
+      await owner().post('/api/variations').send({ ...variation, id: 'vo-own', variation_number: 'VO-OWN', status: 'Internal Approval' }).expect(201);
+      const self = await owner().post('/api/variations/vo-own/transition').send({ status: 'Client Approval' });
+      expect(self.status).toBe(403);
+      expect(self.body.message).toMatch(/you raised/);
+      await as['Project Manager'].post('/api/variations').send({ ...variation, id: 'vo-sep', variation_number: 'VO-SEP', status: 'Internal Approval' }).expect(201);
+      await owner().post('/api/variations/vo-sep/transition').send({ status: 'Client Approval', note: 'Within budget' }).expect(200);
+      // Staff recording the client's approval need its reference, and can't be the internal approver.
+      expect((await owner().post('/api/variations/vo-sep/transition').send({ status: 'Approved' })).status).toBe(400);
+      const same = await owner().post('/api/variations/vo-sep/transition').send({ status: 'Approved', client_approval_reference: 'Signed VO-SEP 2026-10-06' });
+      expect(same.status).toBe(403);
+      expect(same.body.message).toMatch(/other than the internal approver/);
+      const done = await as['Client'].post('/api/variations/vo-sep/transition').send({ status: 'Approved' }).expect(200);
+      expect(done.body).toMatchObject({ internal_approved_by_id: 'user-owner', client_approved_by_id: 'user-client', created_by_id: 'user-pm' });
+      expect(done.body.history.map((e: Row) => `${e.to}:${e.by_id}`)).toEqual(['Internal Approval:user-pm', 'Client Approval:user-owner', 'Approved:user-client']);
+      expect(done.body.history[1].note).toBe('Within budget');
+    });
+
+    it('hides the internal cost from the client', async () => {
+      const seen = (await as['Client'].get('/api/variations/vo-sep').expect(200)).body;
+      expect(seen.estimated_cost).toBeUndefined();
+      expect(seen.client_amount).toBe(10000);
+      expect((await as['Client'].get('/api/variations').expect(200)).body.every((v: Row) => v.estimated_cost === undefined)).toBe(true);
+      expect((await owner().get('/api/variations/vo-sep').expect(200)).body.estimated_cost).toBe(6000);
+      // Writing it back without the hidden field doesn't erase it.
+      await as['Client'].post('/api/data/sync').send({ upserts: { variations: [{ ...seen, description: 'client note' }] } });
+      expect((await db.pool.query(`SELECT estimated_cost::float AS c FROM variations WHERE id = 'vo-sep'`)).rows[0].c).toBe(6000);
     });
 
     it('lets the client accept a variation on their own project only', async () => {

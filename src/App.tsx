@@ -36,6 +36,8 @@ import { DeliveryView } from './views/DeliveryView';
 import { AutomationView } from './views/AutomationView';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { LoginScreen } from './components/LoginScreen';
+import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
+import { NAVIGATE_EVENT, type NavigateDetail } from './services/navigation';
 import {
   authApi,
   claimCoreCache,
@@ -46,8 +48,20 @@ import {
 import { Sparkles, ShieldCheck, Wifi } from 'lucide-react';
 
 const NWAppContent: React.FC = () => {
-  const { currentUser, coreDataSync } = useNW();
+  const { currentUser, coreDataSync, setSelectedProjectId } = useNW();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+
+  // Screens can open another tab (and a project) without prop drilling.
+  useEffect(() => {
+    const onNavigate = (e: Event) => {
+      const { tab, projectId } = (e as CustomEvent<NavigateDetail>).detail;
+      if (projectId) setSelectedProjectId(projectId);
+      setActiveTab(tab);
+      window.scrollTo?.({ top: 0 });
+    };
+    window.addEventListener(NAVIGATE_EVENT, onNavigate);
+    return () => window.removeEventListener(NAVIGATE_EVENT, onNavigate);
+  }, [setSelectedProjectId]);
   const [showAIAssistant, setShowAIAssistant] = useState(false);
 
   // Render role-specific dashboard when on 'dashboard' tab
@@ -85,6 +99,7 @@ const NWAppContent: React.FC = () => {
         setActiveTab={setActiveTab}
         onOpenAssistant={() => setShowAIAssistant(true)}
       />
+      <SyncErrorBanner />
 
       {/* Main View Router */}
       <main className="flex-1 pb-16">

@@ -15,9 +15,10 @@ import {
   HelpCircle,
   Truck,
 } from 'lucide-react';
+import { KnowledgeArticles } from './knowledge/KnowledgeArticles';
 
 export const KnowledgeBaseView: React.FC = () => {
-  const [activeCategory, setActiveCategory] = useState<string>('tolerances');
+  const [activeCategory, setActiveCategory] = useState<string>('standards');
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-slate-200">
@@ -41,6 +42,7 @@ export const KnowledgeBaseView: React.FC = () => {
       {/* Category Pills */}
       <div className="flex space-x-2 overflow-x-auto pb-1">
         {[
+          { id: 'standards', label: 'NW Production Standards' },
           { id: 'tolerances', label: 'Tolerances & Quality' },
           { id: 'drawings', label: 'Drawing Revisions Policy' },
           { id: 'carpentry', label: 'Carpentry & Joinery Splitting' },
@@ -161,6 +163,8 @@ export const KnowledgeBaseView: React.FC = () => {
             </div>
           </div>
         )}
+
+        {activeCategory === 'standards' && <KnowledgeArticles />}
 
         {activeCategory === 'ai-guardrails' && (
           <div className="space-y-4">

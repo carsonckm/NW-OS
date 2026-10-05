@@ -5,9 +5,12 @@
  * Variations, Claims, Invoices, Payments, Profitability & Cost Leaks, Reports.
  */
 
+import { ClaimActions, ClaimForm, PaymentForm } from './commercial/ClaimsPayments';
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
 import { officialBaseline, useServerFinancials } from '../services/serverFinancials';
+import { EnquiriesPanel, QuotationsPanel, TendersPanel } from './commercial/SalesWorkflow';
+import { AddCostButton, BudgetEditor, InvoicesPanel } from './commercial/CostControl';
 import {
   CommercialQuotation,
   QuotationItem,
@@ -76,13 +79,8 @@ export const CommercialView: React.FC = () => {
     selectedProjectId,
     setSelectedProjectId,
     clientEnquiries,
-    addClientEnquiry,
-    updateClientEnquiry,
     commercialTenders,
-    addCommercialTender,
     commercialQuotations,
-    createNewQuotationVersion,
-    approveCommercialQuotation,
     priceDatabase,
     commercialBaselines,
     projectCostLedger,
@@ -103,7 +101,6 @@ export const CommercialView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<CommercialSubTab>('profitability');
   const [selectedQuotId, setSelectedQuotId] = useState<string>('quot-1');
   const [filterProject, setFilterProject] = useState<string>('all');
-  const [showNewEnquiryModal, setShowNewEnquiryModal] = useState(false);
   const [showNewCostModal, setShowNewCostModal] = useState(false);
   const [aiPriceSuggestion, setAiPriceSuggestion] = useState<string | null>(null);
 
@@ -330,6 +327,11 @@ export const CommercialView: React.FC = () => {
 
       {/* RENDER SUBSECTION */}
       {activeSubTab === 'profitability' && (
+        <div className="flex justify-end">
+          <BudgetEditor projectId={selectedProjectId} />
+        </div>
+      )}
+      {activeSubTab === 'profitability' && (
         <ProfitabilitySection
           baseline={activeProjectBaseline}
           alerts={costLeakAlerts}
@@ -338,28 +340,11 @@ export const CommercialView: React.FC = () => {
         />
       )}
 
-      {activeSubTab === 'enquiries' && (
-        <EnquiriesSection
-          enquiries={clientEnquiries}
-          onAdd={() => setShowNewEnquiryModal(true)}
-          onUpdate={updateClientEnquiry}
-        />
-      )}
+      {activeSubTab === 'enquiries' && <EnquiriesPanel />}
 
-      {activeSubTab === 'tenders' && (
-        <TendersSection tenders={commercialTenders} />
-      )}
+      {activeSubTab === 'tenders' && <TendersPanel />}
 
-      {activeSubTab === 'quotations' && (
-        <QuotationsSection
-          quotations={commercialQuotations}
-          activeQuotId={selectedQuotId}
-          onSelectQuot={setSelectedQuotId}
-          onNewVersion={(id, items) => createNewQuotationVersion(id, items)}
-          onApprove={(id) => approveCommercialQuotation(id)}
-          canSeeMargins={canSeeMargins}
-        />
-      )}
+      {activeSubTab === 'quotations' && <QuotationsPanel />}
 
       {activeSubTab === 'costing' && (
         <InternalCostingSection
@@ -378,6 +363,11 @@ export const CommercialView: React.FC = () => {
       )}
 
       {activeSubTab === 'project-cost' && (
+        <div className="flex justify-end">
+          <AddCostButton projectId={selectedProjectId} />
+        </div>
+      )}
+      {activeSubTab === 'project-cost' && (
         <ProjectCostSection
           costs={projectCostLedger}
           projects={projects}
@@ -394,9 +384,7 @@ export const CommercialView: React.FC = () => {
         <ClaimsSection claims={financialClaims} projectId={selectedProjectId} />
       )}
 
-      {activeSubTab === 'invoices' && (
-        <InvoicesSection invoices={commercialInvoices} projectId={selectedProjectId} />
-      )}
+      {activeSubTab === 'invoices' && <InvoicesPanel projectId={selectedProjectId} />}
 
       {activeSubTab === 'payments' && (
         <PaymentsSection payments={payments} projectId={selectedProjectId} />
@@ -556,252 +544,9 @@ const ProfitabilitySection: React.FC<{
 // =========================================================================
 // SUBSECTION 2: ENQUIRIES
 // =========================================================================
-const EnquiriesSection: React.FC<{
-  enquiries: ClientEnquiry[];
-  onAdd: () => void;
-  onUpdate: (id: string, updates: Partial<ClientEnquiry>) => void;
-}> = ({ enquiries, onAdd, onUpdate }) => {
-  return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-black text-slate-900">Client Enquiries & Scopes</h3>
-          <p className="text-xs text-slate-500">Pipeline from initial customer touchpoint to tender</p>
-        </div>
-        <button
-          onClick={onAdd}
-          className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl shadow-xs"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>New Enquiry</span>
-        </button>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-extrabold border-b border-slate-200">
-            <tr>
-              <th className="py-2.5 px-3">Enquiry No.</th>
-              <th className="py-2.5 px-3">Client</th>
-              <th className="py-2.5 px-3">Project / Scope</th>
-              <th className="py-2.5 px-3">Budget Exp.</th>
-              <th className="py-2.5 px-3">Received / Deadline</th>
-              <th className="py-2.5 px-3">Estimator</th>
-              <th className="py-2.5 px-3">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {enquiries.map((enq) => (
-              <tr key={enq.id} className="hover:bg-slate-50/80">
-                <td className="py-3 px-3 font-bold text-slate-900">{enq.enquiry_number}</td>
-                <td className="py-3 px-3 font-semibold text-slate-700">{enq.client_name}</td>
-                <td className="py-3 px-3 max-w-xs">
-                  <div className="font-bold text-slate-900 line-clamp-1">{enq.project_name}</div>
-                  <div className="text-[11px] text-slate-500 line-clamp-1">{enq.scope_description}</div>
-                </td>
-                <td className="py-3 px-3 font-bold text-slate-900">
-                  {enq.budget_expectation ? `RM ${enq.budget_expectation.toLocaleString()}` : '—'}
-                </td>
-                <td className="py-3 px-3 text-slate-600 text-[11px]">
-                  <div>{enq.received_date}</div>
-                  <div className="text-slate-400">Due: {enq.target_submission_date}</div>
-                </td>
-                <td className="py-3 px-3 font-medium text-slate-600">{enq.assigned_estimator}</td>
-                <td className="py-3 px-3">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                      enq.status === 'Won'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : enq.status === 'Quoted'
-                        ? 'bg-blue-100 text-blue-800'
-                        : 'bg-slate-100 text-slate-800'
-                    }`}
-                  >
-                    {enq.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
 // =========================================================================
 // SUBSECTION 3: TENDERS
 // =========================================================================
-const TendersSection: React.FC<{ tenders: CommercialTender[] }> = ({ tenders }) => {
-  return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-black text-slate-900">Commercial Tenders</h3>
-          <p className="text-xs text-slate-500">Formal tender submissions, bid bonds, and awarded contracts</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {tenders.map((tdr) => (
-          <div key={tdr.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-black text-slate-900">{tdr.tender_number}</span>
-              <span
-                className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                  tdr.status === 'Awarded'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-amber-100 text-amber-800'
-                }`}
-              >
-                {tdr.status}
-              </span>
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-slate-900">{tdr.project_name}</h4>
-              <p className="text-[11px] text-slate-500 mt-0.5">{tdr.client_name}</p>
-            </div>
-            <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-xs">
-              <span className="text-slate-500">Estimated Value:</span>
-              <span className="font-black text-slate-900">RM {tdr.estimated_value.toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between items-center text-[11px] text-slate-500">
-              <span>Deadline:</span>
-              <span className="font-semibold text-slate-700">{tdr.submission_deadline}</span>
-            </div>
-            {tdr.bond_required && (
-              <div className="text-[10px] bg-amber-50 text-amber-800 font-bold px-2 py-1 rounded border border-amber-200">
-                Tender Bond: RM {tdr.bond_amount?.toLocaleString()} Required
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-// =========================================================================
-// SUBSECTION 4: QUOTATIONS
-// =========================================================================
-const QuotationsSection: React.FC<{
-  quotations: CommercialQuotation[];
-  activeQuotId: string;
-  onSelectQuot: (id: string) => void;
-  onNewVersion: (id: string, items: QuotationItem[]) => void;
-  onApprove: (id: string) => void;
-  canSeeMargins: boolean;
-}> = ({ quotations, activeQuotId, onSelectQuot, onNewVersion, onApprove, canSeeMargins }) => {
-  const active = quotations.find((q) => q.id === activeQuotId) || quotations[0];
-
-  return (
-    <div className="space-y-6">
-      {/* Quotation Selector & Version Chain */}
-      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
-            Selected Quotation Master
-          </span>
-          <div className="flex items-center space-x-3 mt-1">
-            <h3 className="text-base font-black text-slate-900">{active?.quotation_number} ({active?.version_code})</h3>
-            <span
-              className={`px-2 py-0.5 text-[10px] font-black rounded-full ${
-                active?.status === 'Accepted'
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-blue-100 text-blue-800'
-              }`}
-            >
-              {active?.status}
-            </span>
-            {active?.low_margin_warning && (
-              <span className="text-[10px] font-black bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full flex items-center">
-                <AlertTriangle className="w-3 h-3 mr-1" /> Low Margin (&lt;25%)
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Client: <span className="font-semibold text-slate-800">{active?.client_name}</span> • Project: {active?.project_name}
-          </p>
-        </div>
-
-        <div className="flex items-center space-x-2">
-          {quotations.map((q) => (
-            <button
-              key={q.id}
-              onClick={() => onSelectQuot(q.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                active?.id === q.id
-                  ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-xs'
-                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              {q.version_code}
-            </button>
-          ))}
-          {active?.status !== 'Accepted' && (
-            <button
-              onClick={() => onApprove(active.id)}
-              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs"
-            >
-              Approve Quotation
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Bill of Quantities / Quotation Items */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-            Quotation Items / Bill of Quantities (Selling View)
-          </h4>
-          <span className="text-xs font-bold text-slate-500">
-            Total Selling Price: <span className="text-slate-950 font-black">RM {active?.total_selling_price.toLocaleString()}</span>
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-extrabold border-b border-slate-200">
-              <tr>
-                <th className="py-2.5 px-3">Item Code</th>
-                <th className="py-2.5 px-3">Description & Specs</th>
-                <th className="py-2.5 px-3">Dimensions</th>
-                <th className="py-2.5 px-3 text-right">Qty</th>
-                <th className="py-2.5 px-3 text-right">Unit Price</th>
-                <th className="py-2.5 px-3 text-right">Total Selling (RM)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {active?.items.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-50/80">
-                  <td className="py-3 px-3 font-bold text-slate-900">{item.item_code}</td>
-                  <td className="py-3 px-3 max-w-sm">
-                    <div className="font-bold text-slate-900">{item.description}</div>
-                    <div className="text-[11px] text-slate-500 line-clamp-1">{item.specification}</div>
-                  </td>
-                  <td className="py-3 px-3 text-[11px] text-slate-600">
-                    {item.length && item.width ? `${item.length}x${item.width}x${item.height || ''}mm` : item.area ? `${item.area} sqft` : '—'}
-                  </td>
-                  <td className="py-3 px-3 text-right font-bold text-slate-900">
-                    {item.quantity} {item.unit}
-                  </td>
-                  <td className="py-3 px-3 text-right font-semibold text-slate-700">
-                    RM {item.unit_selling_price.toLocaleString()}
-                  </td>
-                  <td className="py-3 px-3 text-right font-black text-slate-950">
-                    RM {item.total_selling_price.toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // =========================================================================
 // SUBSECTION 5: INTERNAL COSTING (STRICTLY HIDDEN FROM CLIENTS)
 // =========================================================================
@@ -1054,11 +799,21 @@ const VariationsSection: React.FC<{ variations: any[]; projectId: string }> = ({
 // SUBSECTION 9: CLAIMS (IPC)
 // =========================================================================
 const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims, projectId }) => {
+  const { currentUser } = useNW();
+  const [adding, setAdding] = React.useState(false);
   return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <h3 className="text-sm font-black text-slate-900">
-        Progress Claims & Interim Payment Certificates (IPC)
-      </h3>
+    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4" data-testid="claims-section">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-black text-slate-900">
+          Progress Claims & Interim Payment Certificates (IPC)
+        </h3>
+        {hasPermission(currentUser, 'finance.manage_claims') && (
+          <button type="button" onClick={() => setAdding(true)} className="rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400">
+            New claim
+          </button>
+        )}
+      </div>
+      {adding && <ClaimForm projectId={projectId} onClose={() => setAdding(false)} />}
       <div className="divide-y divide-slate-100">
         {claims.map((claim) => (
           <div key={claim.id} className="py-4 flex justify-between items-center text-xs">
@@ -1068,7 +823,8 @@ const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims,
             </div>
             <div className="text-right">
               <div className="font-black text-slate-950">Net Claim: RM {claim.net_claim_amount?.toLocaleString()}</div>
-              <div className="text-slate-500 text-[11px]">Retention: RM {claim.retention_amount?.toLocaleString()}</div>
+              <div className="text-slate-500 text-[11px]">Retention: RM {claim.retention_amount?.toLocaleString()} · {claim.status}</div>
+              <ClaimActions claim={claim} />
             </div>
           </div>
         ))}
@@ -1078,65 +834,22 @@ const ClaimsSection: React.FC<{ claims: any[]; projectId: string }> = ({ claims,
 };
 
 // =========================================================================
-// SUBSECTION 10: INVOICES
-// =========================================================================
-const InvoicesSection: React.FC<{ invoices: CommercialInvoice[]; projectId: string }> = ({ invoices, projectId }) => {
-  return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <h3 className="text-sm font-black text-slate-900">Commercial Invoices Registry</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-extrabold border-b border-slate-200">
-            <tr>
-              <th className="py-2.5 px-3">Invoice No.</th>
-              <th className="py-2.5 px-3">Type</th>
-              <th className="py-2.5 px-3">Party Name</th>
-              <th className="py-2.5 px-3">Due Date</th>
-              <th className="py-2.5 px-3 text-right">Total Amount</th>
-              <th className="py-2.5 px-3 text-right">Paid</th>
-              <th className="py-2.5 px-3">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {invoices.map((inv) => (
-              <tr key={inv.id} className="hover:bg-slate-50/80">
-                <td className="py-3 px-3 font-bold text-slate-900">{inv.invoice_number}</td>
-                <td className="py-3 px-3 text-slate-600">{inv.invoice_type}</td>
-                <td className="py-3 px-3 font-semibold text-slate-900">{inv.party_name}</td>
-                <td className="py-3 px-3 text-slate-500">{inv.due_date}</td>
-                <td className="py-3 px-3 text-right font-black text-slate-950">
-                  RM {inv.total_amount.toLocaleString()}
-                </td>
-                <td className="py-3 px-3 text-right font-bold text-emerald-700">
-                  RM {inv.paid_amount.toLocaleString()}
-                </td>
-                <td className="py-3 px-3">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                      inv.status === 'Paid'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {inv.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-// =========================================================================
 // SUBSECTION 11: PAYMENTS
 // =========================================================================
 const PaymentsSection: React.FC<{ payments: any[]; projectId: string }> = ({ payments, projectId }) => {
+  const { currentUser } = useNW();
+  const [adding, setAdding] = React.useState(false);
   return (
-    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-      <h3 className="text-sm font-black text-slate-900">Payments & Cash Movements</h3>
+    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4" data-testid="payments-section">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-black text-slate-900">Payments & Cash Movements</h3>
+        {hasPermission(currentUser, 'finance.record_payments') && (
+          <button type="button" onClick={() => setAdding(true)} className="rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400">
+            Record payment
+          </button>
+        )}
+      </div>
+      {adding && <PaymentForm projectId={projectId} onClose={() => setAdding(false)} />}
       <div className="divide-y divide-slate-100">
         {payments.map((p) => (
           <div key={p.id} className="py-3.5 flex justify-between items-center text-xs">

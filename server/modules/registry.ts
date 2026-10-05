@@ -5,6 +5,10 @@ import { installationHooks, siteQcHooks } from './hooks/site';
 import { productionOrderHooks } from './hooks/production';
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
+import { quotationHooks } from './hooks/commercial';
+import { handoverHooks, issueHooks, taskHooks } from './hooks/workflow';
+import { goodsReceivedHooks, invoiceHooks, purchaseOrderHooks } from './hooks/purchasing';
+import { knowledgeHooks } from './hooks/knowledge';
 import type { ModuleDef } from './types';
 
 /**
@@ -48,6 +52,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'issues.view', create: 'issues.create', edit: ['issues.assign', 'issues.resolve', 'issues.escalate'], delete: null },
     required: ['project_id', 'status'],
+    // Resolution waits for linked tasks; resolver from the session.
+    hooks: issueHooks,
   },
   {
     key: 'tasks',
@@ -62,10 +68,12 @@ export const MODULES: ModuleDef[] = [
       { col: 'priority' },
       { col: 'assigned_user_id' },
       { col: 'due_date' },
+      { col: 'issue_id' },
     ],
     scope: { kind: 'project', optional: true },
     perms: { view: 'automation.view', create: 'automation.manage_tasks', edit: ['automation.manage_tasks', 'automation.execute_action'], delete: 'automation.manage_tasks' },
     required: ['status'],
+    hooks: taskHooks,
   },
   {
     key: 'escalations',
@@ -113,6 +121,8 @@ export const MODULES: ModuleDef[] = [
     perms: { view: 'variations.view', create: 'variations.create', edit: ['variations.create', 'variations.approve', 'variations.client_approve'], delete: null },
     required: ['project_id', 'variation_number', 'status'],
     hooks: variationHooks,
+    // Internal cost and notes are not for clients (or anyone without internal costing).
+    hiddenFields: { permission: 'commercial.costing', fields: ['estimated_cost', 'internal_notes', 'cost_breakdown'] },
   },
   {
     key: 'clientChangeRequests',
@@ -286,6 +296,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: ['handover.manage', 'projects.view'], create: 'handover.manage', edit: 'handover.manage', delete: null },
     required: ['project_id'],
+    // Draft -> signed (client name + signature); signed handovers are locked.
+    hooks: handoverHooks,
   },
 
   // ---------------- Commercial ----------------
@@ -324,6 +336,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'client' },
     perms: { view: 'commercial.view', create: 'commercial.edit', edit: 'commercial.edit', delete: null },
     required: ['client_id', 'status'],
+    // Server-priced, versioned, internally approved before submission (hooks/commercial.ts).
+    hooks: quotationHooks,
   },
   {
     key: 'priceDatabase',
@@ -373,6 +387,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'purchasing.view', create: 'purchasing.create', edit: ['purchasing.manage_pos', 'purchasing.create'], delete: null },
     required: ['project_id', 'status'],
+    // Server-computed total; major purchases need approval to issue; received states only from goods received.
+    hooks: purchaseOrderHooks,
   },
   {
     key: 'goodsReceived',
@@ -383,6 +399,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'purchasing.view', create: ['purchasing.manage_pos', 'delivery.receive'], edit: 'purchasing.manage_pos', delete: null },
     required: ['project_id'],
+    // Per-line received / short / damaged / wrong; receiver from the session; never edited afterwards.
+    hooks: goodsReceivedHooks,
   },
   {
     key: 'materialRequests',
@@ -419,6 +437,8 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'finance.view', create: ['finance.edit', 'commercial.edit'], edit: ['finance.edit', 'finance.record_payments'], delete: null },
     required: ['project_id'],
+    // 3-way match; finance approval (not the recorder); approval posts actual cost once.
+    hooks: invoiceHooks,
   },
   {
     key: 'costLeakAlerts',
@@ -459,6 +479,17 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'finance.view', create: 'finance.record_payments', edit: 'finance.record_payments', delete: null },
     required: ['project_id'],
+  },
+  {
+    key: 'knowledge',
+    table: 'knowledge_articles',
+    path: 'knowledge',
+    idField: 'id',
+    columns: [{ col: 'status' }, { col: 'category' }, { col: 'project_id', from: 'source_project_id' }],
+    scope: { kind: 'company' },
+    perms: { view: 'knowledge.view', create: ['knowledge.edit', 'production.propose_methods'], edit: ['knowledge.edit', 'production.propose_methods'], delete: null },
+    required: ['title', 'status'],
+    hooks: knowledgeHooks,
   },
 ];
 

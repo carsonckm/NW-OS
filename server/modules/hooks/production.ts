@@ -58,7 +58,36 @@ export async function checkOrderRevisions(db: PoolClient, order: Row): Promise<R
   return { ...result, valid: true };
 }
 
+/**
+ * A work item's production status is derived from its production order: the order is the
+ * single source of truth. The most recently changed order that isn't cancelled wins (else
+ * the most recent one). Undefined when the item has no production order.
+ */
+export async function derivedProductionStatus(db: PoolClient, workItemId: string): Promise<string | undefined> {
+  const res = await db.query(
+    `SELECT status FROM production_orders WHERE work_item_id = $1
+     ORDER BY (status = 'Cancelled'), updated_at DESC, id DESC LIMIT 1`,
+    [workItemId]
+  );
+  return res.rows[0]?.status;
+}
+
 export const productionOrderHooks: ModuleHooks = {
+  // Keep the work item's production status in step with its order, in the same transaction.
+  async afterWrite(h, _existing, stored) {
+    if (h.mode === 'import' || typeof stored.work_item_id !== 'string') return;
+    if (!_existing) {
+      // A new order becomes the item's current order (the link is the server's, not the browser's).
+      await h.db.query('UPDATE work_items SET production_order_id = $2, updated_at = now() WHERE id = $1', [stored.work_item_id, stored.id]);
+    }
+    const status = await derivedProductionStatus(h.db, stored.work_item_id);
+    if (!status) return;
+    await h.db.query(
+      'UPDATE work_items SET production_status = $2, updated_at = now() WHERE id = $1 AND production_status IS DISTINCT FROM $2',
+      [stored.work_item_id, status]
+    );
+  },
+
   async beforeWrite(h, existing, incoming) {
     // The order must sit on its work item's own project and package.
     const item = (await h.db.query('SELECT project_id, work_package_id FROM work_items WHERE id = $1', [incoming.work_item_id])).rows[0];
