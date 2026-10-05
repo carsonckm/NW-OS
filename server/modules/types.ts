@@ -47,6 +47,8 @@ export interface HookContext {
   defer: (check: () => Promise<void>) => void;
   /** Write another module record in the same transaction (e.g. a rectification issue). */
   insertSystemRecord: (collection: string, record: Row, details: string) => Promise<Row>;
+  /** Collections written in this transaction (reported to commit listeners, e.g. automation). */
+  touched?: Set<string>;
 }
 
 export interface ModuleHooks {

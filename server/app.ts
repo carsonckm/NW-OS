@@ -5,6 +5,7 @@ import { AuthStore } from './auth/store';
 import { createCoreRouter } from './core/routes';
 import { createModuleRouter } from './modules/routes';
 import { createOpsRouter } from './modules/opsRoutes';
+import { AutomationEngine } from './automation/engine';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -41,6 +42,14 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));
   // Phase 4: notifications, automation, WhatsApp gateway.
-  if (pool && store) app.use('/api', createOpsRouter({ pool, store }));
+  if (pool && store) {
+    const engine = new AutomationEngine(pool);
+    app.use('/api', createOpsRouter({ pool, store, engine }));
+    // The scheduler runs on the server, whether or not anyone has the app open. Tests drive
+    // the engine directly instead; AUTOMATION_SCHEDULER=off disables it (e.g. read replicas).
+    if (process.env.AUTOMATION_SCHEDULER !== 'off' && !process.env.VITEST && process.env.NODE_ENV !== 'test') {
+      void engine.start(Number(process.env.AUTOMATION_TICK_MS) || 30_000).catch((err) => console.error('automation scheduler failed to start:', err));
+    }
+  }
   return { store };
 }
