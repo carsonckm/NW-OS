@@ -2,8 +2,8 @@
  * Delegated authority: rules (System Policy + Owner rules) that say who may approve which
  * decisions under which conditions. See docs/phase6-delegated-authority.md.
  *
- * Batch 1 stores, validates and audits rules. Nothing on an approval path reads them yet, so
- * today's approval behaviour is unchanged until the resolver (Batch 2) and routing (Batch 4).
+ * This module stores, validates and audits rules; the authority resolver (authorityResolver.ts)
+ * enforces them on every approval path.
  *
  * Everything that decides who a rule covers is validated here, on the server: the browser can
  * never set a rule's id, code, kind, system key, lock, granting user or permission target.

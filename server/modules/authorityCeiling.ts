@@ -11,8 +11,8 @@
  *
  * There is deliberately no "allowed" outcome for anyone but the Owner: a baseline permission
  * (drawings.review, variations.review, purchasing.view, finance.view, approvals.request) is
- * never approval authority by itself. The resolver (Batch 2) must call this first and may only
- * grant on "rule_required" when a matching rule, scope and every condition also pass.
+ * never approval authority by itself. The resolver (authorityResolver.ts) calls this first and
+ * grants on "rule_required" only when a matching rule, scope and every condition also pass.
  *
  * The project is read from the stored record the decision is about (projectOf), never from
  * the request, and its sensitivity is read from the database here. Anything unknown fails

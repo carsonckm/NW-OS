@@ -40,7 +40,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
   describe('migration and defaults', () => {
     it('records today\'s behaviour as System Policy, created by nobody', async () => {
       const sys = (await db.pool.query(`SELECT code, effect, decision_type, target_role, target_permission, min_value, max_value, granted_by, locked, active FROM delegated_authorities WHERE kind = 'system' ORDER BY code`)).rows;
-      expect(sys.length).toBe(19);
+      // 19 rows from batch 1, plus batch 2 (migration 018): the approval_request type's two
+      // sensitivity rows, SYS-PURCHASE-APPROVED and the two assigned-approver rows.
+      expect(sys.length).toBe(24);
       expect(sys.every((r) => r.granted_by === null && r.active)).toBe(true);
       const by = Object.fromEntries(sys.map((r) => [r.code, r]));
       expect(by['SYS-DRAWING']).toMatchObject({ effect: 'allow', target_permission: 'drawings.approve' });
@@ -52,7 +54,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
       expect(by['SYS-TECHNICAL-PRODMGR']).toMatchObject({ target_role: 'Production Manager' });
       // The sensitivity ceiling rows are locked; the rest of System Policy is not.
       const ceiling = (code: string) => code.startsWith('SYS-STRATEGIC-') || code.startsWith('SYS-SENSITIVE-');
-      expect(sys.filter((r) => ceiling(r.code)).length).toBe(10);
+      expect(sys.filter((r) => ceiling(r.code)).length).toBe(12);
       expect(sys.filter((r) => ceiling(r.code)).every((r) => r.locked)).toBe(true);
       expect(sys.filter((r) => !ceiling(r.code)).every((r) => !r.locked)).toBe(true);
       expect((await db.pool.query(`SELECT count(*)::int AS n FROM delegated_authorities WHERE kind = 'owner'`)).rows[0].n).toBe(0);
@@ -74,7 +76,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
 
     it('lists the decision types with their baseline permissions', async () => {
       const types = (await owner().get('/api/authority/decision-types').expect(200)).body as Row[];
-      expect(Object.fromEntries(types.map((t) => [t.key, t.baseline_permission]))).toEqual({ drawing: 'drawings.review', variation: 'variations.review', purchase: 'purchasing.view', invoice: 'finance.view', ai_proposal: 'approvals.request' });
+      expect(Object.fromEntries(types.map((t) => [t.key, t.baseline_permission]))).toEqual({ drawing: 'drawings.review', variation: 'variations.review', purchase: 'purchasing.view', invoice: 'finance.view', ai_proposal: 'approvals.request', approval_request: 'approvals.view' });
     });
   });
 
@@ -252,18 +254,22 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
   });
 
   describe('existing approval behaviour is unchanged by default', () => {
-    it('an Owner rule does not yet let the PM approve anything (no approval path reads rules in batch 1)', async () => {
-      await owner().post('/api/authority/rules').send(rule({ name: 'PM drawings', decision_type: 'drawing', min_value: undefined, max_value: undefined, max_risk: undefined })).expect(201);
+    it('without a rule the PM approves nothing; a drawing rule (batch 2) lets the PM approve drawings only', async () => {
       // Variation internal approval: still Owner-only.
       await as['Project Manager'].post('/api/variations').send({ id: 'vo-b1', variation_number: 'VO-B1', project_id: 'proj-1', project_name: 'Aurora', title: 'Shelf', description: 'x', reason: 'Client request', requested_by: 'Client', estimated_cost: 100, client_amount: 500, status: 'Identified', created_at: '' }).expect(201);
       await as['Project Manager'].post('/api/variations/vo-b1/transition').send({ status: 'Internal Approval' }).expect(200);
       expect((await as['Production Manager'].post('/api/variations/vo-b1/transition').send({ status: 'Client Approval' })).status).toBe(403);
       expect((await db.pool.query(`SELECT status FROM variations WHERE id = 'vo-b1'`)).rows[0].status).toBe('Internal Approval');
-      // Drawing approval: still drawings.approve only.
+      // Drawing approval: without a rule, drawings.approve only.
       await as['Project Manager'].post('/api/drawings/dwg-1/revisions').send({ id: 'rev-b1', revision: 'Rev 21', title: 'x', file_url: '/r21.pdf', notes: '', drawing_type: 'Client / Designer Drawing' }).expect(201);
       await as['Project Manager'].post('/api/drawings/dwg-1/revisions/rev-b1/status').send({ status: 'Internal Review' }).expect(200);
       expect((await as['Project Manager'].post('/api/drawings/dwg-1/revisions/rev-b1/status').send({ status: 'Approved' })).status).toBe(403);
-      await owner().post('/api/drawings/dwg-1/revisions/rev-b1/status').send({ status: 'Approved' }).expect(200);
+      // With the Owner's drawing rule for the PM on this project, the PM may approve (batch 2);
+      // the drawing rule gives nothing for variations.
+      const r = (await owner().post('/api/authority/rules').send(rule({ name: 'PM drawings', decision_type: 'drawing', min_value: undefined, max_value: undefined, max_risk: undefined })).expect(201)).body;
+      expect((await as['Production Manager'].post('/api/variations/vo-b1/transition').send({ status: 'Client Approval' })).status).toBe(403);
+      await as['Project Manager'].post('/api/drawings/dwg-1/revisions/rev-b1/status').send({ status: 'Approved' }).expect(200);
+      await owner().post(`/api/authority/rules/${r.id}/deactivate`).send({ reason: 'Back to the default for the rest of the suite' }).expect(200);
     });
 
     it('a deactivated user is refused', async () => {
@@ -335,7 +341,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
       await expect(db.pool.query(`UPDATE delegated_authorities SET active = false WHERE id = 'sys-sensitive-drawing'`)).rejects.toThrow(/locked/);
       await expect(db.pool.query(`UPDATE delegated_authorities SET conditions = '{}' WHERE id = 'sys-strategic-drawing'`)).rejects.toThrow(/locked/);
       await expect(db.pool.query(`DELETE FROM delegated_authorities WHERE id = 'sys-sensitive-purchase'`)).rejects.toThrow(/locked/);
-      expect((await db.pool.query(`SELECT count(*)::int AS n FROM delegated_authorities WHERE locked AND active`)).rows[0].n).toBe(10);
+      expect((await db.pool.query(`SELECT count(*)::int AS n FROM delegated_authorities WHERE locked AND active`)).rows[0].n).toBe(12);
       // Which types Sensitive protects is not editable through any API.
       const types = (await owner().get('/api/authority/decision-types').expect(200)).body as Row[];
       expect(types.every((t) => t.sensitive_protected === true)).toBe(true);
@@ -443,6 +449,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
     const BASELINE: Record<string, string> = { drawing: 'drawings.review', variation: 'variations.review', purchase: 'purchasing.view', invoice: 'finance.view', ai_proposal: 'approvals.request' };
     /** A signed-in internal user holding only this one permission (not a real role). */
     const onlyBaseline = (perm: string) => ({ user: { id: 'user-x', name: 'X', role: 'Project Manager' }, can: (p: string) => p === perm }) as unknown as AccessContext;
+    // No Owner delegation in force: the baseline permission is all these users have.
+    beforeAll(async () => {
+      for (const r of (await owner().get('/api/authority/rules?kind=owner&active=true').expect(200)).body as Row[]) {
+        if (r.effect === 'allow') await owner().post(`/api/authority/rules/${r.id}/deactivate`).send({ reason: 'Baseline-only checks' }).expect(200);
+      }
+    });
 
     it('for every decision type, the baseline permission alone never yields approval', async () => {
       for (const t of TYPES) {
@@ -513,9 +525,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
       expect(Object.fromEntries(sys.map((r) => [r.code, r.conditions]))).toMatchObject({
         'SYS-PURCHASE-ACCOUNTANT': { approval_types: ['Major Purchase', 'Major Cost'] },
         'SYS-TECHNICAL-PRODMGR': { approval_types: ['Technical Change', 'NW Production Drawing Approval'] },
-        'SYS-INVOICE': { match_status: ['Matched'] },
-        'SYS-INVOICE-MISMATCH': { match_status_not: ['Matched'] },
-        'SYS-AI-PROPOSAL': { asker_only: true },
+        'SYS-INVOICE': { match_status: ['Matched', 'Not applicable'], no_self_approval: true },
+        'SYS-INVOICE-MISMATCH': { match_status_not: ['Matched', 'Not applicable'] },
+        'SYS-AI-PROPOSAL': { assigned_approver: true },
       });
     });
   });

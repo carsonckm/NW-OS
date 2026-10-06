@@ -3,25 +3,22 @@ import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { PoolClient } from '../../db/pool';
 import type { ModuleHooks, Row } from '../types';
+import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
 
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
 const qty = (n: unknown) => Math.max(0, Number(n) || 0);
 
-/** POs at or above this value need an approved Major Purchase approval (or the Owner) to issue. */
+/**
+ * POs at or above this value need an approved Major Purchase approval (or the Owner) to issue.
+ * Enforced by the authority resolver through System Policy SYS-PURCHASE-MAJOR, whose threshold
+ * a test keeps equal to this constant.
+ */
 export const MAJOR_PURCHASE_THRESHOLD = 20000;
 /** PO statuses only goods-received records set. */
 const RECEIVED_STATES = new Set(['Partially Received', 'Goods Received']);
 
 function poLines(po: Row): Row[] {
   return (Array.isArray(po.items) ? po.items : []) as Row[];
-}
-
-async function majorPurchaseApproved(db: PoolClient, poId: string) {
-  const res = await db.query(
-    `SELECT 1 FROM approvals WHERE related_entity_id = $1 AND approval_type = 'Major Purchase' AND decision = 'Approved' LIMIT 1`,
-    [poId]
-  );
-  return Boolean(res.rowCount);
 }
 
 /** Quantity received so far per PO line, across every goods-received record for the PO. */
@@ -51,13 +48,19 @@ export const purchaseOrderHooks: ModuleHooks = {
       if (RECEIVED_STATES.has(to)) {
         throw new ForbiddenError('A PO is marked received by recording goods received against it');
       }
-      if (to === 'Issued' && Number(next.total_amount) >= MAJOR_PURCHASE_THRESHOLD) {
-        const ok = h.ctx.user.role === 'Owner / CEO' || (existing && (await majorPurchaseApproved(h.db, String(existing.id))));
-        if (!ok) {
-          throw new ForbiddenError(
-            `A purchase order of RM ${MAJOR_PURCHASE_THRESHOLD.toLocaleString()} or more needs an approved Major Purchase approval (or the Owner) before it is issued`
-          );
-        }
+      // Issuing a PO is a purchase decision: the authority resolver decides (System Policy:
+      // below the threshold Purchasing issues; at or above it a Major Purchase approval or the Owner).
+      let authority: AuthorityResolution | undefined;
+      if (to === 'Issued') {
+        authority = await requireAuthority(
+          h.db,
+          h.ctx,
+          { resource: { kind: 'purchase_order', id: String(next.id) }, pending: { projectId: String(next.project_id), value: Number(next.total_amount) } },
+          (r) =>
+            Number(next.total_amount) >= MAJOR_PURCHASE_THRESHOLD && (r.reasonCode === 'OWNER_REQUIRED' || r.reasonCode === 'NO_MATCHING_AUTHORITY' || r.reasonCode === 'VALUE_LIMIT_EXCEEDED')
+              ? `A purchase order of RM ${MAJOR_PURCHASE_THRESHOLD.toLocaleString()} or more needs an approved Major Purchase approval (or the Owner) before it is issued`
+              : `This purchase order cannot be issued: ${r.reason}`
+        );
       }
       if (existing && ['Goods Received', 'Completed', 'Cancelled'].includes(from!) && to !== 'Completed') {
         throw new ForbiddenError(`A ${from} purchase order cannot move back to ${to}`);
@@ -69,7 +72,7 @@ export const purchaseOrderHooks: ModuleHooks = {
         entityId: String(next.id),
         projectId: (next.project_id as string) ?? null,
         before: from ? { status: from } : undefined,
-        after: { status: to, total_amount: next.total_amount },
+        after: { status: to, total_amount: next.total_amount, ...(authority ? { authority: authorityAudit(authority) } : {}) },
       });
     }
     return next;
@@ -184,7 +187,7 @@ export const invoiceHooks: ModuleHooks = {
       tax_amount: money(incoming.tax_amount),
       total_amount: money(Number(incoming.amount_before_tax) + Number(incoming.tax_amount || 0)),
     };
-    for (const f of ['recorded_by_id', 'approved_by_id', 'approved_by_name', 'approved_at', 'ledger_cost_id']) next[f] = existing?.[f];
+    for (const f of ['recorded_by_id', 'approved_by_id', 'approved_by_name', 'approved_at', 'ledger_cost_id', 'approval_authority']) next[f] = existing?.[f];
     if (!existing) {
       next.recorded_by_id = h.ctx.user.id;
       next.recorded_by_name = h.ctx.user.name;
@@ -207,13 +210,21 @@ export const invoiceHooks: ModuleHooks = {
     }
     const approving = next.status === 'Approved' && existing?.status !== 'Approved' && !['Partially Paid', 'Paid'].includes(String(existing?.status));
     if (approving) {
-      if (!h.ctx.can('finance.edit')) throw new ForbiddenError('Missing permission: finance.edit (approve an invoice)');
-      if (existing?.recorded_by_id === h.ctx.user.id && h.ctx.user.role !== 'Owner / CEO') {
-        throw new ForbiddenError('You cannot approve an invoice you recorded');
-      }
-      if (next.match_status && next.match_status !== 'Matched' && h.ctx.user.role !== 'Owner / CEO') {
-        throw new ForbiddenError(`This invoice does not match (${String(next.match_status)}); only the Owner can approve it`);
-      }
+      // An invoice approval is an invoice decision: the authority resolver decides (System Policy:
+      // finance.edit, never the recorder; anything that does not match its PO needs the Owner).
+      const matchStatus = next.match_status ? String(next.match_status) : 'Not applicable';
+      const authority = await requireAuthority(
+        h.db,
+        h.ctx,
+        { resource: { kind: 'invoice', id: String(existing!.id) }, pending: { projectId: String(next.project_id), value: Number(next.amount_before_tax), matchStatus } },
+        (r) =>
+          r.reasonCode === 'OWNER_REQUIRED' && matchStatus !== 'Matched' && matchStatus !== 'Not applicable'
+            ? `This invoice does not match (${matchStatus}); only the Owner can approve it`
+            : r.reasonCode === 'NO_MATCHING_AUTHORITY' || r.reasonCode === 'INSUFFICIENT_PERMISSION'
+              ? `Missing permission: finance.edit (approve an invoice). ${r.reason}`
+              : r.reason
+      );
+      next.approval_authority = authorityAudit(authority);
       next.approved_by_id = h.ctx.user.id;
       next.approved_by_name = h.ctx.user.name;
       next.approved_at = new Date().toISOString();
@@ -249,7 +260,7 @@ export const invoiceHooks: ModuleHooks = {
       entityType: 'commercialInvoices',
       entityId: String(stored.id),
       projectId: (stored.project_id as string) ?? null,
-      after: { amount: stored.amount_before_tax, match_status: stored.match_status, ledger_cost_id: costId },
+      after: { amount: stored.amount_before_tax, match_status: stored.match_status, ledger_cost_id: costId, authority: stored.approval_authority },
     });
   },
 };

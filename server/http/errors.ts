@@ -17,7 +17,15 @@ const PG_ERRORS: Record<string, [number, string]> = {
 
 export function sendError(res: Response, err: unknown) {
   if (err instanceof NotFoundError) return res.status(404).json({ error: 'not_found', message: err.message });
-  if (err instanceof ForbiddenError) return res.status(403).json({ error: 'forbidden', message: explainRefusal(err.message) });
+  if (err instanceof ForbiddenError) {
+    // A refused approval carries the authority resolver's stable reason code.
+    const resolution = (err as ForbiddenError & { resolution?: { reasonCode: string; requiresOwner: boolean } }).resolution;
+    return res.status(403).json({
+      error: 'forbidden',
+      message: explainRefusal(err.message),
+      ...(resolution ? { reason_code: resolution.reasonCode, requires_owner: resolution.requiresOwner } : {}),
+    });
+  }
   if (err instanceof ValidationError) {
     return res.status(400).json({ error: 'validation_error', message: err.message, details: err.details });
   }

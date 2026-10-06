@@ -1,0 +1,16 @@
+Phase 6 Batch 2 acceptance run (2026-10-06, dev server on PostgreSQL nwos_dev, real dev accounts)
+node scripts/acceptance/phase6.cjs
+Step 2 reports OUT_OF_SCOPE because earlier acceptance runs left (deactivated) PM rules for their own projects; the resolver explains the closest miss. On a database with no PM rule it reports NO_MATCHING_AUTHORITY.
+
+1 [Normal project set up] proj-p6-muws05dy sensitivity Normal
+2 [PM without a rule] HTTP 403 OUT_OF_SCOPE; revision Internal Review
+3 [Owner delegates] DA-0003: Project Manager may approve drawing approval on P6 Lobby muws05dy.
+4 [Normal: PM approves] HTTP 200; revision Approved; audit ALLOWED DA-0003 (Normal)
+5 [Sensitive: PM refused, Owner approves] PM HTTP 403 SENSITIVITY_BLOCKED (requires_owner true); Owner: revision Approved, audit ALLOWED - (Sensitive)
+6 [Strategic: PM refused, Owner approves] PM HTTP 403 SENSITIVITY_BLOCKED (requires_owner true); Owner: revision Approved, audit ALLOWED - (Strategic)
+7 [Back to Normal] PM lowering: HTTP 403; Owner lowered; PM approves HTTP 200, audit ALLOWED DA-0003 (Normal)
+8 [Sensitivity audit trail] Normal->Sensitive by Dato’ Nicholas Wong (Acceptance: Sensitive); Sensitive->Strategic by Dato’ Nicholas Wong (Acceptance: Strategic); Strategic->Normal by Dato’ Nicholas Wong (Acceptance: board review finished)
+9 [Purchases unchanged] RM 5,000 issued: HTTP 200 (SYS-PURCHASE-STANDARD); RM 25,000: HTTP 403 OWNER_REQUIRED; Accountant approved apr-p6-muws05dy (SYS-PURCHASE-ACCOUNTANT); then issued HTTP 200 (SYS-PURCHASE-APPROVED)
+10 [Invoice self-approval] HTTP 403 SELF_APPROVAL_BLOCKED: You cannot approve an invoice you recorded
+11 [Rule history] authority.rule.create, authority.rule.deactivate
+API refusals / page errors (the refusals above are expected): {"owner-ceo":[],"project-manager":["POST /api/drawings/dwg-muws05dy/revisions/rev-muws05dy-1/status 403","POST /api/drawings/dwg-muws05dy/revisions/rev-muws05dy-2/status 403","POST /api/drawings/dwg-muws05dy/revisions/rev-muws05dy-3/status 403","PUT /api/projects/proj-p6-muws05dy/sensitivity 403"],"purchasing":["PATCH /api/purchase-orders/po-p6-muws05dy-25000 403"],"accountant":["PATCH /api/invoices/inv-p6-muws05dy 403"]}
