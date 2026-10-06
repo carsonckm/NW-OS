@@ -3,6 +3,7 @@ import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { Pool, PoolClient } from '../../db/pool';
 import type { ModuleHooks, Row } from '../types';
+import { syncWorkItem } from '../workItemStatus';
 
 const FAIL = 'Fail / Rectification Required';
 
@@ -28,6 +29,12 @@ async function checkWorkItemOnProject(db: PoolClient, workItemId: unknown, proje
  * cannot be completed while the item's latest site QC is a failure.
  */
 export const installationHooks: ModuleHooks = {
+  // The work item's installation (and overall) status follows its job.
+  async afterWrite(h, existing, stored) {
+    if (h.mode === 'import') return;
+    for (const id of new Set([stored.work_item_id, existing?.work_item_id])) if (typeof id === 'string') await syncWorkItem(h.db, id);
+  },
+
   async beforeWrite(h, existing, incoming) {
     const item = await checkWorkItemOnProject(h.db, incoming.work_item_id, incoming.project_id);
     const values: Row = { ...incoming, work_package_id: incoming.work_package_id ?? item.work_package_id };
@@ -58,6 +65,11 @@ export const installationHooks: ModuleHooks = {
 
 /** A failed site QC always links a rectification issue (created here when missing). */
 export const siteQcHooks: ModuleHooks = {
+  // A failed inspection puts the item into rectification; a pass after it clears that.
+  async afterWrite(h, _existing, stored) {
+    if (h.mode !== 'import' && typeof stored.work_item_id === 'string') await syncWorkItem(h.db, stored.work_item_id);
+  },
+
   async beforeWrite(h, existing, incoming) {
     await checkWorkItemOnProject(h.db, incoming.work_item_id, incoming.project_id);
     const values: Row = { ...incoming };

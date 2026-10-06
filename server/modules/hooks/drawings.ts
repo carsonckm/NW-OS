@@ -143,6 +143,7 @@ function checkClientTransition(h: HookContext, revId: string, from: string, to: 
 /** Upserts one revision; returns its id when this write approved a client revision. */
 async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' | 'nw_production', sent: Row): Promise<string | undefined> {
   if (typeof sent.id !== 'string' || !sent.id) throw new ValidationError('Drawing revision needs an id');
+  h.touched?.add('drawings');
   const rev = (h.mode === 'import' ? sent : withoutStamps(sent)) as Row & { id: string };
   const isClient = kind === 'client';
   const hash = contentHash(isClient ? CLIENT_IMMUTABLE : NW_IMMUTABLE, rev);

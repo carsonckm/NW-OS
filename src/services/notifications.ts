@@ -19,6 +19,10 @@ export interface ServerNotification {
   entity_id: string | null;
   is_read: boolean;
   created_at: string;
+  group?: 'action' | 'approval' | 'warning' | 'escalation' | 'information';
+  source?: string | null;
+  requires_ack?: boolean;
+  acknowledged_at?: string | null;
 }
 
 export function useServerNotifications() {
@@ -51,5 +55,10 @@ export function useServerNotifications() {
     await api.post('/notifications/read-all', {}).catch(() => undefined);
   };
 
-  return { enabled, items, markRead, markAllRead, reload: load };
+  const acknowledge = async (id: string) => {
+    setItems((list) => list.map((n) => (n.id === id ? { ...n, is_read: true, acknowledged_at: new Date().toISOString() } : n)));
+    await api.post(`/notifications/${encodeURIComponent(id)}/acknowledge`, {}).catch(() => undefined);
+  };
+
+  return { enabled, items, markRead, markAllRead, acknowledge, reload: load };
 }

@@ -3,7 +3,8 @@
  * Full audit trail and exception management for site, drawing, and manufacturing conflicts.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useFocus } from '../services/navigation';
 import { useNW } from '../context/NWContext';
 import { Issue } from '../types';
 import {
@@ -29,6 +30,11 @@ export const IssuesView: React.FC = () => {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
+  const focus = useFocus(['issue']);
+  useEffect(() => {
+    const issue = focus && issues.find((i) => i.id === focus.id);
+    if (issue) setSelectedIssue(issue);
+  }, [focus, issues]);
 
   const filteredIssues = issues.filter((iss) => {
     const matchesSearch =

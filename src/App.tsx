@@ -35,8 +35,12 @@ import { ProductionView } from './views/ProductionView';
 import { DeliveryView } from './views/DeliveryView';
 import { AutomationView } from './views/AutomationView';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
+import { OperatingAssistantView } from './views/OperatingAssistantView';
+import { CalendarView } from './views/CalendarView';
+import { hasPermission } from './utils/permissions';
 import { LoginScreen } from './components/LoginScreen';
 import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
+import { NotificationCenter } from './views/notifications/NotificationCenter';
 import { NAVIGATE_EVENT, type NavigateDetail } from './services/navigation';
 import {
   authApi,
@@ -108,7 +112,7 @@ const NWAppContent: React.FC = () => {
         {activeTab === 'delivery' && <DeliveryView />}
         {activeTab === 'automation' && <AutomationView />}
         {activeTab === 'commercial' && <CommercialView />}
-        {activeTab === 'ai-assistant' && <AIAssistantView />}
+        {activeTab === 'ai-assistant' && (coreDataSync.mode === 'database' ? <OperatingAssistantView /> : <AIAssistantView />)}
         {activeTab === 'whatsapp-gateway' && <WhatsAppGatewayView />}
         {activeTab === 'approvals' && <ApprovalsView />}
         {activeTab === 'purchasing' && <PurchasingView />}
@@ -132,11 +136,13 @@ const NWAppContent: React.FC = () => {
         {activeTab === 'issues' && <IssuesView />}
         {activeTab === 'variations' && <VariationsView />}
         {activeTab === 'knowledge' && <KnowledgeBaseView />}
+        {activeTab === 'notifications' && <NotificationCenter />}
+        {activeTab === 'calendar' && coreDataSync.mode === 'database' && <CalendarView />}
         {activeTab === 'audit-logs' && <AuditArchitectureView />}
       </main>
 
-      {/* Floating AI Intelligence Button */}
-      <div className="fixed bottom-5 right-5 z-40">
+      {/* Floating AI Intelligence Button (live: only for users with the assistant permission) */}
+      <div className={`fixed bottom-5 right-5 z-40 ${coreDataSync.mode === 'database' && !hasPermission(currentUser, 'ai.assistant') ? 'hidden' : ''}`}>
         <button
           onClick={() => setShowAIAssistant(true)}
           className="group flex items-center space-x-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 px-4 py-3 rounded-full shadow-xl transition-all duration-200 hover:scale-105 active:scale-95 focus:outline-none"

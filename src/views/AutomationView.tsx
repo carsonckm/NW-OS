@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useFocus } from '../services/navigation';
 import {
   Zap,
   LayoutDashboard,
@@ -59,6 +60,11 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   } = useNW();
 
   const [activeTab, setActiveTab] = useState<AutomationSubTab>(initialSubTab);
+  // A deep link to a task opens My Tasks (the task itself is selected there).
+  const taskFocus = useFocus(['task']);
+  useEffect(() => {
+    if (taskFocus) setActiveTab('my-tasks');
+  }, [taskFocus]);
 
   // Badge calculations
   const todayStr = new Date().toISOString().split('T')[0];

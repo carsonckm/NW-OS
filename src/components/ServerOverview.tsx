@@ -11,6 +11,7 @@ import { actionErrorOf } from '../services/records';
 import { navigateTo } from '../services/navigation';
 import { FormError } from './ui/FormError';
 import { Pill, rm } from './ui/forms';
+import { ProjectHealth } from './ProjectHealth';
 
 export interface ExceptionItem {
   id: string;
@@ -157,6 +158,7 @@ export const ProjectServerOverview: React.FC<{ projectId: string }> = ({ project
         {data && <span className="text-[10px] text-slate-500">as of {new Date(data.computed_at).toLocaleTimeString()}</span>}
       </div>
       <FormError error={error} />
+      <ProjectHealth projectId={projectId} />
       {data && (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">

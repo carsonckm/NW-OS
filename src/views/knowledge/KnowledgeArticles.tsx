@@ -7,26 +7,48 @@ import React, { useState } from 'react';
 import { BookMarked, Plus } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
 import { KnowledgeCategory, NWProductionKnowledge } from '../../types';
-import { useRecords } from '../../services/records';
+import { actionErrorOf, useRecords } from '../../services/records';
+import { api } from '../../services/coreApi';
 import { hasPermission } from '../../utils/permissions';
 import { FormError } from '../../components/ui/FormError';
 import { Button, Field, Input, Modal, Pill, Select, TextArea, newId } from '../../components/ui/forms';
 
-const CATEGORIES: KnowledgeCategory[] = ['Carpentry', 'Joinery', 'Materials', 'Joining Methods', 'Transport', 'Installation', 'Common Mistakes', 'Hardware Preferences', 'Production Limitations', 'Standard Dimensions', 'Practical Solutions'];
+const CATEGORIES: KnowledgeCategory[] = ['Production', 'Installation', 'Materials', 'Hardware', 'Drawings', 'QC', 'Site Problems', 'Suppliers', 'Contractors', 'Commercial', 'Lessons Learned'];
 const TONE = { Draft: 'warn', Review: 'info', Approved: 'good', Archived: 'neutral' } as const;
 type Article = NWProductionKnowledge & { created_by_id?: string; approved_at?: string };
 
-const ArticleForm: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const ArticleForm: React.FC<{ onClose: () => void; revising?: Article }> = ({ onClose, revising }) => {
   const records = useRecords();
-  const [f, setF] = useState({ title: '', category: 'Joinery' as KnowledgeCategory, description: '', reason: '', example: '' });
+  const [f, setF] = useState({
+    title: revising?.title ?? '',
+    category: (revising && CATEGORIES.includes(revising.category) ? revising.category : 'Production') as KnowledgeCategory,
+    problem: revising?.problem ?? revising?.description ?? '',
+    solution: revising?.solution ?? '',
+    procedure: revising?.procedure ?? '',
+    project_type: revising?.project_type ?? '',
+    tags: (revising?.tags ?? []).join(', '),
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const save = async (status: 'Draft' | 'Review') => {
-    if (!f.title.trim() || !f.description.trim()) return setError('Give the standard a title and describe it.');
+    if (!f.title.trim() || !f.problem.trim()) return setError('Give the article a title and describe the problem.');
     setBusy(true);
     setError(null);
     try {
-      await records.create<NWProductionKnowledge>('knowledge', { id: newId('kb'), ...f, created_by: '', status, created_at: new Date().toISOString() });
+      const tags = f.tags.split(',').map((t) => t.trim()).filter(Boolean);
+      await records.create<NWProductionKnowledge>('knowledge', {
+        id: newId('kb'),
+        ...f,
+        tags,
+        description: '',
+        reason: '',
+        example: '',
+        photos: [],
+        ...(revising ? { supersedes_id: revising.id } : {}),
+        created_by: '',
+        status,
+        created_at: new Date().toISOString(),
+      });
       onClose();
     } catch (err) {
       setError((err as Error).message);
@@ -36,8 +58,8 @@ const ArticleForm: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
   return (
     <Modal
-      title="Propose a production standard"
-      subtitle="It is published only after a knowledge editor approves it."
+      title={revising ? `New revision of “${revising.title}”` : 'Propose a knowledge article'}
+      subtitle={revising ? `Revision ${(revising.revision ?? 1) + 1}. The current revision stays official until this one is approved.` : 'It is official only after a knowledge editor approves it.'}
       onClose={onClose}
       footer={
         <>
@@ -63,15 +85,23 @@ const ArticleForm: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           </Select>
         </Field>
       </div>
-      <Field label="Standard">
-        <TextArea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} aria-label="Standard description" />
+      <Field label="Problem">
+        <TextArea rows={2} value={f.problem} onChange={(e) => setF({ ...f, problem: e.target.value })} aria-label="Problem" />
       </Field>
-      <Field label="Why">
-        <TextArea rows={2} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} />
+      <Field label="Solution">
+        <TextArea rows={2} value={f.solution} onChange={(e) => setF({ ...f, solution: e.target.value })} aria-label="Solution" />
       </Field>
-      <Field label="Example">
-        <TextArea rows={2} value={f.example} onChange={(e) => setF({ ...f, example: e.target.value })} />
+      <Field label="Procedure">
+        <TextArea rows={3} value={f.procedure} onChange={(e) => setF({ ...f, procedure: e.target.value })} aria-label="Procedure" />
       </Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Project type">
+          <Input value={f.project_type} onChange={(e) => setF({ ...f, project_type: e.target.value })} placeholder="e.g. Retail, Office, Residential" />
+        </Field>
+        <Field label="Tags (comma separated)">
+          <Input value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} aria-label="Tags" />
+        </Field>
+      </div>
       <FormError error={error} onDismiss={() => setError(null)} />
     </Modal>
   );
@@ -84,6 +114,21 @@ export const KnowledgeArticles: React.FC = () => {
   const canPublish = hasPermission(currentUser, 'knowledge.edit');
   const [filter, setFilter] = useState<'all' | 'Approved' | 'pending' | 'Archived'>('all');
   const [adding, setAdding] = useState(false);
+  const [revising, setRevising] = useState<Article | null>(null);
+  const { coreDataSync } = useNW();
+  const live = coreDataSync.mode === 'database';
+  const markUsed = async (k: Article) => {
+    setBusy(k.id);
+    setError(null);
+    try {
+      await api.post(`/knowledge/${encodeURIComponent(k.id)}/usage`, { note: 'Applied' });
+      await coreDataSync.reloadFromDatabase();
+    } catch (err) {
+      setError(`${k.title}: ${actionErrorOf(err).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const articles = (knowledge as Article[]).filter((k) =>
@@ -105,7 +150,7 @@ export const KnowledgeArticles: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <BookMarked className="h-4 w-4 text-amber-600" />
-          <h3 className="text-sm font-black text-slate-900">NW production standards</h3>
+          <h3 className="text-sm font-black text-slate-900">NW knowledge base</h3>
         </div>
         <div className="flex items-center gap-2">
           <Select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)} className="w-auto" aria-label="Filter standards">
@@ -116,7 +161,7 @@ export const KnowledgeArticles: React.FC = () => {
           </Select>
           {canPropose && (
             <Button tone="primary" onClick={() => setAdding(true)}>
-              <Plus className="h-3.5 w-3.5" /> Propose standard
+              <Plus className="h-3.5 w-3.5" /> Propose article
             </Button>
           )}
         </div>
@@ -132,11 +177,27 @@ export const KnowledgeArticles: React.FC = () => {
                   <Pill tone={TONE[k.status]}>{k.status === 'Approved' ? 'Published' : k.status}</Pill>
                   <span className="text-xs font-bold text-slate-900">{k.title}</span>
                   <span className="text-[10px] text-slate-500">{k.category}</span>
+                  <span className="text-[10px] text-slate-500">rev {k.revision ?? 1}</span>
+                  {(k.tags ?? []).map((t) => (
+                    <Pill key={t}>{t}</Pill>
+                  ))}
                 </div>
-                <p className="mt-0.5 text-[11px] text-slate-600">{k.description}</p>
+                {k.problem ? (
+                  <div className="mt-0.5 space-y-0.5 text-[11px] text-slate-600">
+                    <p><strong>Problem:</strong> {k.problem}</p>
+                    {k.solution && <p><strong>Solution:</strong> {k.solution}</p>}
+                    {k.procedure && <p className="whitespace-pre-line"><strong>Procedure:</strong> {k.procedure}</p>}
+                  </div>
+                ) : (
+                  <p className="mt-0.5 text-[11px] text-slate-600">{k.description}</p>
+                )}
                 <p className="mt-0.5 text-[10px] text-slate-400">
                   By {k.created_by || 'unknown'}
                   {k.approved_by ? ` · approved by ${k.approved_by}${k.approved_at ? ` on ${k.approved_at.slice(0, 10)}` : ''}` : ''}
+                  {k.project_type ? ` · ${k.project_type}` : ''}
+                  {live && k.status === 'Approved' ? ` · used ${k.usage_count ?? 0}×` : ''}
+                  {k.supersedes_id ? ` · revises ${k.supersedes_id}` : ''}
+                  {k.superseded_by ? ` · superseded by ${k.superseded_by}` : ''}
                 </p>
               </div>
               <div className="flex gap-1.5">
@@ -150,6 +211,14 @@ export const KnowledgeArticles: React.FC = () => {
                     Approve & publish
                   </Button>
                 )}
+                {k.status === 'Approved' && live && (
+                  <Button busy={busy === k.id} onClick={() => markUsed(k)}>
+                    Mark as used
+                  </Button>
+                )}
+                {k.status === 'Approved' && canPropose && (
+                  <Button onClick={() => setRevising(k)}>Revise</Button>
+                )}
                 {k.status === 'Approved' && canPublish && (
                   <Button tone="danger" busy={busy === k.id} onClick={() => move(k, 'Archived')}>
                     Archive
@@ -161,6 +230,7 @@ export const KnowledgeArticles: React.FC = () => {
         ))}
       </ul>
       {adding && <ArticleForm onClose={() => setAdding(false)} />}
+      {revising && <ArticleForm revising={revising} onClose={() => setRevising(null)} />}
     </div>
   );
 };

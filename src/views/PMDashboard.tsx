@@ -24,6 +24,7 @@ import { QCModal } from '../components/QCModal';
 import { DeliveryModal } from '../components/DeliveryModal';
 import { IssueModal } from '../components/IssueModal';
 import { ProjectCommandCenter } from '../components/ProjectCommandCenter';
+import { DailyBriefing } from '../components/DailyBriefing';
 
 interface PMDashboardProps {
   onNavigate: (tab: string) => void;
@@ -88,6 +89,8 @@ export const PMDashboard: React.FC<PMDashboardProps> = ({ onNavigate }) => {
             </span>
           </div>
         </div>
+
+        <DailyBriefing />
 
         <ProjectCommandCenter
           projectId={selectedProject.id}

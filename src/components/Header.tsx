@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { useServerNotifications, type ServerNotification } from '../services/notifications';
 import { navigateTo } from '../services/navigation';
+import { openNotification } from '../views/notifications/NotificationCenter';
 import { UserRole } from '../types';
 import { hasPermission } from '../utils/permissions';
 import {
@@ -62,6 +63,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
     markNotificationRead,
     clearAllNotifications,
     resetToDemoData,
+    coreDataSync,
   } = useNW();
 
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
@@ -232,6 +234,17 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
                     >
                       Mark all read
                     </button>
+                    {server.enabled && (
+                      <button
+                        onClick={() => {
+                          setShowNotifDropdown(false);
+                          navigateTo('notifications');
+                        }}
+                        className="text-[11px] text-amber-700 hover:text-amber-800 font-bold"
+                      >
+                        Open all
+                      </button>
+                    )}
                   </div>
 
                   <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
@@ -244,8 +257,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
                           onClick={() => {
                             if (server.enabled) {
                               void server.markRead(notif.id);
-                              const n = notif as unknown as ServerNotification;
-                              if (n.link_tab) navigateTo(n.link_tab, n.project_id ?? undefined);
+                              openNotification(notif as unknown as ServerNotification);
                             } else {
                               markNotificationRead(notif.id);
                               if (notif.link_type === 'issue') setActiveTab('issues');
@@ -428,7 +440,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
             {
               id: 'ai-assistant',
               label: 'AI Assistant',
-              show: true,
+              show: coreDataSync.mode !== 'database' || hasPermission(currentUser, 'ai.assistant'),
               badge: pmInbox.filter((i) => i.status === 'pending').length > 0,
               badgeCount: pmInbox.filter((i) => i.status === 'pending').length,
             },
@@ -519,6 +531,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
               id: 'contractors',
               label: 'Contractors',
               show: hasPermission(currentUser, 'contractors.view'),
+            },
+            {
+              id: 'calendar',
+              label: 'Schedule',
+              show: coreDataSync.mode === 'database' && currentUser.role !== 'Client',
             },
             {
               id: 'knowledge',

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { ForbiddenError } from '../auth/access';
 import { attachUser, csrfGuard, loadAccess, requireUser } from '../auth/middleware';
@@ -14,7 +15,14 @@ import { writeAudit } from '../audit';
 import { MODULES } from './registry';
 import { contractSummary, profitability } from './reports';
 import { exceptionsFor, projectOverview } from './exceptions';
+import { portfolioRisk, projectRiskFor } from './risk';
+import { dailyBriefing } from './briefing';
+import { ownerCenter, ownerDependency } from './ownerCenter';
 import { findRecord } from './store';
+import { Assistant } from './assistant';
+import { recurringFor } from './recurring';
+import { calendarFor } from './calendar';
+import { AI_PROPOSAL_TYPE, raiseProposal, validateProposal } from './assistantActions';
 import { DataService } from './service';
 
 const wrap =
@@ -54,7 +62,16 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/projects/:id/contract-summary',
     '/projects/:id/profitability',
     '/projects/:id/overview',
+    '/projects/:id/risk',
     '/exceptions',
+    '/risk',
+    '/briefing',
+    '/owner/*',
+    '/assistant/*',
+    '/calendar',
+    '/recurring-problems',
+    '/recurring-problems/*',
+    '/ai/assistant',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
@@ -293,6 +310,159 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
 
   router.get('/projects/:id/contract-summary', wrap(async (req, res) => res.json(await contractSummary(pool, req.access!, req.params.id))));
   router.get('/exceptions', wrap(async (req, res) => res.json(await exceptionsFor(pool, req.access!))));
+  // Risk is NW-internal: clients and contractors don't get it.
+  const staffOnly = (req: Request) => {
+    if (['Client', 'Contractor'].includes(req.auth!.user.role)) throw new ForbiddenError('Project risk is for NW staff');
+  };
+  router.get('/risk', wrap(async (req, res) => { staffOnly(req); res.json(await portfolioRisk(pool, req.access!)); }));
+  router.get('/projects/:id/risk', wrap(async (req, res) => { staffOnly(req); res.json(await projectRiskFor(pool, req.access!, req.params.id)); }));
+  router.get('/briefing', wrap(async (req, res) => res.json(await dailyBriefing(pool, req.access!))));
+  router.get('/owner/center', wrap(async (req, res) => res.json(await ownerCenter(pool, req.access!))));
+  router.get('/owner/dependency', wrap(async (req, res) => res.json(await ownerDependency(pool, req.access!))));
+  // Operational calendar: recorded dates the user may see (filters: from, to, project_id, person_id, role, status, type).
+  router.get(
+    '/calendar',
+    wrap(async (req, res) => {
+      const q = req.query as Record<string, unknown>;
+      const pick = (k: string) => (typeof q[k] === 'string' && q[k] ? (q[k] as string) : undefined);
+      res.json(await calendarFor(pool, service, req.access!, { from: pick('from'), to: pick('to'), project_id: pick('project_id'), person_id: pick('person_id'), role: pick('role'), status: pick('status'), type: pick('type') }));
+    })
+  );
+
+  // ---------------- knowledge usage and recurring problems ----------------
+  const knowledgeDef = service.module('knowledge');
+  // Record that an approved article was applied (only approved knowledge is official).
+  router.post(
+    '/knowledge/:id/usage',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      const article = await service.get(ctx, knowledgeDef, req.params.id);
+      if (article.status !== 'Approved') throw new ValidationError('Only approved (published) knowledge can be applied');
+      const { project_id, entity_type, entity_id, note } = req.body ?? {};
+      if (project_id !== undefined && project_id !== null && !ctx.canSeeProject(project_id)) throw new ForbiddenError('Project not found or not accessible');
+      const row = (
+        await pool.query(
+          `INSERT INTO knowledge_usage (article_id, user_id, project_id, entity_type, entity_id, note) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::int AS id, used_at`,
+          [article.id, ctx.user.id, project_id ?? null, typeof entity_type === 'string' ? entity_type : null, typeof entity_id === 'string' ? entity_id : null, typeof note === 'string' ? note.slice(0, 500) : null]
+        )
+      ).rows[0];
+      await writeAudit(pool, actorOf(req), { action: 'knowledge.used', entityType: 'knowledge', entityId: String(article.id), projectId: project_id ?? null, after: { entity_type, entity_id } });
+      res.status(201).json(row);
+    })
+  );
+  router.get(
+    '/knowledge/:id/usage',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      const article = await service.get(ctx, knowledgeDef, req.params.id);
+      const rows = (
+        await pool.query(
+          `SELECT u.id::int AS id, u.user_id, us.name AS user_name, u.project_id, u.entity_type, u.entity_id, u.note, u.used_at
+           FROM knowledge_usage u LEFT JOIN users us ON us.id = u.user_id WHERE u.article_id = $1 ORDER BY u.used_at DESC LIMIT 100`,
+          [article.id]
+        )
+      ).rows;
+      // Usage on projects the reader can't see is counted but not shown.
+      res.json(rows.map((r) => (r.project_id && !ctx.canSeeProject(r.project_id) ? { id: r.id, used_at: r.used_at, hidden: true } : r)));
+    })
+  );
+
+  router.get('/recurring-problems', wrap(async (req, res) => res.json(await recurringFor(pool, req.access!))));
+  // A person decides what to do about a pattern; the detector never acts on its own.
+  const findPattern = async (req: Request) => {
+    const key = req.body?.pattern_key;
+    const pattern = (await recurringFor(pool, req.access!)).find((p) => p.key === key);
+    if (!pattern) throw new ValidationError('That pattern is not (or no longer) detected in your records');
+    return pattern;
+  };
+  router.post(
+    '/recurring-problems/review',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      if (!ctx.can('knowledge.edit') && !ctx.can('automation.manage_tasks')) throw new ForbiddenError('Missing permission: knowledge.edit or automation.manage_tasks');
+      const { decision, note } = req.body ?? {};
+      if (!['Action taken', 'Dismissed'].includes(decision)) throw new ValidationError('decision must be Action taken or Dismissed');
+      if (decision === 'Dismissed' && !(typeof note === 'string' && note.trim())) throw new ValidationError('Say why the pattern is dismissed');
+      const pattern = await findPattern(req);
+      await pool.query(
+        `INSERT INTO recurring_problem_reviews (pattern_key, decision, note, occurrences, decided_by) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (pattern_key) DO UPDATE SET decision = $2, note = $3, occurrences = $4, decided_by = $5, decided_at = now(), article_id = NULL`,
+        [pattern.key, decision, typeof note === 'string' ? note.slice(0, 1000) : null, pattern.occurrences, ctx.user.id]
+      );
+      await writeAudit(pool, actorOf(req), { action: 'recurring.review', entityType: 'recurring_problem', entityId: pattern.key, after: { decision, note, occurrences: pattern.occurrences } });
+      res.json({ ok: true });
+    })
+  );
+  // Starts a Lessons-Learned draft from the evidence; a person writes the solution and it is
+  // official only after a knowledge editor approves it.
+  router.post(
+    '/recurring-problems/draft-knowledge',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      const pattern = await findPattern(req);
+      const article = await service.transact(ctx, actorOf(req), async (h) => {
+        const id = `kb-rec-${randomUUID().slice(0, 8)}`;
+        const stored = await service.writeInTransaction(h, knowledgeDef, undefined, {
+          id,
+          title: `Lessons learned: ${pattern.title}`,
+          category: pattern.knowledge_category,
+          status: 'Draft',
+          problem: `${pattern.suggestion}\n\nSeen ${pattern.occurrences} times between ${pattern.first_seen.slice(0, 10)} and ${pattern.last_seen.slice(0, 10)}:\n${pattern.examples.map((e) => `- ${e.label} (${e.type} ${e.id})`).join('\n')}`,
+          solution: '',
+          procedure: '',
+          description: '',
+          tags: ['recurring', pattern.kind.replace(/_/g, '-')],
+          source_pattern_key: pattern.key,
+          created_at: new Date().toISOString(),
+        });
+        await h.db.query(
+          `INSERT INTO recurring_problem_reviews (pattern_key, decision, occurrences, decided_by, article_id) VALUES ($1, 'Knowledge drafted', $2, $3, $4)
+           ON CONFLICT (pattern_key) DO UPDATE SET decision = 'Knowledge drafted', note = NULL, occurrences = $2, decided_by = $3, decided_at = now(), article_id = $4`,
+          [pattern.key, pattern.occurrences, ctx.user.id, id]
+        );
+        await writeAudit(h.db, actorOf(req), { action: 'recurring.review', entityType: 'recurring_problem', entityId: pattern.key, after: { decision: 'Knowledge drafted', article_id: id } });
+        return stored;
+      });
+      res.status(201).json(article);
+    })
+  );
+
+  // ---------------- AI operating assistant (answers from the user's own scope) ----------------
+  const assistant = new Assistant(pool);
+  router.post('/assistant/ask', wrap(async (req, res) => res.json(await assistant.ask(req.access!, actorOf(req), req.body ?? {}))));
+  // The legacy copilot drawer posts here with its own role and "context": both are ignored.
+  router.post(
+    '/ai/assistant',
+    wrap(async (req, res) => {
+      const a = await assistant.ask(req.access!, actorOf(req), { question: req.body?.question, project_id: req.body?.project_id });
+      const lines = a.facts.slice(0, 8).map((f) => `• [${f.confidence}] ${f.text}`);
+      res.json({ answer: [a.answer, ...lines].join('\n'), source: 'nw-os-records', result: a });
+    })
+  );
+  // AI proposes → a human approves (an "AI Proposal" approval for the asker) → the system executes.
+  router.post(
+    '/assistant/proposals',
+    wrap(async (req, res) => {
+      const ctx = req.access!;
+      ctx.require('ai.assistant');
+      ctx.require('approvals.request');
+      const { action, params, rationale } = req.body ?? {};
+      const checked = await validateProposal(pool, ctx, action, params);
+      const u = ctx.user;
+      // The person who asked decides (the Owner can decide any proposal).
+      const created = await raiseProposal(service, ctx, actorOf(req), checked, { approver: { id: u.id, name: u.name, role: u.role }, rationale: typeof rationale === 'string' ? rationale : undefined, source: 'assistant' });
+      res.status(201).json(created);
+    })
+  );
+  router.get(
+    '/assistant/proposals',
+    wrap(async (req, res) => {
+      if (!req.access!.can('approvals.view')) return void res.json([]); // e.g. contractors: no proposals
+      const rows = await service.list(req.access!, service.module('approvals'), {});
+      res.json(rows.filter((a) => a.approval_type === AI_PROPOSAL_TYPE && (a.assigned_approver_id === req.auth!.user.id || a.asked_by_id === req.auth!.user.id || req.auth!.user.role === 'Owner / CEO')));
+    })
+  );
+
   router.get('/projects/:id/overview', wrap(async (req, res) => res.json(await projectOverview(pool, req.access!, req.params.id))));
   router.get('/projects/:id/profitability', wrap(async (req, res) => res.json(await profitability(pool, req.access!, req.params.id))));
 

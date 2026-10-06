@@ -6,8 +6,8 @@ import { COLLECTION_ORDER, type CoreCollection } from '../core/schema';
 import { CoreService } from '../core/service';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import { findClientRevision } from './hooks/drawings';
-import { derivedProductionStatus } from './hooks/production';
 import { hasOpenFailedSiteQc } from './hooks/site';
+import { deriveWorkItem } from './workItemStatus';
 import { MODULES, MODULE_BY_KEY } from './registry';
 import { inModuleScope, loadOrderInfo, requireAny, hasAny, type OrderInfo } from './scope';
 import { deleteRecord, findRecord, listRecords, recordId, validateRecord, writeRecord } from './store';
@@ -35,6 +35,14 @@ class DryRunRollback extends Error {}
  * Each write: permission -> scope (before and after) -> business-rule hook -> store ->
  * audit, all in one transaction; cross-record rules run just before commit.
  */
+/** Called after a transaction commits, with the collections it wrote (e.g. to trigger automation). */
+type CommitListener = (collections: string[]) => void;
+const commitListeners = new Set<CommitListener>();
+export function onCommitted(listener: CommitListener) {
+  commitListeners.add(listener);
+  return () => commitListeners.delete(listener);
+}
+
 export class DataService {
   readonly core: CoreService;
   private coreRepo: CoreRepository;
@@ -98,8 +106,10 @@ export class DataService {
       actor,
       mode,
       defer: (check) => deferred.push(check),
+      touched: new Set<string>(),
       insertSystemRecord: async (collection, record, details) => {
         const def = this.module(collection);
+        h.touched?.add(def.key);
         validateRecord(def, record);
         await writeRecord(db, def, record, actor.id ?? undefined, 'upsert');
         await writeAudit(db, actor, {
@@ -112,6 +122,7 @@ export class DataService {
         });
         return record;
       },
+      writeModule: (collection, existing, incoming) => this.writeModule(h, this.module(collection), existing, incoming),
     };
     return h;
   }
@@ -130,6 +141,7 @@ export class DataService {
   /** Authorise, validate, store and audit one module record (create when `existing` is undefined). */
   private async writeModule(h: HookContext, def: ModuleDef, existing: Row | undefined, incoming: Row) {
     if (def.readOnly) throw new ForbiddenError(`${def.key} are recorded by the server and cannot be written`);
+    h.touched?.add(def.key);
     validateRecord(def, incoming);
     if (existing && !inModuleScope(h.ctx, def, existing, await this.ordersFor(h.db))) {
       throw new ForbiddenError(`${def.key} ${recordId(def, existing)} not found or not accessible`);
@@ -190,12 +202,13 @@ export class DataService {
       }
       const values = h.ctx.authorizeWrite(collection, existing, incoming);
       if (values && collection === 'projects' && h.mode !== 'import') this.checkProjectCompletion(h, existing, values);
-      if (!values || collection !== 'workItems') return values;
-      // Production status comes from the production order, never from the browser.
-      if (h.mode !== 'import' && 'production_status' in values && (existing || values.id)) {
-        const derived = await derivedProductionStatus(h.db, String(existing?.id ?? values.id));
-        if (derived) values.production_status = derived;
+      // Risk is computed by the server (risk engine), never set from the browser.
+      if (values && collection === 'projects' && h.mode !== 'import') {
+        values.risk_status = existing?.risk_status ?? null;
+        values.is_at_risk = existing?.is_at_risk ?? null;
+        values.risk_reason = existing?.risk_reason ?? null;
       }
+      if (!values || collection !== 'workItems') return values;
       // A production user (no work_items.edit) may only link an item to an order made for that item.
       if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
         const itemId = String(existing?.id ?? values.id);
@@ -221,6 +234,9 @@ export class DataService {
           }
         });
       }
+      // Production, delivery, installation and the overall status come from their records
+      // (orders, deliveries, installation jobs, site QC), never from the browser.
+      if (h.mode !== 'import' && existing) Object.assign(values, await deriveWorkItem(h.db, String(existing.id), values));
       return values;
     };
   }
@@ -253,6 +269,7 @@ export class DataService {
 
   private coreWritten(h: HookContext) {
     return async (collection: CoreCollection, existing: Row | undefined, stored: Row | undefined) => {
+      h.touched?.add(collection);
       const id = String(stored?.id ?? existing?.id);
       const changed = stored ? changedFields(existing, stored) : [];
       await writeAudit(h.db, h.actor, {
@@ -267,16 +284,21 @@ export class DataService {
   }
 
   private async inTransaction<T>(ctx: AccessContext, actor: AuditActor, mode: WriteMode, fn: (h: HookContext) => Promise<T>) {
-    return withTransaction(this.pool, async (db) => {
+    let touched: Set<string> | undefined;
+    const result = await withTransaction(this.pool, async (db) => {
       await db.query('SET CONSTRAINTS ALL DEFERRED');
       const deferred: (() => Promise<void>)[] = [];
       const h = this.hookContext(ctx, db, actor, mode, deferred);
+      touched = h.touched;
       const result = await fn(h);
       for (const check of deferred) await check();
       // Surface deferred foreign-key errors here, as a normal error, instead of at COMMIT.
       await db.query('SET CONSTRAINTS ALL IMMEDIATE');
       return result;
     });
+    // Automation's own writes don't re-trigger automation.
+    if (touched?.size && mode !== 'import' && actor.role !== 'system') for (const listener of commitListeners) listener([...touched]);
+    return result;
   }
 
   async create(ctx: AccessContext, def: ModuleDef, input: Row, actor: AuditActor) {

@@ -375,12 +375,14 @@ module.exports = (H) => {
   stage(24, 'Rectification', async () => {
     const admin = await fresh('admin');
     await tab(admin, 'Automation');
-    await admin.getByTestId('automation-rules').getByRole('button', { name: 'Run now' }).click();
+    await admin.getByTestId('automation-rules').getByRole('button', { name: 'Run all now' }).click();
     await admin.waitForTimeout(1500);
     const task = q(`select id||' '||assigned_user_id||' '||status from tasks where issue_id='${S.rectIssue}'`);
     const site = await fresh('site-supervisor');
     await tab(site, 'Issues & Escalations');
     await L.vis(site.getByText(new RegExp(`Rectification: BAR-${S.RUN}`))).click();
+    const evidence = site.getByTestId('issue-tasks').getByLabel(/^Evidence for /);
+    if (await evidence.count()) await evidence.first().fill('Re-levelled the bar top with packers; level reading photo IMG_301');
     await site.getByTestId('issue-tasks').getByRole('button', { name: 'Mark done' }).click();
     await L.settle(site);
     const pm = await fresh('project-manager');

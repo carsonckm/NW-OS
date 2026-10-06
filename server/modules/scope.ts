@@ -66,6 +66,8 @@ export function inModuleScope(ctx: AccessContext, def: ModuleDef, record: Row, o
 
   if (ctx.user.role === 'Contractor') {
     const mine = ctx.user.contractor_id;
+    // Tasks: a contractor sees only the tasks assigned to them (internal tasks stay internal).
+    if (def.key === 'tasks') return record.assigned_user_id === ctx.user.id;
     if (typeof record.contractor_id === 'string' && record.contractor_id) return record.contractor_id === mine;
     if (scope.kind === 'order') {
       const order = orders.get(record.production_order_id as string);

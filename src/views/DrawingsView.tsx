@@ -4,7 +4,8 @@
  * Features an interactive 9-step simulation walkthrough demonstrating the full end-to-end governance lifecycle.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useFocus } from '../services/navigation';
 import { useNW } from '../context/NWContext';
 import { DrawingViewer } from '../components/DrawingViewer';
 import { UploadDrawingModal } from '../components/UploadDrawingModal';
@@ -42,6 +43,12 @@ export const DrawingsView: React.FC = () => {
   } = useNW();
 
   const [selectedDrawingId, setSelectedDrawingId] = useState<string>(drawings[0]?.id || 'dwg-1');
+  const focus = useFocus(['drawing', 'drawing_revision']);
+  useEffect(() => {
+    if (!focus) return;
+    const d = drawings.find((x) => x.id === focus.id || x.revisions?.some((r) => r.id === focus.id));
+    if (d) setSelectedDrawingId(d.id);
+  }, [focus, drawings]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');

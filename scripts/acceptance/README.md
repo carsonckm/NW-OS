@@ -12,6 +12,12 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
 - `node scripts/acceptance/run.cjs` — the 34-step project from client enquiry to closure,
   one role per step, through the UI. `node scripts/acceptance/run.cjs 20 26` reruns a range
   (ids are kept in `out/state.json`). Each step's evidence is written to `out/log.jsonl`.
+- `node scripts/acceptance/phase5.cjs` — the Phase 5 18-step acceptance: a healthy project
+  hits a production blocker, an overdue high-priority task and a failed site QC; the running
+  server's automation (events and its own scheduler) raises tasks, notifications and
+  escalations; the Owner sees the exceptions, asks the assistant why, approves one proposed
+  action that the system executes; the people fix the problems and the project returns to
+  On Track. Recorded in `docs/phase5-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

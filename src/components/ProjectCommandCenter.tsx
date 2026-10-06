@@ -16,6 +16,9 @@
  * 12. AI Project Briefing & Risk Radar (One-click Gemini intelligence briefing for PM & Owner)
  */
 
+import { api } from '../services/coreApi';
+import { actionErrorOf } from '../services/records';
+import { AssistantAnswerView, type AssistantResult } from './AssistantAnswerView';
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
 import { navigateTo } from '../services/navigation';
@@ -146,6 +149,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   // AI Briefing Modal state
   const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
   const [briefingData, setBriefingData] = useState<any | null>(null);
+  const [liveBriefing, setLiveBriefing] = useState<AssistantResult | null>(null);
   const [showBriefingModal, setShowBriefingModal] = useState(false);
 
   // Status & Risk editing
@@ -471,6 +475,17 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   const handleGenerateBriefing = async () => {
     setIsGeneratingBriefing(true);
     setShowBriefingModal(true);
+    if (coreDataSync.mode === 'database') {
+      // Live: the server assistant, from this user's records only (no canned fallback).
+      try {
+        setLiveBriefing(await api.post<AssistantResult>('/assistant/ask', { question: 'Why is this project at risk?', project_id: project.id }));
+      } catch (err) {
+        setLiveBriefing({ id: 'err', intent: 'error', answer: actionErrorOf(err).message, facts: [], recommendations: [], principle: '' });
+      } finally {
+        setIsGeneratingBriefing(false);
+      }
+      return;
+    }
     try {
       const response = await fetch('/api/ai/project-briefing', {
         method: 'POST',
@@ -692,7 +707,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
               {/* Risk Status Dropdown */}
               <div className="relative">
                 <button
-                  disabled={!canEditProject}
+                  disabled={!canEditProject || coreDataSync.mode === 'database'}
+                  title={coreDataSync.mode === 'database' ? `Computed by the risk engine${project.risk_reason ? `: ${project.risk_reason}` : ''}` : undefined}
                   onClick={() => setIsEditingRisk(!isEditingRisk)}
                   className={`px-2.5 py-0.5 rounded-md border text-[11px] font-bold uppercase tracking-wider flex items-center space-x-1.5 shadow-2xs ${getRiskColor(
                     project.risk_status || (project.is_at_risk ? 'At Risk' : 'On Track')
@@ -700,7 +716,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                 >
                   <AlertTriangle className="w-3 h-3" />
                   <span>{project.risk_status || (project.is_at_risk ? 'At Risk' : 'On Track')}</span>
-                  {canEditProject && <ChevronDown className="w-3 h-3" />}
+                  {canEditProject && coreDataSync.mode !== 'database' && <ChevronDown className="w-3 h-3" />}
                 </button>
 
                 {isEditingRisk && (
@@ -2050,6 +2066,12 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                   Formulating PM action checklist to eliminate Owner dependency.
                 </p>
               </div>
+            ) : coreDataSync.mode === 'database' ? (
+              liveBriefing && (
+                <div className="text-xs">
+                  <AssistantAnswerView result={liveBriefing} />
+                </div>
+              )
             ) : briefingData ? (
               <div className="space-y-4 text-xs">
                 {/* Executive Summary */}

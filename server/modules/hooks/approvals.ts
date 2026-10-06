@@ -2,6 +2,7 @@ import type { ApprovalItem, UserProfile } from '../../../src/types';
 import { canEvaluateApproval } from '../../../src/utils/permissions';
 import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
+import { AI_PROPOSAL_TYPE, executeProposal } from '../assistantActions';
 import type { HookContext, ModuleHooks, Row } from '../types';
 
 const FINAL = new Set(['Approved', 'Rejected']);
@@ -73,9 +74,22 @@ export async function applyDecision(h: HookContext, existing: Row, values: Row) 
 }
 
 export const approvalHooks: ModuleHooks = {
+  // AI proposal approved → the system executes it, as the approver, in this transaction.
+  async afterWrite(h, existing, stored) {
+    if (h.mode === 'import' || stored.approval_type !== AI_PROPOSAL_TYPE) return;
+    if (stored.decision === 'Approved' && existing?.decision !== 'Approved') await executeProposal(h, stored);
+  },
+
   async beforeWrite(h, existing, incoming) {
     if (h.mode === 'import') return incoming;
     const u = h.ctx.user;
+    // AI proposals are raised by the assistant only, and what they would do is fixed.
+    if ((incoming.approval_type === AI_PROPOSAL_TYPE) !== (existing ? existing.approval_type === AI_PROPOSAL_TYPE : false)) {
+      throw new ForbiddenError('AI proposals are raised by the assistant only');
+    }
+    if (existing?.approval_type === AI_PROPOSAL_TYPE) {
+      incoming = { ...incoming, proposal: existing.proposal, execution: existing.execution, title: existing.title, description: existing.description };
+    }
     if (!existing) {
       // The requester is whoever is signed in; a new request is always pending.
       return {

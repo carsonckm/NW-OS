@@ -377,6 +377,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'emerald',
     },
     defaultPermissions: [
+      'ai.assistant',
       'projects.view',
       'contractors.view',
       'work_packages.view',
@@ -433,6 +434,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'teal',
     },
     defaultPermissions: [
+      'ai.assistant',
       'projects.view',
       'work_items.view',
       'drawings.view',
@@ -475,6 +477,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'cyan',
     },
     defaultPermissions: [
+      'ai.assistant',
       'clients.view',
       'projects.view',
       'contractors.view',
@@ -588,6 +591,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'stone',
     },
     defaultPermissions: [
+      'ai.assistant',
       'work_items.view',
       'drawings.view',
       'production.view',
@@ -630,6 +634,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'orange',
     },
     defaultPermissions: [
+      'ai.assistant',
       'work_packages.view',
       'work_items.view',
       'work_items.complete',

@@ -6,6 +6,9 @@
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { Sparkles, X, Send, ShieldAlert, Bot, User, AlertCircle } from 'lucide-react';
+import { api } from '../services/coreApi';
+import { actionErrorOf } from '../services/records';
+import { AssistantAnswerView, type AssistantResult } from './AssistantAnswerView';
 
 interface AIAssistantDrawerProps {
   isOpen: boolean;
@@ -17,10 +20,13 @@ interface ChatMessage {
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
+  /** Live mode: the server's structured answer (facts with confidence, recommendations). */
+  result?: AssistantResult;
 }
 
 export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, onClose }) => {
-  const { currentUser, selectedProject, workItems, issues, variations, drawings } = useNW();
+  const { currentUser, selectedProject, workItems, issues, variations, drawings, coreDataSync } = useNW();
+  const live = coreDataSync.mode === 'database';
 
   const [inputQuestion, setInputQuestion] = useState('');
   const [loading, setLoading] = useState(false);
@@ -50,6 +56,20 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
     setMessages((prev) => [...prev, userMsg]);
     setInputQuestion('');
     setLoading(true);
+
+    if (live) {
+      // Database mode: the server answers from what this user may see; nothing about the
+      // user or their data is sent from the browser except the question and selected project.
+      try {
+        const result = await api.post<AssistantResult>('/assistant/ask', { question: q, project_id: selectedProject?.id });
+        setMessages((prev) => [...prev, { id: 'ai-' + Date.now(), sender: 'assistant', text: result.answer, result, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+      } catch (err) {
+        setMessages((prev) => [...prev, { id: 'ai-' + Date.now(), sender: 'assistant', text: actionErrorOf(err).message, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     try {
       // Build role-safe context summary
@@ -170,7 +190,7 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
                       : 'bg-white border border-slate-200 text-slate-800'
                   }`}
                 >
-                  <p>{msg.text}</p>
+                  {msg.result ? <AssistantAnswerView result={msg.result} /> : <p>{msg.text}</p>}
                   <span
                     className={`block text-[10px] mt-1.5 ${
                       msg.sender === 'user' ? 'text-amber-950/70' : 'text-slate-400'
