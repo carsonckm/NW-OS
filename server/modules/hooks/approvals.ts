@@ -1,7 +1,7 @@
 import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { AI_PROPOSAL_TYPE, executeProposal } from '../assistantActions';
-import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { authorityAudit, clientConsentAllowed, requireAuthority, type AuthorityResolution } from '../authorityResolver';
 import type { HookContext, ModuleHooks, Row } from '../types';
 
 const FINAL = new Set(['Approved', 'Rejected']);
@@ -21,10 +21,7 @@ const DECISION_FIELDS = ['decision', 'decision_date', 'decision_by_id', 'decisio
  */
 export async function evaluateDecision(h: HookContext, stored: Row, decision: string, pendingProjectId?: string): Promise<{ isOverride: boolean; authority?: AuthorityResolution }> {
   const u = h.ctx.user;
-  const clientFacing = stored.approval_type === 'Variation' || stored.approval_type === 'Client Scope Change';
-  if (u.role === 'Client' && clientFacing && h.ctx.can('variations.client_approve') && h.ctx.canSeeProject(String(stored.project_id))) {
-    return { isOverride: false };
-  }
+  if (clientConsentAllowed(h.ctx, stored)) return { isOverride: false };
   const action = decision === 'Approved' ? 'approve' : decision === 'Rejected' ? 'reject' : 'request_changes';
   const authority = await requireAuthority(h.db, h.ctx, { resource: { kind: 'approval', id: String(stored.id) }, action, pending: { projectId: pendingProjectId } });
   // The Owner deciding their own request is recorded as an Owner override, as before.

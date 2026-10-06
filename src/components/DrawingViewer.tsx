@@ -39,6 +39,8 @@ import {
   Boxes,
 } from 'lucide-react';
 import { NWProductionReviewModal } from './NWProductionReviewModal';
+import { AuthorityNote } from './AuthorityNote';
+import { authorityItem, useAuthority } from '../services/authority';
 import { NWProductionDrawingModal } from './NWProductionDrawingModal';
 
 interface DrawingViewerProps {
@@ -109,6 +111,16 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
     drawing.revisions.find((r) => r.id === selectedRevisionId) ||
     drawing.revisions[drawing.revisions.length - 1] ||
     drawing.revisions[0];
+
+  // Who may approve / reject: the server's authority resolver (live system). Demo mode has no
+  // server, so it keeps the permission-based buttons (nothing there is stored or enforced).
+  const inReview = ['Internal Review', 'Pending Review', 'Review'].includes(currentRev?.approved_status ?? '');
+  const pendingNw = (drawing.nw_production_drawings || []).filter((n) => !n.approved_for_production);
+  const authority = useAuthority([
+    ...(inReview && currentRev ? [authorityItem('drawing_revision', currentRev.id), authorityItem('drawing_revision', currentRev.id, 'reject')] : []),
+    ...pendingNw.map((n) => authorityItem('drawing_revision', n.id)),
+  ]);
+  const may = (item: string, demoPermission: boolean) => (authority.live ? Boolean(authority.get(item)?.allowed) : demoPermission);
 
   // Handler: Click canvas to place pin
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -259,23 +271,23 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
               <span>Submit for Internal Review</span>
             </button>
           )}
-          {['Internal Review', 'Pending Review', 'Review'].includes(currentRev?.approved_status ?? '') &&
-            hasPermission(currentUser, 'drawings.approve') && (
-              <>
-                <button
-                  onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Approved')}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
-                >
-                  <span>Approve Revision</span>
-                </button>
-                <button
-                  onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Rejected')}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
-                >
-                  <span>Reject Revision</span>
-                </button>
-              </>
-            )}
+          {inReview && may(authorityItem('drawing_revision', currentRev.id), hasPermission(currentUser, 'drawings.approve')) && (
+            <button
+              onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Approved')}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              <span>Approve Revision</span>
+            </button>
+          )}
+          {inReview && may(authorityItem('drawing_revision', currentRev.id, 'reject'), hasPermission(currentUser, 'drawings.approve')) && (
+            <button
+              onClick={() => setDrawingRevisionStatus(drawing.id, currentRev.id, 'Rejected')}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              <span>Reject Revision</span>
+            </button>
+          )}
+          {inReview && authority.live && <AuthorityNote dark authority={authority.get(authorityItem('drawing_revision', currentRev.id))} />}
 
           {/* Interactive Markup Toggle */}
           <button
@@ -1334,13 +1346,17 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
                       </p>
                     </div>
 
-                    <button
-                      onClick={() => approveNWProductionDrawing(drawing.id, nwd.id, currentUser.name)}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition-all flex items-center space-x-1.5 cursor-pointer"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Authorize & Stamp "APPROVED FOR PRODUCTION"</span>
-                    </button>
+                    {may(authorityItem('drawing_revision', nwd.id), true) ? (
+                      <button
+                        onClick={() => approveNWProductionDrawing(drawing.id, nwd.id, currentUser.name)}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition-all flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Authorize & Stamp "APPROVED FOR PRODUCTION"</span>
+                      </button>
+                    ) : (
+                      <AuthorityNote dark authority={authority.get(authorityItem('drawing_revision', nwd.id))} />
+                    )}
                   </div>
                 )}
 

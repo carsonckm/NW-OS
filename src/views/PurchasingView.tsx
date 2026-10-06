@@ -9,6 +9,9 @@ import { useNW } from '../context/NWContext';
 import { GoodsReceivedButton, GoodsReceivedHistory } from './commercial/CostControl';
 import { PurchaseOrder, MaterialRequest, Supplier, POStatus } from '../types';
 import { hasPermission } from '../utils/permissions';
+import { AuthorityNote } from '../components/AuthorityNote';
+import { authorityItem, useAuthority } from '../services/authority';
+import { actionErrorOf, useRecords } from '../services/records';
 import {
   ShoppingBag,
   Plus,
@@ -42,6 +45,26 @@ export const PurchasingView: React.FC = () => {
     userProjects,
     projects,
   } = useNW();
+
+  // Issuing a PO is a purchase decision: the server's authority resolver says who may (the
+  // RM 20,000 policy, a Major Purchase approval, or the Owner's delegation). In the live system
+  // a new PO is saved as Pending Approval and issued from here when the server allows it.
+  const records = useRecords();
+  const awaitingIssue = purchaseOrders.filter((p) => p.status === 'Pending Approval' || p.status === 'Draft');
+  const authority = useAuthority(awaitingIssue.map((p) => authorityItem('purchase_order', p.id)));
+  const [issuing, setIssuing] = useState<string | null>(null);
+  const [issueError, setIssueError] = useState<{ id: string; message: string } | null>(null);
+  const issuePO = async (po: PurchaseOrder) => {
+    setIssuing(po.id);
+    setIssueError(null);
+    try {
+      await records.update('purchaseOrders', po.id, { status: 'Issued' }, po);
+    } catch (err) {
+      setIssueError({ id: po.id, message: actionErrorOf(err).message });
+    } finally {
+      setIssuing(null);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<'pos' | 'requisitions' | 'suppliers'>('pos');
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,9 +161,10 @@ export const PurchasingView: React.FC = () => {
       supplier_name: sup.name,
       items: formattedItems,
       total_amount: total,
-      status: total >= 20000 ? 'Pending Approval' : 'Issued',
+      // Live system: the server decides who may issue (see issuePO). Demo mode: as before.
+      status: authority.live || total >= 20000 ? 'Pending Approval' : 'Issued',
       requested_by: currentUser.name,
-      issued_date: total < 20000 ? new Date().toISOString() : undefined,
+      issued_date: !authority.live && total < 20000 ? new Date().toISOString() : undefined,
       expected_delivery_date: poExpectedDate,
       notes: poNotes,
     });
@@ -339,6 +363,23 @@ export const PurchasingView: React.FC = () => {
                       </span>
                     </div>
 
+                    {/* Issue: only when the server's authority resolver allows this person. */}
+                    {authority.live && awaitingIssue.includes(po) && (
+                      authority.get(authorityItem('purchase_order', po.id))?.allowed ? (
+                        <button
+                          type="button"
+                          data-testid={`issue-po-${po.po_number}`}
+                          disabled={issuing === po.id}
+                          onClick={() => void issuePO(po)}
+                          className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold disabled:opacity-50"
+                        >
+                          Issue PO
+                        </button>
+                      ) : (
+                        <AuthorityNote className="max-w-xs text-left" authority={authority.get(authorityItem('purchase_order', po.id))} />
+                      )
+                    )}
+                    {issueError?.id === po.id && <p role="alert" className="max-w-xs text-right text-[11px] font-bold text-rose-700">{issueError.message}</p>}
                     {/* Goods are received line by line; the server updates the PO status. */}
                     <GoodsReceivedButton po={po} />
                   </div>

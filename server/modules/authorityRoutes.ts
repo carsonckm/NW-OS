@@ -13,6 +13,13 @@
  *   PUT  /api/projects/:id/sensitivity            { sensitivity, reason }
  *
  * There is no delete: rules are deactivated so their history stays readable.
+ *
+ *   GET  /api/authority/resolve?items=kind:id[:action],...   (any signed-in user)
+ *
+ * The approval screens ask the server, for the signed-in user, what the authority resolver
+ * decides for each record they show (approve / reject / request changes), and show the action,
+ * "Owner approval required" or the reason accordingly. Informational only: every approval is
+ * resolved again on the server when it is made.
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { ForbiddenError, type AccessContext } from '../auth/access';
@@ -22,6 +29,11 @@ import type { AuditActor } from '../audit';
 import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import { createRule, decisionTypes, getRule, listRules, ruleHistory, setProjectSensitivity, setRuleActive, updateRule } from './authority';
+import { authorityForScreen, clientConsentAllowed, resolveApprovalAuthority, type DecisionAction, type ResourceKind } from './authorityResolver';
+import { ValidationError } from '../core/repository';
+
+const KINDS: ResourceKind[] = ['drawing_revision', 'drawing', 'variation', 'purchase_order', 'invoice', 'approval'];
+const ACTIONS: DecisionAction[] = ['approve', 'reject', 'request_changes'];
 
 const wrap =
   (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
@@ -36,6 +48,30 @@ export function createAuthorityRouter({ pool, store }: { pool: Pool; store: Auth
   const router = express.Router();
   router.use(['/authority', '/projects/:id/sensitivity'], csrfGuard, attachUser(store), requireUser, loadAccess(pool));
 
+  router.get(
+    '/authority/resolve',
+    wrap(async (req, res) => {
+      const raw = q(req.query.items);
+      if (!raw) throw new ValidationError('items is required (kind:id[:action], comma-separated)');
+      const items = raw.split(',').map((s) => s.trim()).filter(Boolean);
+      if (items.length > 100) throw new ValidationError('At most 100 items at a time');
+      const out = [];
+      for (const item of items) {
+        const [kind, id, action = 'approve'] = item.split(':');
+        if (!KINDS.includes(kind as ResourceKind) || !id || !ACTIONS.includes(action as DecisionAction)) throw new ValidationError(`Unknown item ${item}`);
+        if (kind === 'approval') {
+          const row = (await pool.query('SELECT approval_type, project_id FROM approvals WHERE id = $1', [id])).rows[0];
+          if (row && clientConsentAllowed(req.access!, row)) {
+            out.push({ item, allowed: true, reason_code: 'ALLOWED', reason: "The client's consent on their own project", requires_owner: false, basis: 'client_consent', decision_type: 'client_consent', project_sensitivity: null, matched_rule_code: null });
+            continue;
+          }
+        }
+        const r = await resolveApprovalAuthority(pool, req.access!, { resource: { kind: kind as ResourceKind, id }, action: action as DecisionAction });
+        out.push({ item, ...authorityForScreen(r) });
+      }
+      res.json(out);
+    })
+  );
   router.get('/authority/decision-types', wrap(async (req, res) => { needView(req.access!); res.json(await decisionTypes(pool)); }));
   router.get(
     '/authority/rules',

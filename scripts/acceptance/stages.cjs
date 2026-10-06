@@ -494,6 +494,8 @@ module.exports = (H) => {
     const self = await acct.getByTestId(`invoice-TC-${S.RUN}`).getByRole('button', { name: 'Approve' }).count();
     let selfMsg = '';
     if (self) { await acct.getByTestId(`invoice-TC-${S.RUN}`).getByRole('button', { name: 'Approve' }).click(); await acct.waitForTimeout(800); selfMsg = (await acct.getByRole('alert').first().innerText().catch(() => '')).slice(0, 80); }
+    // Phase 6: the screen asks the server's authority resolver, so the recorder is not offered Approve.
+    else { const note = acct.getByTestId(`invoice-TC-${S.RUN}`).getByTestId('authority-note'); await note.waitFor({ timeout: 10000 }); selfMsg = `no Approve button; ${await note.getAttribute('data-reason-code')}: ${(await note.innerText()).split('\n')[1]}`; }
     const owner = await fresh('owner-ceo');
     await comm(owner, 'Invoices');
     await owner.getByTestId(`invoice-TC-${S.RUN}`).getByRole('button', { name: 'Approve' }).click();

@@ -152,16 +152,31 @@ const iso = (v: unknown) => (v ? new Date(String(v)).toISOString() : null);
 
 class ContextError extends Error {}
 
-/** How far a rule got before it failed (rules are checked in this order). */
-const MISS_STAGE: Record<string, number> = {
-  OUT_OF_SCOPE: 1,
-  AUTHORITY_DEACTIVATED: 2,
-  AUTHORITY_NOT_YET_ACTIVE: 3,
-  AUTHORITY_EXPIRED: 3,
-  VALUE_LIMIT_EXCEEDED: 4,
-  RISK_LIMIT_EXCEEDED: 5,
-  CONDITION_NOT_MET: 6,
-  SELF_APPROVAL_BLOCKED: 6,
+/**
+ * Reason precedence (docs/phase6-delegated-authority.md, "Reason precedence"): when several
+ * things block a decision, the earliest code in this list is the one reported. The gates
+ * (context, sensitivity, self-approval, baseline) are checked in this order before any rule;
+ * rule failures follow the same order, then OWNER_REQUIRED / NO_MATCHING_AUTHORITY.
+ */
+export const REASON_PRECEDENCE: ReasonCode[] = [
+  'INVALID_AUTHORITY_CONTEXT',
+  'SENSITIVITY_BLOCKED',
+  'SELF_APPROVAL_BLOCKED',
+  'INSUFFICIENT_PERMISSION',
+  'OUT_OF_SCOPE',
+  'AUTHORITY_NOT_YET_ACTIVE',
+  'AUTHORITY_EXPIRED',
+  'AUTHORITY_DEACTIVATED',
+  'VALUE_LIMIT_EXCEEDED',
+  'RISK_LIMIT_EXCEEDED',
+  'CONDITION_NOT_MET',
+  'NO_MATCHING_AUTHORITY',
+  'OWNER_REQUIRED',
+  'ALLOWED',
+];
+const rank = (code: string) => {
+  const i = REASON_PRECEDENCE.indexOf(code as ReasonCode);
+  return i < 0 ? REASON_PRECEDENCE.length : i;
 };
 
 /** Loads the record being decided and derives every fact from the database. */
@@ -313,7 +328,6 @@ async function checkRule(rule: Row, ctx: AccessContext, facts: Facts, sensitivit
   if (!projectOk) return fail('OUT_OF_SCOPE', `${rule.code} covers project ${rule.project_id} only`);
   if (!clientOk) return fail('OUT_OF_SCOPE', `${rule.code} covers client ${rule.client_id} only`);
 
-  if (!rule.active) return fail('AUTHORITY_DEACTIVATED', `${rule.code} is deactivated${rule.deactivation_reason ? ` (${rule.deactivation_reason})` : ''}`);
   const start = iso(rule.start_at);
   const end = iso(rule.end_at);
   check.dates = { start_at: start, end_at: end, now: now.toISOString(), passed: true };
@@ -325,6 +339,7 @@ async function checkRule(rule: Row, ctx: AccessContext, facts: Facts, sensitivit
     check.dates.passed = false;
     return fail('AUTHORITY_EXPIRED', `${rule.code} ended on ${end.slice(0, 10)}`);
   }
+  if (!rule.active) return fail('AUTHORITY_DEACTIVATED', `${rule.code} is deactivated${rule.deactivation_reason ? ` (${rule.deactivation_reason})` : ''}`);
 
   const min = num(rule.min_value);
   const max = num(rule.max_value);
@@ -409,9 +424,14 @@ async function resolveOne(db: Db, ctx: AccessContext, facts: Facts, action: Deci
   const sensRow = facts.projectId ? (await db.query('SELECT sensitivity FROM projects WHERE id = $1', [facts.projectId])).rows[0] : undefined;
   const sensitivity: string | null = sensRow?.sensitivity ?? null;
 
-  // Scope: the record's project must be one this user may see (contractors, clients, staff).
+  // Access comes first: a record outside the user's projects is OUT_OF_SCOPE, and nothing about
+  // that project (not even its sensitivity) is disclosed.
   if (facts.projectId && !ctx.canSeeProject(facts.projectId)) {
-    return out({ reasonCode: 'OUT_OF_SCOPE', reason: 'This record is outside your projects', projectSensitivity: sensitivity });
+    return out({ reasonCode: 'OUT_OF_SCOPE', reason: 'This record is outside your projects' });
+  }
+  // Nobody, the Owner included, internally approves a variation they raised.
+  if (facts.resourceKind === 'variation' && action === 'approve' && facts.raisedById === u.id) {
+    return out({ reasonCode: 'SELF_APPROVAL_BLOCKED', reason: 'You cannot internally approve a variation you raised', projectSensitivity: sensitivity });
   }
   if (u.role === OWNER_ROLE) {
     const type = (await db.query('SELECT baseline_permission FROM authority_decision_types WHERE key = $1', [facts.decisionType])).rows[0];
@@ -430,7 +450,6 @@ async function resolveOne(db: Db, ctx: AccessContext, facts: Facts, action: Deci
     }
     return out({ ...common, allowed: true, reasonCode: 'ALLOWED', basis: 'prior_owner_approval', reason: `The Owner approved the Major Purchase approval for this purchase order (${sensitivity} project)` });
   }
-  if (ceiling.outcome === 'denied') return out({ ...common, reasonCode: 'INSUFFICIENT_PERMISSION', reason: ceiling.reason });
 
   // Business rule: nobody decides what they raised themselves (variations: internal approval only).
   if (facts.raisedById && facts.raisedById === u.id && !(facts.resourceKind === 'variation' && action !== 'approve')) {
@@ -442,6 +461,7 @@ async function resolveOne(db: Db, ctx: AccessContext, facts: Facts, action: Deci
           : 'Conflict of Interest: you created this request. Company policy requires independent approval.';
     return out({ ...common, reasonCode: 'SELF_APPROVAL_BLOCKED', reason });
   }
+  if (ceiling.outcome === 'denied') return out({ ...common, reasonCode: 'INSUFFICIENT_PERMISSION', reason: ceiling.reason });
 
   // 7. Rules for this decision type (inactive ones too, to explain a near miss).
   const rules = (await db.query('SELECT * FROM delegated_authorities WHERE decision_type = $1 ORDER BY priority DESC, kind DESC, code', [facts.decisionType])).rows;
@@ -451,24 +471,46 @@ async function resolveOne(db: Db, ctx: AccessContext, facts: Facts, action: Deci
   for (const rule of rules) checks.push(await checkRule(rule, ctx, facts, sensitivity, now, risk));
   const outcomes = checks.map((c) => c.outcome);
   const detail = (c: RuleCheck | undefined) => (c ? { evaluatedConditions: c.conditions, evaluatedScope: c.scope, evaluatedValue: c.value, evaluatedRisk: c.risk, evaluatedDates: c.dates } : {});
-  const allow = checks.find((c) => c.outcome.applies && c.outcome.effect === 'allow');
-  const requireOwner = checks.find((c) => c.outcome.applies && c.outcome.effect === 'require_owner');
+  // Highest priority first; equal priorities in code order, so the result never depends on storage order.
+  const byPriority = (a: RuleCheck, b: RuleCheck) => b.outcome.priority - a.outcome.priority || a.outcome.rule_code.localeCompare(b.outcome.rule_code);
+  const allow = checks.filter((c) => c.outcome.applies && c.outcome.effect === 'allow').sort(byPriority)[0];
+  const requireOwner = checks.filter((c) => c.outcome.applies && c.outcome.effect === 'require_owner').sort(byPriority)[0];
 
   // Priority decides; on a tie the Owner requirement wins (never downgrade authority on ambiguity).
   if (allow && (!requireOwner || allow.outcome.priority > requireOwner.outcome.priority)) {
     return out({ ...common, ...detail(allow), rules: outcomes, allowed: true, reasonCode: 'ALLOWED', basis: 'rule', matchedRuleId: allow.outcome.rule_id, matchedRuleCode: allow.outcome.rule_code, reason: `Allowed by ${allow.outcome.rule_code}` });
   }
-  if (requireOwner) {
-    const r = rules.find((x) => x.id === requireOwner.outcome.rule_id)!;
-    return out({ ...common, ...detail(requireOwner), rules: outcomes, requiresOwner: true, reasonCode: 'OWNER_REQUIRED', matchedRuleId: r.id, matchedRuleCode: r.code, reason: `${r.code}: ${r.description}` });
+  // Not allowed. Only rules that would have decided it count: rules written for this person,
+  // about this kind of decision, that would outrank every applicable require_owner rule had
+  // they passed. Rules for other people or other kinds of decision never count. A rule for
+  // another project / client counts only when no rule for this person covers this record.
+  const decisive = checks.filter(
+    (c) => c.outcome.effect === 'allow' && c.outcome.reason_code && c.outcome.reason_code !== 'NOT_APPLICABLE' && (!requireOwner || c.outcome.priority > requireOwner.outcome.priority)
+  );
+  // A rule for another project / client says something true about this record only while it
+  // is in force (active and in date) and nothing covers this record.
+  const inForce = (c: RuleCheck) => {
+    const r = rules.find((x) => x.id === c.outcome.rule_id)!;
+    return r.active && (!r.start_at || new Date(r.start_at).getTime() <= now.getTime()) && (!r.end_at || new Date(r.end_at).getTime() > now.getTime());
+  };
+  const inScope = decisive.filter((c) => c.outcome.reason_code !== 'OUT_OF_SCOPE');
+  const elsewhere = decisive.filter((c) => c.outcome.reason_code === 'OUT_OF_SCOPE' && inForce(c));
+  const blocker = (inScope.length ? inScope : elsewhere).sort((a, b) => rank(a.outcome.reason_code!) - rank(b.outcome.reason_code!) || byPriority(a, b))[0];
+  const ownerRule = requireOwner ? rules.find((x) => x.id === requireOwner.outcome.rule_id)! : undefined;
+  if (blocker) {
+    return out({
+      ...common,
+      ...detail(blocker),
+      rules: outcomes,
+      requiresOwner: Boolean(ownerRule),
+      reasonCode: blocker.outcome.reason_code as ReasonCode,
+      matchedRuleId: blocker.outcome.rule_id,
+      matchedRuleCode: blocker.outcome.rule_code,
+      reason: `${blocker.outcome.reason}; the Owner (or someone with authority) must decide`,
+    });
   }
-  // No authority: explain the closest miss among the rules written for this person (the one
-  // that passed the most checks; then the higher priority).
-  const miss = checks
-    .filter((c) => c.outcome.effect === 'allow' && c.outcome.reason_code && c.outcome.reason_code !== 'NOT_APPLICABLE')
-    .sort((a, b) => MISS_STAGE[b.outcome.reason_code!] - MISS_STAGE[a.outcome.reason_code!] || b.outcome.priority - a.outcome.priority)[0];
-  if (miss) {
-    return out({ ...common, ...detail(miss), rules: outcomes, reasonCode: miss.outcome.reason_code as ReasonCode, matchedRuleId: miss.outcome.rule_id, matchedRuleCode: miss.outcome.rule_code, reason: `${miss.outcome.reason}; the Owner (or someone with authority) must decide` });
+  if (ownerRule) {
+    return out({ ...common, ...detail(requireOwner), rules: outcomes, requiresOwner: true, reasonCode: 'OWNER_REQUIRED', matchedRuleId: ownerRule.id, matchedRuleCode: ownerRule.code, reason: `${ownerRule.code}: ${ownerRule.description}` });
   }
   return out({ ...common, rules: outcomes, reasonCode: 'NO_MATCHING_AUTHORITY', reason: `No authority rule lets ${u.role} decide this ${facts.decisionType.replace('_', ' ')}; ${ceiling.baseline_permission} alone approves nothing` });
 }
@@ -513,6 +555,31 @@ export class AuthorityError extends ForbiddenError {
   ) {
     super(message);
   }
+}
+
+/**
+ * A client deciding a client-facing request (Variation / Client Scope Change) on their own
+ * project gives the client's consent. That is not internal approval authority and does not go
+ * through the rules; this is the one place the server decides it (approval hook and the
+ * screens' /api/authority/resolve both use it).
+ */
+export function clientConsentAllowed(ctx: AccessContext, approval: { approval_type?: unknown; project_id?: unknown }) {
+  const clientFacing = approval.approval_type === 'Variation' || approval.approval_type === 'Client Scope Change';
+  return ctx.user.role === 'Client' && clientFacing && ctx.can('variations.client_approve') && ctx.canSeeProject(String(approval.project_id));
+}
+
+/** What a screen needs to show for one decision (never the rule list or other people's rules). */
+export function authorityForScreen(r: AuthorityResolution) {
+  return {
+    allowed: r.allowed,
+    reason_code: r.reasonCode,
+    reason: r.reason,
+    requires_owner: r.requiresOwner,
+    basis: r.basis,
+    decision_type: r.decisionType,
+    project_sensitivity: r.projectSensitivity,
+    matched_rule_code: r.matchedRuleCode,
+  };
 }
 
 /** What an approval audit record carries about the authority used (compact, explainable later). */

@@ -129,9 +129,66 @@ variation in the database, never from the requester's estimate.
 `clientId`, `projectSensitivity`, `baselinePermission`, `matchedRuleId`, `matchedRuleCode`,
 `requiresOwner`, `evaluatedConditions`, `evaluatedScope`, `evaluatedValue`, `evaluatedRisk`,
 `evaluatedDates`, `rules` (every rule considered and what happened to it), `resolvedAt`. When
-nothing allows, the matched rule is the closest miss (the rule for this person that passed the
-most checks), so the Owner Center can say exactly what blocked delegation. A refused API call
-returns `reason_code` and `requires_owner` with the 403.
+nothing allows, `reasonCode` is the actual blocker chosen by the reason precedence below, and
+`matchedRuleCode` names the rule it comes from (if any), so the Owner Center can say exactly
+what blocked delegation. A refused API call returns `reason_code` and `requires_owner` with
+the 403.
+
+### Reason precedence (deterministic)
+
+When more than one thing stands in the way, the reported reason is the first in this list
+(`REASON_PRECEDENCE` in the resolver):
+
+1. `INVALID_AUTHORITY_CONTEXT` — 2. `SENSITIVITY_BLOCKED` — 3. `SELF_APPROVAL_BLOCKED` —
+4. `INSUFFICIENT_PERMISSION` — 5. `OUT_OF_SCOPE` — 6. `AUTHORITY_NOT_YET_ACTIVE` —
+7. `AUTHORITY_EXPIRED` — 8. `AUTHORITY_DEACTIVATED` — 9. `VALUE_LIMIT_EXCEEDED` —
+10. `RISK_LIMIT_EXCEEDED` — 11. `CONDITION_NOT_MET` — 12. `NO_MATCHING_AUTHORITY` —
+13. `OWNER_REQUIRED` — 14. `ALLOWED`.
+
+How it is applied:
+
+- Items 1-4 are gates checked in that order before any rule is looked at; the first that
+  fails is the answer. A project sensitivity that reserves the decision for the Owner is
+  therefore always reported as `SENSITIVITY_BLOCKED`, however many rules match or fail.
+- One check comes even before them: the record must be in a project the user can see.
+  Otherwise the answer is `OUT_OF_SCOPE` and nothing about that project (not even its
+  sensitivity) is disclosed.
+- Items 5-11 come from rules, and only from rules that would have decided the matter:
+  allow rules written for this person (by user, role or permission), about this kind of
+  decision, that would outrank every applicable require_owner rule had they passed. Rules for
+  other people, other decision types or the other kind of path (record vs approval request)
+  never count, and neither does a rule that would have lost to the Owner requirement anyway.
+  A rule for another project or client counts (`OUT_OF_SCOPE`) only when it is in force
+  (active and in date) and no rule for this person covers the record. Among the remaining rules the earliest code wins; equal codes go to
+  the higher priority, then the rule code, so the answer never depends on storage order.
+- `OWNER_REQUIRED`: a require_owner rule applies and no rule for this person could outrank it.
+  `NO_MATCHING_AUTHORITY`: no rule could give this person authority and no require_owner rule
+  applies. The two never apply together.
+- `ALLOWED`: an applicable allow rule outranks every applicable require_owner rule (ties go to
+  the Owner).
+
+Tests prove that adding unrelated rules (other projects, deactivated or expired ones, other
+people, other decision types) never changes the reported reason.
+
+### The approval screens use the resolver
+
+Screens never work out approval authority themselves. They ask the server, for the signed-in
+user, about the records they show: `GET /api/authority/resolve?items=kind:id:action,...`
+(any signed-in user; at most 100 items; returns `allowed`, `reason_code`, `reason`,
+`requires_owner`, `basis`, `decision_type`, `project_sensitivity`, `matched_rule_code` — never
+the rule list). Client consent is answered by the same server function the approval hook uses
+(`clientConsentAllowed`). The action is shown only when `allowed`; otherwise the screen shows
+"Owner approval required" (with the sensitivity when that is the reason) or the server's reason.
+This is information only: the server resolves again when the action is taken, so a manipulated
+screen gains nothing.
+
+Connected screens: drawing revision Approve / Reject and NW production "Approved for
+Production" (DrawingViewer); variation internal approval and rejection (VariationsView);
+invoice Approve (CostControl › Invoices); approval requests Approve / Request changes /
+Reject (ApprovalsView); AI proposal Approve & run / Reject (assistant answers); Issue PO
+(Purchasing — a new PO is saved Pending Approval and issued from there when the server allows).
+Demo mode (no database, nothing stored or enforced) has no server to ask and keeps the earlier
+on-screen rules.
 
 ### Reason codes (stable)
 
@@ -190,11 +247,42 @@ Drawing revisions and variations themselves are the `drawing` / `variation` deci
 | Variation Implemented / Closed | `hooks/variations.ts` | no | lifecycle steps after approval |
 | Who to notify / brief about pending approvals | `automation/rules.ts`, `briefing.ts`, `ownerCenter.ts`, `exceptions.ts` | no | read `drawings.approve` / `variations.approve` to pick people; routing to delegates is Batch 4 |
 
-### Intentional narrowings (security, Batch 2)
+## 5. Intentional security hardening (Phase 6)
 
-- Clients and contractors can no longer decide internal approval requests just because a
-  request was assigned to the Client role (client consent on Variation / Client Scope Change
-  requests is unchanged).
-- A Major Purchase / Major Cost request assigned to a role without `purchasing.view` (e.g. Site
-  Supervisor) can no longer be decided by that role; it waits for the Owner or the Accountant.
-  The approval screen does not offer such an assignment.
+Two behaviours were tightened on purpose in Phase 6 Batch 2. They are not regressions and must
+not be reverted. Regression tests: `server/modules/authorityResolver.test.ts`, "intentional
+Phase 6 security hardening".
+
+### 5.1 Clients cannot decide internal approval requests
+
+- **Previous behaviour:** an approval request of any type assigned to the Client role (the
+  approval form offers "Client" as an approver) could be approved, rejected or sent back by a
+  Client user, because the old rule (`canEvaluateApproval`) let anyone whose role matched the
+  assigned role decide.
+- **New behaviour:** a Client user can decide only a client-facing request (Variation, Client
+  Scope Change) on their own project — the client's consent. Any other request (Safety-Critical
+  Decision, Technical Change, Major Purchase, Project Date Change, ...) assigned to Client is
+  refused with `INSUFFICIENT_PERMISSION` and waits for the Owner or an internal approver.
+- **Why it is safer:** internal approvals commit the company (spending, technical sign-off,
+  safety). An external party must never hold that authority, however a request was assigned;
+  clients and contractors cannot hold internal approval authority anywhere else in Phase 6.
+- **Tests:** "1. a Client user cannot decide an internal request just because it is assigned to
+  the Client role" (four request types, all three decisions, record stays Pending, and the old
+  rule is shown to have allowed it) and "1b. client consent is unchanged".
+
+### 5.2 Major Purchase / Major Cost requests need the purchase baseline permission
+
+- **Previous behaviour:** a Major Purchase or Major Cost request assigned to a role without
+  `purchasing.view` (for example Site Supervisor) could be decided by that role.
+- **New behaviour:** these requests are purchase decisions; deciding one requires the purchase
+  baseline permission `purchasing.view` like every other purchase decision. Such a role is
+  refused with `INSUFFICIENT_PERMISSION`; the Accountant (System Policy) and the Owner still
+  decide the request.
+- **Why it is safer:** a large spending decision should only be taken by someone who takes part
+  in purchasing and can see the purchase records; the baseline permission is the Phase 6
+  safeguard for that, and it applies to every decision type without exception.
+- **Tests:** "2. a role without purchasing.view cannot decide a Major Purchase / Major Cost
+  request, even when assigned" (both types; the old rule is shown to have allowed it; the
+  Accountant and the Owner still can).
+
+These are intentional Phase 6 changes, agreed in the Batch 2 review.

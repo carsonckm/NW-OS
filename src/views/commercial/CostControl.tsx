@@ -10,6 +10,8 @@ import type { CommercialInvoice, GoodsReceivedRecord, ProjectCostLedgerItem, Pur
 import { hasPermission } from '../../utils/permissions';
 import { actionErrorOf, useRecords } from '../../services/records';
 import { FormError } from '../../components/ui/FormError';
+import { AuthorityNote } from '../../components/AuthorityNote';
+import { authorityItem, useAuthority } from '../../services/authority';
 import { addDays, Button, Field, Input, Modal, newId, Pill, rm, Section, Select, TextArea, today } from '../../components/ui/forms';
 
 type GrnLine = { po_item_id: string; received_qty: number; damaged_qty: number; wrong_item: boolean; notes: string };
@@ -213,7 +215,11 @@ export const InvoicesPanel: React.FC<{ projectId: string }> = ({ projectId }) =>
   const [busy, setBusy] = useState<string | null>(null);
   const rows = (commercialInvoices as Invoice[]).filter((i) => !projectId || i.project_id === projectId);
   const canRecord = hasPermission(currentUser, 'finance.edit') || hasPermission(currentUser, 'commercial.edit');
-  const canApprove = hasPermission(currentUser, 'finance.edit');
+  // Who may approve each invoice: the server's authority resolver (live system; demo mode keeps
+  // the permission-based button).
+  const awaiting = rows.filter((i) => ['Draft', 'Pending Approval'].includes(i.status) && i.invoice_type !== 'Client Billing Invoice');
+  const authority = useAuthority(awaiting.map((i) => authorityItem('invoice', i.id)));
+  const canApprove = (inv: Invoice) => (authority.live ? Boolean(authority.get(authorityItem('invoice', inv.id))?.allowed) : hasPermission(currentUser, 'finance.edit'));
   const approve = async (inv: Invoice) => {
     setError(null);
     setBusy(inv.id);
@@ -279,11 +285,14 @@ export const InvoicesPanel: React.FC<{ projectId: string }> = ({ projectId }) =>
                   {inv.approved_by_name && <div className="text-[10px] text-slate-500">by {inv.approved_by_name}</div>}
                 </td>
                 <td className="px-3 py-3 text-right">
-                  {canApprove && ['Draft', 'Pending Approval'].includes(inv.status) && inv.invoice_type !== 'Client Billing Invoice' && (
-                    <Button tone="success" busy={busy === inv.id} onClick={() => approve(inv)}>
-                      Approve
-                    </Button>
-                  )}
+                  {awaiting.includes(inv) &&
+                    (canApprove(inv) ? (
+                      <Button tone="success" busy={busy === inv.id} onClick={() => approve(inv)}>
+                        Approve
+                      </Button>
+                    ) : (
+                      authority.live && <AuthorityNote className="text-left" authority={authority.get(authorityItem('invoice', inv.id))} />
+                    ))}
                 </td>
               </tr>
             ))}

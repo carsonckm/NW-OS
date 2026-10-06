@@ -5,7 +5,8 @@ import { setupDemoWorld } from '../test/demoWorld';
 import { AccessContext } from '../auth/access';
 import type { Pool } from '../db/pool';
 import { AI_PROPOSAL_TYPE } from './assistantActions';
-import { AI_PROPOSAL_APPROVAL_TYPE, REASON_CODES, decisionTypeForApprovalType, resolveApprovalAuthority, type AuthorityResolution, type ResolveInput } from './authorityResolver';
+import { AI_PROPOSAL_APPROVAL_TYPE, REASON_CODES, REASON_PRECEDENCE, decisionTypeForApprovalType, resolveApprovalAuthority, type AuthorityResolution, type ResolveInput } from './authorityResolver';
+import { canEvaluateApproval } from '../../src/utils/permissions';
 import { MAJOR_PURCHASE_THRESHOLD } from './hooks/purchasing';
 
 type Row = Record<string, any>;
@@ -52,10 +53,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     ).body as Row;
   let n = 0;
   const next = (p: string) => `${p}-${++n}`;
-  /** A variation raised by the Owner, waiting for internal approval. */
-  const variation = async (projectId: string, amount: number) => {
+  /** A variation raised by the Owner (or `by`), waiting for internal approval. */
+  const variation = async (projectId: string, amount: number, by = 'Owner / CEO') => {
     const id = next('vo-r');
-    await owner().post('/api/variations').send({ id, variation_number: id.toUpperCase(), project_id: projectId, project_name: 'P', title: 'Extra shelf', description: 'x', reason: 'Client request', requested_by: 'Client', estimated_cost: 100, client_amount: amount, status: 'Internal Approval', created_at: '' }).expect(201);
+    await as[by].post('/api/variations').send({ id, variation_number: id.toUpperCase(), project_id: projectId, project_name: 'P', title: 'Extra shelf', description: 'x', reason: 'Client request', requested_by: 'Client', estimated_cost: 100, client_amount: amount, status: 'Internal Approval', created_at: '' }).expect(201);
     return id;
   };
   const vo = (id: string): ResolveInput => ({ resource: { kind: 'variation', id } });
@@ -118,7 +119,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
 
     it('lets the Owner decide without any rule', async () => {
       await db.pool.query(`UPDATE delegated_authorities SET active = false WHERE id = 'sys-variation'`);
-      const id = await variation(projB, 5000);
+      const id = await variation(projB, 5000, 'Project Manager');
       const r = codesSeen(await resolve('user-owner', vo(id)));
       expect(r).toMatchObject({ allowed: true, reasonCode: 'ALLOWED', basis: 'owner', matchedRuleId: null });
       await db.pool.query(`UPDATE delegated_authorities SET active = true WHERE id = 'sys-variation'`);
@@ -141,12 +142,13 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     it('Sensitive and Strategic: the same delegated rule gives way to the Owner', async () => {
       await grant({ project_id: undefined, max_value: 10000, name: 'PM variations everywhere' });
       const id = await variation(projB, 5000);
+      const pmRaised = await variation(projB, 5000, 'Project Manager');
       expect((await resolve('user-pm', vo(id))).allowed).toBe(true);
       for (const level of ['Sensitive', 'Strategic']) {
         await setSensitivity(projB, level);
         const r = codesSeen(await resolve('user-pm', vo(id)));
         expect(r, level).toMatchObject({ allowed: false, reasonCode: 'SENSITIVITY_BLOCKED', requiresOwner: true, projectSensitivity: level });
-        expect((await resolve('user-owner', vo(id))).allowed).toBe(true);
+        expect((await resolve('user-owner', vo(pmRaised))).allowed).toBe(true);
       }
       await setSensitivity(projB, 'Normal');
       expect((await resolve('user-pm', vo(id))).allowed).toBe(true);
@@ -418,6 +420,201 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       const stale = await ctxOf('user-pm');
       expect(codesSeen(await resolveApprovalAuthority(db.pool, stale, { resource: { kind: 'approval', id: req } }))).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT' });
       await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-pm'`);
+    });
+  });
+
+  describe('reason precedence: deterministic and truthful', () => {
+    it('is documented in code in the agreed order', () => {
+      expect(REASON_PRECEDENCE).toEqual(['INVALID_AUTHORITY_CONTEXT', 'SENSITIVITY_BLOCKED', 'SELF_APPROVAL_BLOCKED', 'INSUFFICIENT_PERMISSION', 'OUT_OF_SCOPE', 'AUTHORITY_NOT_YET_ACTIVE', 'AUTHORITY_EXPIRED', 'AUTHORITY_DEACTIVATED', 'VALUE_LIMIT_EXCEEDED', 'RISK_LIMIT_EXCEEDED', 'CONDITION_NOT_MET', 'NO_MATCHING_AUTHORITY', 'OWNER_REQUIRED', 'ALLOWED']);
+    });
+
+    it('Sensitive: a valid rule plus rules for other projects -> SENSITIVITY_BLOCKED, never OUT_OF_SCOPE', async () => {
+      await grant({ project_id: projB, name: 'Valid on B' });
+      await grant({ project_id: projA, name: 'Other project' });
+      const id = await variation(projB, 100);
+      expect((await resolve('user-pm', vo(id))).reasonCode).toBe('ALLOWED');
+      await setSensitivity(projB, 'Sensitive');
+      expect(await resolve('user-pm', vo(id))).toMatchObject({ reasonCode: 'SENSITIVITY_BLOCKED', requiresOwner: true, matchedRuleId: null });
+      await setSensitivity(projB, 'Normal');
+    });
+
+    it('Strategic: several matching rules -> SENSITIVITY_BLOCKED, not a rule-specific failure', async () => {
+      await grant({ name: 'Rule A1' });
+      await grant({ name: 'Rule A2', max_value: 50 });
+      await grant({ name: 'Rule A3', project_id: undefined });
+      const id = await variation(projA, 100);
+      await setSensitivity(projA, 'Strategic');
+      expect(await resolve('user-pm', vo(id))).toMatchObject({ reasonCode: 'SENSITIVITY_BLOCKED', matchedRuleCode: null });
+      await setSensitivity(projA, 'Normal');
+    });
+
+    it('a matching rule without the baseline permission -> INSUFFICIENT_PERMISSION', async () => {
+      await db.pool.query(`INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, target_role, project_id, granted_by) VALUES ('da-nobase2', 'DA-NOBASE2', 'Admin variations', 'x', 'owner', 'allow', 'variation', 'Admin', $1, 'user-owner')`, [projA]);
+      expect((await resolve('user-admin', vo(await variation(projA, 100)))).reasonCode).toBe('INSUFFICIENT_PERMISSION');
+    });
+
+    it('the baseline permission and a rule for another project only -> OUT_OF_SCOPE; a valid rule -> ALLOWED', async () => {
+      const id = await variation(projA, 100);
+      await grant({ project_id: projB });
+      expect((await resolve('user-pm', vo(id))).reasonCode).toBe('OUT_OF_SCOPE');
+      await grant({ project_id: projA, name: 'Right project' });
+      expect((await resolve('user-pm', vo(id))).reasonCode).toBe('ALLOWED');
+    });
+
+    it('a rule for another project explains a refusal only while it is in force', async () => {
+      const id = await variation(projA, 100);
+      const elsewhere = await grant({ project_id: projB });
+      expect((await resolve('user-pm', vo(id))).reasonCode).toBe('OUT_OF_SCOPE');
+      await owner().post(`/api/authority/rules/${elsewhere.id}/deactivate`).send({ reason: 'x' }).expect(200);
+      expect((await resolve('user-pm', vo(id))).reasonCode).toBe('NO_MATCHING_AUTHORITY');
+      const expired = await grant({ project_id: projB, name: 'Expired elsewhere' });
+      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [expired.id]);
+      expect((await resolve('user-pm', vo(id))).reasonCode).toBe('NO_MATCHING_AUTHORITY');
+    });
+
+    it('unrelated rules never change the final reason', async () => {
+      const id = await variation(projA, 5000);
+      const real = await grant({ max_value: 1000, name: 'The real one' });
+      const before = await resolve('user-pm', vo(id));
+      expect(before).toMatchObject({ reasonCode: 'VALUE_LIMIT_EXCEEDED', matchedRuleCode: real.code });
+      // Rules for other projects (active, deactivated, expired), other people, other decisions.
+      await grant({ project_id: projB, name: 'Other project', priority: 800 });
+      const off = await grant({ project_id: projB, name: 'Other project, off', priority: 800 });
+      await owner().post(`/api/authority/rules/${off.id}/deactivate`).send({ reason: 'x' }).expect(200);
+      const old = await grant({ project_id: projB, name: 'Other project, expired', priority: 800 });
+      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [old.id]);
+      await grant({ target_role: 'Production Manager', decision_type: 'drawing', name: 'Someone else, drawings', priority: 800 });
+      await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm3', 'Third PM', 'pm3@test.local', 'x', 'Project Manager', true) ON CONFLICT DO NOTHING`);
+      await grant({ target_role: undefined, target_user_id: 'user-pm3', name: 'Another PM', priority: 800 });
+      await grant({ decision_type: 'drawing', name: 'PM drawings', priority: 800 });
+      const after = await resolve('user-pm', vo(id));
+      expect(after).toMatchObject({ reasonCode: before.reasonCode, matchedRuleCode: before.matchedRuleCode, evaluatedValue: before.evaluatedValue });
+    });
+
+    it('several in-scope failures: the earlier code in the precedence wins, whatever the priority or creation order', async () => {
+      const id = await variation(projA, 5000);
+      const run = async (order: 'value-first' | 'expired-first') => {
+        await db.pool.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
+        const make = async (k: string) => {
+          if (k === 'value') return grant({ max_value: 1000, priority: 600, name: 'Value' });
+          const r = await grant({ priority: 100, name: 'Expired' });
+          await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [r.id]);
+          return r;
+        };
+        const [first, second] = order === 'value-first' ? ['value', 'expired'] : ['expired', 'value'];
+        await make(first);
+        await make(second);
+        return (await resolve('user-pm', vo(id))).reasonCode;
+      };
+      expect(await run('value-first')).toBe('AUTHORITY_EXPIRED');
+      expect(await run('expired-first')).toBe('AUTHORITY_EXPIRED');
+    });
+
+    it('a rule that could not have outranked the Owner requirement does not explain the refusal', async () => {
+      // RM 25,000 PO: SYS-PURCHASE-STANDARD fails on value but would lose to SYS-PURCHASE-MAJOR anyway.
+      const po = await purchaseOrder(projA, 25000);
+      expect(await resolve('user-purchasing', { resource: { kind: 'purchase_order', id: po } })).toMatchObject({ reasonCode: 'OWNER_REQUIRED', matchedRuleCode: 'SYS-PURCHASE-MAJOR', requiresOwner: true });
+      // A delegation that would outrank it, failing on value, is the real blocker.
+      await grant({ decision_type: 'purchase', target_role: 'Purchasing', max_value: 20000, priority: 300, name: 'Purchasing to RM 20k' });
+      expect(await resolve('user-purchasing', { resource: { kind: 'purchase_order', id: po } })).toMatchObject({ reasonCode: 'VALUE_LIMIT_EXCEEDED', requiresOwner: true });
+    });
+
+    it('gates in order: Sensitive before self-approval, self-approval before baseline', async () => {
+      const recorded = async (role: string, projectId: string) => {
+        const id = next('inv-p');
+        await as[role].post('/api/invoices').send({ id, invoice_number: id.toUpperCase(), invoice_type: 'Client Billing Invoice', party_name: 'Client', project_id: projectId, project_name: 'P', amount_before_tax: 1000, tax_amount: 0, total_amount: 1, invoice_date: '2026-10-22', due_date: '2026-11-21', status: 'Pending Approval', paid_amount: 0 }).expect(201);
+        return id;
+      };
+      // The PM recorded it and lacks finance.view: self-approval is reported.
+      expect((await resolve('user-pm', { resource: { kind: 'invoice', id: await recorded('Project Manager', projA) } })).reasonCode).toBe('SELF_APPROVAL_BLOCKED');
+      const acct = await recorded('Accountant', projB);
+      await setSensitivity(projB, 'Sensitive');
+      expect((await resolve('user-accountant', { resource: { kind: 'invoice', id: acct } })).reasonCode).toBe('SENSITIVITY_BLOCKED');
+      await setSensitivity(projB, 'Normal');
+    });
+
+    it('a record outside the user\'s projects: OUT_OF_SCOPE, and its sensitivity is not disclosed', async () => {
+      await setSensitivity('proj-x', 'Strategic');
+      const x = await approvalRequest('Owner / CEO', { project_id: 'proj-x', approval_type: 'Safety-Critical Decision', assigned_approver_role: 'Project Manager' });
+      expect(await resolve('user-pm', { resource: { kind: 'approval', id: x } })).toMatchObject({ reasonCode: 'OUT_OF_SCOPE', projectSensitivity: null });
+      await setSensitivity('proj-x', 'Normal');
+    });
+  });
+
+  describe('intentional Phase 6 security hardening (regression)', () => {
+    const asProfile = (u: Row) => ({ id: u.id, name: u.name, email: u.email, role: u.role, client_id: u.client_id ?? undefined, contractor_id: u.contractor_id ?? undefined });
+    const clientUser = async () => asProfile((await db.pool.query(`SELECT * FROM users WHERE id = 'user-client'`)).rows[0]);
+    const stored = async (id: string) => (await db.pool.query('SELECT data FROM approvals WHERE id = $1', [id])).rows[0].data;
+
+    it('1. a Client user cannot decide an internal request just because it is assigned to the Client role', async () => {
+      for (const type of ['Safety-Critical Decision', 'Technical Change', 'Major Purchase', 'Project Date Change']) {
+        const id = await approvalRequest('Project Manager', { approval_type: type, assigned_approver_role: 'Client' });
+        // Before Phase 6 (the old rule, still in the browser for demo mode) this was allowed.
+        expect(canEvaluateApproval(await clientUser(), await stored(id)).canApprove, type).toBe(true);
+        for (const decision of ['Approved', 'Rejected', 'Changes Requested']) {
+          const res = await decide('Client', id, decision);
+          expect(res.status, `${type} ${decision}`).toBe(403);
+          expect(res.body.reason_code).toBe('INSUFFICIENT_PERMISSION');
+        }
+        expect((await db.pool.query('SELECT decision FROM approvals WHERE id = $1', [id])).rows[0].decision).toBe('Pending');
+      }
+    });
+
+    it('1b. client consent is unchanged: Variation / Client Scope Change requests on their own project only', async () => {
+      for (const type of ['Variation', 'Client Scope Change']) {
+        const mine = await approvalRequest('Project Manager', { approval_type: type, assigned_approver_role: 'Client' });
+        await decide('Client', mine).expect(200);
+      }
+      const other = await approvalRequest('Owner / CEO', { project_id: 'proj-x', approval_type: 'Variation', assigned_approver_role: 'Client' });
+      expect((await decide('Client', other)).status).toBe(403);
+    });
+
+    it('2. a role without purchasing.view cannot decide a Major Purchase / Major Cost request, even when assigned', async () => {
+      expect((await ctxOf('user-site')).can('purchasing.view')).toBe(false);
+      for (const type of ['Major Purchase', 'Major Cost']) {
+        const id = await approvalRequest('Purchasing', { approval_type: type, assigned_approver_role: 'Site Supervisor' });
+        const old = canEvaluateApproval(asProfile((await db.pool.query(`SELECT * FROM users WHERE id = 'user-site'`)).rows[0]), await stored(id));
+        expect(old.canApprove, `${type}: allowed before Phase 6`).toBe(true);
+        const res = await decide('Site Supervisor', id);
+        expect(res.status, type).toBe(403);
+        expect(res.body.reason_code).toBe('INSUFFICIENT_PERMISSION');
+        expect((await resolve('user-site', { resource: { kind: 'approval', id } })).baselinePermission).toBe('purchasing.view');
+        // The Accountant (System Policy) and the Owner still decide it.
+        expect((await resolve('user-accountant', { resource: { kind: 'approval', id } })).allowed).toBe(true);
+        await decide('Owner / CEO', id).expect(200);
+      }
+    });
+  });
+
+  describe('the screens ask the resolver (GET /api/authority/resolve)', () => {
+    const screen = (role: string, items: string[]) => as[role].get(`/api/authority/resolve?items=${encodeURIComponent(items.join(','))}`);
+
+    it('returns the resolver result for the signed-in user, without the rule list', async () => {
+      const id = await variation(projB, 100);
+      expect((await screen('Project Manager', [`variation:${id}:approve`]).expect(200)).body[0]).toMatchObject({ item: `variation:${id}:approve`, allowed: false, reason_code: 'NO_MATCHING_AUTHORITY' });
+      await grant({ project_id: projB });
+      const [ok] = (await screen('Project Manager', [`variation:${id}:approve`]).expect(200)).body;
+      expect(ok).toMatchObject({ allowed: true, reason_code: 'ALLOWED', basis: 'rule', decision_type: 'variation', project_sensitivity: 'Normal' });
+      expect(ok).not.toHaveProperty('rules');
+      await setSensitivity(projB, 'Strategic');
+      expect((await screen('Project Manager', [`variation:${id}:approve`]).expect(200)).body[0]).toMatchObject({ allowed: false, reason_code: 'SENSITIVITY_BLOCKED', requires_owner: true, project_sensitivity: 'Strategic' });
+      // The server still refuses the action itself, whatever a screen shows.
+      const direct = await as['Project Manager'].post(`/api/variations/${id}/transition`).send({ status: 'Client Approval' });
+      expect(direct.status).toBe(403);
+      expect(direct.body.reason_code).toBe('SENSITIVITY_BLOCKED');
+      await setSensitivity(projB, 'Normal');
+    });
+
+    it('client consent, other projects, bad input', async () => {
+      const mine = await approvalRequest('Project Manager', { approval_type: 'Client Scope Change', assigned_approver_role: 'Client' });
+      expect((await screen('Client', [`approval:${mine}:approve`]).expect(200)).body[0]).toMatchObject({ allowed: true, basis: 'client_consent' });
+      const x = await approvalRequest('Owner / CEO', { project_id: 'proj-x', approval_type: 'Safety-Critical Decision' });
+      expect((await screen('Contractor', [`approval:${x}:approve`]).expect(200)).body[0]).toMatchObject({ allowed: false, reason_code: 'OUT_OF_SCOPE', project_sensitivity: null });
+      expect((await screen('Project Manager', ['payroll:x:approve'])).status).toBe(400);
+      expect((await screen('Project Manager', [`approval:${x}:sign`])).status).toBe(400);
+      expect((await as['Project Manager'].get('/api/authority/resolve')).status).toBe(400);
+      expect((await screen('Project Manager', Array.from({ length: 101 }, (_, i) => `approval:a${i}:approve`))).status).toBe(400);
+      expect((await request(app).get(`/api/authority/resolve?items=approval:${x}:approve`)).status).toBe(401);
     });
   });
 

@@ -75,6 +75,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       ['POST', '/api/ai/echo'],
       ['GET', '/api/authority/rules'],
       ['GET', '/api/authority/decision-types'],
+      ['GET', '/api/authority/resolve?items=approval:apr-1:approve'],
       ['POST', '/api/authority/rules'],
       ['PATCH', '/api/authority/rules/sys-drawing'],
       ['POST', '/api/authority/rules/sys-drawing/deactivate'],

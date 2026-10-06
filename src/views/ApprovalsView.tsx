@@ -16,6 +16,8 @@ import {
   canEvaluateApproval,
   ROLE_DEFINITIONS,
 } from '../utils/permissions';
+import { AuthorityNote } from '../components/AuthorityNote';
+import { authorityItem, useAuthority } from '../services/authority';
 import {
   CheckCircle2,
   XCircle,
@@ -49,6 +51,10 @@ export const ApprovalsView: React.FC = () => {
     userProjects,
     projects,
   } = useNW();
+
+  // Who may decide each pending request: the server's authority resolver (live system). Demo
+  // mode has no server and keeps the old on-screen rules (nothing there is stored or enforced).
+  const authority = useAuthority(approvals.filter((a) => a.decision === 'Pending').map((a) => authorityItem('approval', a.id)));
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'technical' | 'variations' | 'purchases' | 'completed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -307,7 +313,8 @@ export const ApprovalsView: React.FC = () => {
           </div>
         ) : (
           filteredApprovals.map((item) => {
-            const auth = canEvaluateApproval(currentUser, item);
+            const server = authority.get(authorityItem('approval', item.id));
+            const auth = authority.live ? { canApprove: Boolean(server?.allowed), blockedReason: server?.reason } : canEvaluateApproval(currentUser, item);
             const statusInfo = getDecisionBadge(item.decision);
 
             return (
@@ -465,6 +472,14 @@ export const ApprovalsView: React.FC = () => {
                               <span>Reject Request</span>
                             </button>
                           </>
+                        ) : authority.live ? (
+                          server ? (
+                            <AuthorityNote always authority={server} />
+                          ) : (
+                            <div className="bg-slate-100 text-slate-500 border border-slate-200 p-2.5 rounded-xl text-center text-[10px]" data-testid="authority-loading">
+                              Checking who may decide…
+                            </div>
+                          )
                         ) : currentUser.role === 'Owner / CEO' ? (
                           // Owner Override Option
                           <div className="space-y-1.5">

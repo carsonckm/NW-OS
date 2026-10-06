@@ -22,6 +22,11 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   approves on a Normal project, is refused on Sensitive and Strategic (the Owner approves), and
   approves again once the Owner lowers the sensitivity; purchases, invoices and every audit
   record go through the authority resolver. Recorded in `docs/phase6-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-ui.cjs` — Phase 6 Batch 2 review: the approval screens show
+  what the server's authority resolver decides (delegated PM sees Approve on Normal, "Owner
+  approval required" on Sensitive / Strategic, nothing with the baseline permission only,
+  OUT_OF_SCOPE for another project's authority; Client and Major Purchase hardening; Issue PO),
+  each checked against the API and the database. Recorded in `docs/phase6-ui-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 
