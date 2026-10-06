@@ -7,6 +7,10 @@
  *
  * Everything that decides who a rule covers is validated here, on the server: the browser can
  * never set a rule's id, code, kind, system key, lock, granting user or permission target.
+ *
+ * Project sensitivity is a hard ceiling (authorityCeiling.ts): an allow rule can never be
+ * created, changed or reactivated onto a project whose sensitivity reserves that decision for
+ * the Owner, and the Sensitive / Strategic System Policy rows are locked.
  */
 import { randomUUID } from 'crypto';
 import { ForbiddenError, type AccessContext } from '../auth/access';
@@ -14,6 +18,7 @@ import { isRole, permissionsFor } from '../auth/permissions';
 import { writeAudit, type AuditActor } from '../audit';
 import { NotFoundError, ValidationError } from '../core/repository';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
+import { ruleExceedsCeiling } from './authorityCeiling';
 import type { PermissionKey, UserRole } from '../../src/types';
 
 type Db = Pool | PoolClient;
@@ -55,11 +60,13 @@ export interface DecisionType {
   label: string;
   baseline_permission: PermissionKey;
   has_value: boolean;
+  /** Whether a Sensitive project reserves this decision type for the Owner (not editable by API). */
+  sensitive_protected: boolean;
   active: boolean;
 }
 
 export async function decisionTypes(db: Db): Promise<DecisionType[]> {
-  return (await db.query('SELECT key, label, baseline_permission, has_value, active FROM authority_decision_types ORDER BY label')).rows;
+  return (await db.query('SELECT key, label, baseline_permission, has_value, sensitive_protected, active FROM authority_decision_types ORDER BY label')).rows;
 }
 
 const money = (n: unknown) => `RM ${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
@@ -204,6 +211,11 @@ async function validateOwnerRule(db: Db, input: Row, now: Date, { creating }: { 
     const p = (await db.query('SELECT client_id FROM projects WHERE id = $1', [r.project_id])).rows[0];
     if (!p) throw new ValidationError(`Project ${r.project_id} does not exist`);
     if (r.client_id && p.client_id !== r.client_id) throw new ValidationError('That project does not belong to that client');
+    // The sensitivity ceiling: never delegate what the project reserves for the Owner.
+    if (r.effect === 'allow') {
+      const over = await ruleExceedsCeiling(db, type.key, r.project_id);
+      if (over) throw new ValidationError(over);
+    }
   }
   if (r.client_id && !(await db.query('SELECT 1 FROM clients WHERE id = $1', [r.client_id])).rowCount) throw new ValidationError(`Client ${r.client_id} does not exist`);
 
@@ -309,7 +321,9 @@ export async function setRuleActive(pool: Pool, ctx: AccessContext, actor: Audit
     const existing = (await db.query('SELECT * FROM delegated_authorities WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!existing) throw notFound(`Authority rule ${id}`);
     if (existing.active === active) throw new ValidationError(`Rule ${existing.code} is already ${active ? 'active' : 'inactive'}`);
-    if (existing.locked) throw new ForbiddenError(`${existing.code} is a locked System Policy and cannot be deactivated`);
+    if (existing.locked) {
+      throw new ForbiddenError(`${existing.code} is a locked System Policy and cannot be deactivated or reactivated. Project sensitivity is changed on the project itself.`);
+    }
     // Reactivating never extends an authority past its end date.
     if (active && existing.end_at && new Date(existing.end_at).getTime() <= now.getTime()) {
       throw new ValidationError(`${existing.code} ended on ${day(existing.end_at)}; create a new rule instead of reactivating it`);
@@ -361,9 +375,22 @@ export async function setProjectSensitivity(pool: Pool, ctx: AccessContext, acto
   return withTransaction(pool, async (db) => {
     const p = (await db.query('SELECT id, project_name, sensitivity FROM projects WHERE id = $1 FOR UPDATE', [projectId])).rows[0];
     if (!p) throw notFound(`Project ${projectId}`);
-    if (p.sensitivity === b.sensitivity) return { project_id: p.id, project_name: p.project_name, sensitivity: p.sensitivity, changed: false };
+    if (p.sensitivity === b.sensitivity) return { project_id: p.id, project_name: p.project_name, sensitivity: p.sensitivity, changed: false, rules_above_ceiling: [] };
     await db.query('UPDATE projects SET sensitivity = $2, updated_at = now() WHERE id = $1', [projectId, b.sensitivity]);
-    await writeAudit(db, actor, { action: 'project.sensitivity.change', entityType: 'projects', entityId: projectId, projectId, before: { sensitivity: p.sensitivity }, after: { sensitivity: b.sensitivity }, details: reason });
-    return { project_id: p.id, project_name: p.project_name, sensitivity: b.sensitivity, changed: true };
+    // Allow rules on this project that the new ceiling overrides. They stay stored (and are
+    // ignored by the ceiling gate); lowering the sensitivity again brings them back into force.
+    const scoped = (await db.query(`SELECT code, decision_type FROM delegated_authorities WHERE project_id = $1 AND effect = 'allow' AND active ORDER BY code`, [projectId])).rows;
+    const capped: string[] = [];
+    for (const r of scoped) if (await ruleExceedsCeiling(db, r.decision_type, projectId)) capped.push(r.code);
+    await writeAudit(db, actor, {
+      action: 'project.sensitivity.change',
+      entityType: 'projects',
+      entityId: projectId,
+      projectId,
+      before: { sensitivity: p.sensitivity },
+      after: { sensitivity: b.sensitivity, rules_above_ceiling: capped },
+      details: reason,
+    });
+    return { project_id: p.id, project_name: p.project_name, sensitivity: b.sensitivity, changed: true, rules_above_ceiling: capped };
   });
 }
