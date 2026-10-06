@@ -70,6 +70,8 @@ export type RiskStatus =
   | 'At Risk'
   | 'Critical';
 
+export type ProjectSensitivity = 'Normal' | 'Sensitive' | 'Strategic';
+
 export interface Project {
   id: string;
   project_number: string; // e.g. "NW-2026-088"
@@ -88,6 +90,8 @@ export interface Project {
   description: string;
   is_at_risk?: boolean;
   risk_reason?: string;
+  /** Set only by the Owner (PUT /api/projects/:id/sensitivity); enforced by the authority resolver. */
+  sensitivity?: ProjectSensitivity;
   created_at: string;
   updated_at: string;
 }
@@ -1388,6 +1392,7 @@ export type PermissionKey =
   | 'drawings.analyze'
   | 'drawings.create_production'
   | 'drawings.approve'
+  | 'drawings.review'
   | 'drawings.modify_approved'
   | 'knowledge.view'
   | 'knowledge.edit'
@@ -1432,6 +1437,7 @@ export type PermissionKey =
   | 'variations.view'
   | 'variations.create'
   | 'variations.approve'
+  | 'variations.review'
   | 'variations.client_approve'
   // Approvals Framework
   | 'approvals.view'
@@ -1454,7 +1460,9 @@ export type PermissionKey =
   // Management Intelligence & Owner Control Center (Module 16)
   | 'management.view'
   | 'management.reports'
-  | 'management.kpi_config';
+  | 'management.kpi_config'
+  | 'authority.view'
+  | 'authority.manage';
 
 // ----------------------------------------------------
 // GENERAL APPROVAL FRAMEWORK

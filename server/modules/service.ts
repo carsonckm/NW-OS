@@ -208,6 +208,12 @@ export class DataService {
         values.is_at_risk = existing?.is_at_risk ?? null;
         values.risk_reason = existing?.risk_reason ?? null;
       }
+      // Sensitivity is the Owner's setting (PUT /api/projects/:id/sensitivity), never the browser's.
+      // An import may carry a valid stored value; everything else keeps what is stored.
+      if (values && collection === 'projects') {
+        const imported = h.mode === 'import' && ['Normal', 'Sensitive', 'Strategic'].includes(String(values.sensitivity)) ? values.sensitivity : undefined;
+        values.sensitivity = imported ?? existing?.sensitivity ?? 'Normal';
+      }
       if (!values || collection !== 'workItems') return values;
       // A production user (no work_items.edit) may only link an item to an order made for that item.
       if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {

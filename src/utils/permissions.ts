@@ -72,6 +72,7 @@ export const ALL_PERMISSIONS: { key: PermissionKey; label: string; group: string
   { key: 'drawings.markup', label: 'Create Markups', group: 'Drawings', description: 'Pin markups, annotations, and dimensions' },
   { key: 'drawings.analyze', label: 'AI Analyze Drawings', group: 'Drawings', description: 'Run Gemini AI drawing extraction' },
   { key: 'drawings.create_production', label: 'Create NW Production Drawing', group: 'Drawings', description: 'Generate production drawings from recommendations' },
+  { key: 'drawings.review', label: 'Review Drawings (delegable approval)', group: 'Drawings', description: 'Take part in drawing review; approves only where a delegated authority rule allows it' },
   { key: 'drawings.approve', label: 'Approve Drawings', group: 'Drawings', description: 'Formally approve drawings for production' },
   { key: 'drawings.modify_approved', label: 'Modify Approved Drawings', group: 'Drawings', description: 'Supercede or issue revision to approved drawings' },
 
@@ -125,6 +126,7 @@ export const ALL_PERMISSIONS: { key: PermissionKey; label: string; group: string
   // Variations
   { key: 'variations.view', label: 'View Variations', group: 'Variations', description: 'View variation orders and cost impact' },
   { key: 'variations.create', label: 'Create Variations', group: 'Variations', description: 'Draft new variation orders (VO)' },
+  { key: 'variations.review', label: 'Review Variations (delegable approval)', group: 'Variations', description: 'Take part in variation review; approves only where a delegated authority rule allows it' },
   { key: 'variations.approve', label: 'Approve Variations (Internal)', group: 'Variations', description: 'Approve major internal variation costings' },
   { key: 'variations.client_approve', label: 'Client Approve Variations', group: 'Variations', description: 'Formally endorse or reject client-facing variation' },
 
@@ -153,6 +155,8 @@ export const ALL_PERMISSIONS: { key: PermissionKey; label: string; group: string
   { key: 'management.view', label: 'View Management Intelligence', group: 'Administration', description: 'Access company-wide portfolio, executive analytics, and owner command center' },
   { key: 'management.reports', label: 'Generate & Export Management Reports', group: 'Administration', description: 'Export executive reports in CSV and print formats' },
   { key: 'management.kpi_config', label: 'Configure Management KPIs', group: 'Administration', description: 'Update executive benchmark tolerances and performance targets' },
+  { key: 'authority.view', label: 'View Delegated Authority', group: 'Administration', description: 'See delegated authority rules, System Policy and their history' },
+  { key: 'authority.manage', label: 'Manage Delegated Authority', group: 'Administration', description: 'Create, change, deactivate and reactivate delegated authority rules (Owner)' },
 ];
 
 export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
@@ -212,6 +216,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'blue',
     },
     defaultPermissions: [
+      'authority.view',
       'clients.view',
       'clients.create',
       'clients.edit',
@@ -298,6 +303,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'indigo',
     },
     defaultPermissions: [
+      'drawings.review',
+      'variations.review',
       'clients.view',
       'projects.view',
       'projects.edit',
@@ -532,6 +539,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
       accent: 'rose',
     },
     defaultPermissions: [
+      'drawings.review',
       'projects.view',
       'work_packages.view',
       'work_items.view',

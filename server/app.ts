@@ -5,6 +5,7 @@ import { AuthStore } from './auth/store';
 import { createCoreRouter } from './core/routes';
 import { createModuleRouter } from './modules/routes';
 import { createOpsRouter } from './modules/opsRoutes';
+import { createAuthorityRouter } from './modules/authorityRoutes';
 import { AutomationEngine } from './automation/engine';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
@@ -38,6 +39,8 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
     app.get('/api/auth/session', (_req, res) => res.json({ authEnabled: false, user: null }));
   }
 
+  // Phase 6: delegated authority (mounted first so /projects/:id/sensitivity is its own route).
+  if (pool && store) app.use('/api', createAuthorityRouter({ pool, store }));
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));
