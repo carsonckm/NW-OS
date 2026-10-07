@@ -1,8 +1,8 @@
-import type { ApprovalItem, UserProfile } from '../../../src/types';
-import { canEvaluateApproval } from '../../../src/utils/permissions';
 import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { AI_PROPOSAL_TYPE, executeProposal } from '../assistantActions';
+import { authorityAudit, clientConsentAllowed, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 import type { HookContext, ModuleHooks, Row } from '../types';
 
 const FINAL = new Set(['Approved', 'Rejected']);
@@ -10,35 +10,23 @@ const FINAL = new Set(['Approved', 'Rejected']);
 const REQUEST_FIELDS = ['assigned_approver_role', 'assigned_approver_id', 'approval_type', 'related_entity_type', 'related_entity_id', 'project_id'];
 const DECISION_FIELDS = ['decision', 'decision_date', 'decision_by_id', 'decision_by_name', 'decision_by_role', 'is_owner_override'];
 
-function profile(h: HookContext): UserProfile {
-  const u = h.ctx.user;
-  return { id: u.id, name: u.name, email: u.email, role: u.role, client_id: u.client_id ?? undefined, contractor_id: u.contractor_id ?? undefined };
-}
-
 /**
  * Who may decide, evaluated on the server against the stored request (never the browser's
- * copy): the existing canEvaluateApproval rules (owner override, client variations, no
- * self-approval, assignee/role match) plus a permission gate, so an open "Designated
- * Authorized Manager" request still needs approvals.decide.
+ * copy).
+ * - A client deciding a client-facing request (Variation / Client Scope Change) on their own
+ *   project gives the client's consent; that is not internal approval authority.
+ * - Everything else is an approval decision for the authority resolver: Owner, System Policy
+ *   (assigned approver by user or role, the Accountant's Major Purchase / Major Cost rule,
+ *   "Designated Authorized Manager" requests for approvals.decide holders, never the requester)
+ *   and the Owner's delegated rules, under the project's sensitivity ceiling.
  */
-export function evaluateDecision(h: HookContext, stored: Row, decision: string) {
-  const approval = stored as unknown as ApprovalItem;
-  const verdict = canEvaluateApproval(profile(h), approval);
+export async function evaluateDecision(h: HookContext, stored: Row, decision: string, pendingProjectId?: string): Promise<{ isOverride: boolean; authority?: AuthorityResolution }> {
   const u = h.ctx.user;
-  const clientVariation =
-    u.role === 'Client' && (approval.approval_type === 'Variation' || approval.approval_type === 'Client Scope Change') && h.ctx.can('variations.client_approve');
-  const gated =
-    u.role === 'Owner / CEO' ||
-    h.ctx.can('approvals.decide') ||
-    clientVariation ||
-    approval.assigned_approver_id === u.id ||
-    approval.assigned_approver_role === u.role;
-  const allowed =
-    decision === 'Approved' ? verdict.canApprove : decision === 'Rejected' ? verdict.canReject : verdict.canRequestChanges;
-  if (!gated || !allowed) {
-    throw new ForbiddenError(verdict.blockedReason ?? `You may not ${decision === 'Approved' ? 'approve' : 'decide'} this request`);
-  }
-  return verdict;
+  if (clientConsentAllowed(h.ctx, stored)) return { isOverride: false };
+  const action = decision === 'Approved' ? 'approve' : decision === 'Rejected' ? 'reject' : 'request_changes';
+  const authority = await requireAuthority(h.db, h.ctx, { resource: { kind: 'approval', id: String(stored.id) }, action, pending: { projectId: pendingProjectId } });
+  // The Owner deciding their own request is recorded as an Owner override, as before.
+  return { isOverride: u.role === 'Owner / CEO' && stored.requested_by_id === u.id, authority };
 }
 
 export async function applyDecision(h: HookContext, existing: Row, values: Row) {
@@ -52,7 +40,7 @@ export async function applyDecision(h: HookContext, existing: Row, values: Row) 
     if (existing.requested_by_id !== u.id && u.role !== 'Owner / CEO') throw new ForbiddenError('Only the requester can resubmit');
     return { ...values, decision_date: undefined, decision_by_id: undefined, decision_by_name: undefined, decision_by_role: undefined };
   }
-  const verdict = evaluateDecision(h, existing, decision);
+  const verdict = await evaluateDecision(h, existing, decision, values.project_id ? String(values.project_id) : undefined);
   const decided = {
     ...values,
     decision,
@@ -68,16 +56,18 @@ export async function applyDecision(h: HookContext, existing: Row, values: Row) 
     entityId: existing.id as string,
     projectId: existing.project_id as string,
     before: { decision: existing.decision },
-    after: { decision, comments: values.comments, override: verdict.isOverride },
+    after: { decision, comments: values.comments, override: verdict.isOverride, ...(verdict.authority ? { authority: authorityAudit(verdict.authority) } : { consent: 'client' }) },
   });
   return decided;
 }
 
 export const approvalHooks: ModuleHooks = {
   // AI proposal approved → the system executes it, as the approver, in this transaction.
+  // Then the request's route follows its decision (routed while Pending, closed once decided).
   async afterWrite(h, existing, stored) {
-    if (h.mode === 'import' || stored.approval_type !== AI_PROPOSAL_TYPE) return;
-    if (stored.decision === 'Approved' && existing?.decision !== 'Approved') await executeProposal(h, stored);
+    if (h.mode === 'import') return;
+    if (stored.approval_type === AI_PROPOSAL_TYPE && stored.decision === 'Approved' && existing?.decision !== 'Approved') await executeProposal(h, stored);
+    if (!existing || existing.decision !== stored.decision || existing.project_id !== stored.project_id) await syncRoute(h.db, h.actor, 'approval', String(stored.id));
   },
 
   async beforeWrite(h, existing, incoming) {

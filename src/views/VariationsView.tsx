@@ -16,6 +16,8 @@ import { hasPermission } from '../utils/permissions';
 import { api } from '../services/coreApi';
 import { actionErrorOf, useRecords } from '../services/records';
 import { FormError } from '../components/ui/FormError';
+import { AuthorityNote } from '../components/AuthorityNote';
+import { authorityItem, useAuthority } from '../services/authority';
 import { Button, Field, Input, Modal, newId, Pill, rm, Section, Select, TextArea } from '../components/ui/forms';
 
 const FLOW = ['Identified', 'Costing', 'Internal Approval', 'Client Approval', 'Approved', 'Implemented', 'Closed'];
@@ -162,14 +164,22 @@ const VariationDetail: React.FC<{ v: Variation }> = ({ v }) => {
 
   const stage = v.status;
   const preApproval = ['Identified', 'Costing', 'Internal Approval', 'Client Approval'].includes(stage);
+  // Internal approval and internal rejection: the server's authority resolver decides (live
+  // system; demo mode keeps the permission-based buttons). The client's acceptance or decline
+  // at the client stage is their consent, not internal authority.
+  const approveItem = authorityItem('variation', v.id);
+  const rejectItem = authorityItem('variation', v.id, 'reject');
+  const clientStageDecline = stage === 'Client Approval' && can('variations.client_approve');
+  const authority = useAuthority([...(stage === 'Internal Approval' ? [approveItem] : []), ...(preApproval && stage !== 'Client Approval' ? [rejectItem] : [])]);
+  const may = (item: string) => (authority.live ? Boolean(authority.get(item)?.allowed) : can('variations.approve'));
   const actions: { status: string; label: string; tone?: 'primary' | 'success' | 'danger'; show: boolean }[] = [
     { status: 'Costing', label: 'Start costing', show: stage === 'Identified' && can('variations.create') },
     { status: 'Internal Approval', label: 'Send for internal approval', tone: 'primary', show: ['Identified', 'Costing'].includes(stage) && can('variations.create') },
-    { status: 'Client Approval', label: 'Approve internally → send to client', tone: 'success', show: stage === 'Internal Approval' && can('variations.approve') },
+    { status: 'Client Approval', label: 'Approve internally → send to client', tone: 'success', show: stage === 'Internal Approval' && may(approveItem) },
     { status: 'Approved', label: isClient ? 'Accept variation' : "Record client's approval", tone: 'success', show: stage === 'Client Approval' && can('variations.client_approve') },
     { status: 'Implemented', label: 'Mark implemented', tone: 'primary', show: stage === 'Approved' && (can('variations.approve') || can('variations.create')) },
     { status: 'Closed', label: 'Close', show: stage === 'Implemented' && can('variations.approve') },
-    { status: 'Rejected', label: isClient ? 'Decline' : 'Reject', tone: 'danger', show: preApproval && (can('variations.approve') || (stage === 'Client Approval' && can('variations.client_approve'))) },
+    { status: 'Rejected', label: isClient ? 'Decline' : 'Reject', tone: 'danger', show: preApproval && (stage === 'Client Approval' ? clientStageDecline : may(rejectItem)) },
   ];
 
   return (
@@ -220,6 +230,7 @@ const VariationDetail: React.FC<{ v: Variation }> = ({ v }) => {
         {v.rejection_reason && <p className="text-rose-700">Rejected: {v.rejection_reason}</p>}
       </div>
 
+      {stage === 'Internal Approval' && authority.live && <AuthorityNote authority={authority.get(approveItem)} />}
       {actions.some((a) => a.show) && (
         <div className="space-y-2 rounded-xl border border-slate-200 p-3">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

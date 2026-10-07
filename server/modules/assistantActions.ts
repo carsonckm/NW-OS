@@ -10,6 +10,7 @@
  * permissions, project scope and record rules apply — the AI never gains access a person
  * does not have. A proposal executes once: approval decisions are final.
  */
+import { syncRoute } from './approvalRouting';
 import { ForbiddenError, type AccessContext } from '../auth/access';
 import { randomUUID } from 'crypto';
 import { writeAudit, type AuditActor } from '../audit';
@@ -223,6 +224,7 @@ export async function raiseProposal(
       proposal: { action: checked.action, params: checked.params, summary: checked.summary },
     };
     await h.insertSystemRecord('approvals', record, `AI proposal (${opts.source}) for ${u.id}`);
+    await syncRoute(h.db, actor, 'approval', id);
     await writeAudit(h.db, actor, { action: 'ai.proposal.create', entityType: 'approval', entityId: id, projectId: checked.project_id, after: { ...record.proposal, source: opts.source, approver: opts.approver.id } });
     if (opts.approver.id !== u.id) {
       await insertNotifications(h.db, [opts.approver.id], { title: `To confirm: ${checked.summary}`, message: `${opts.requestedBy ?? 'The assistant'} proposes this. Nothing changes until you approve.`, type: 'approval', priority: 'high', project_id: checked.project_id, link_tab: 'approvals', entity_type: 'approval', entity_id: id }, `ai:${id}:approve`, 'ai_assistant');

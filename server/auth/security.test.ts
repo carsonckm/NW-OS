@@ -73,8 +73,15 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       ['POST', '/api/projects'],
       ['GET', '/api/users'],
       ['POST', '/api/ai/echo'],
+      ['GET', '/api/authority/rules'],
+      ['GET', '/api/authority/decision-types'],
+      ['GET', '/api/authority/resolve?items=approval:apr-1:approve'],
+      ['POST', '/api/authority/rules'],
+      ['PATCH', '/api/authority/rules/sys-drawing'],
+      ['POST', '/api/authority/rules/sys-drawing/deactivate'],
+      ['PUT', '/api/projects/proj-1/sensitivity'],
     ])('%s %s -> 401', async (method, path) => {
-      const res = await request(app)[method.toLowerCase() as 'get' | 'post'](path).send({});
+      const res = await request(app)[method.toLowerCase() as 'get' | 'post' | 'patch' | 'put'](path).send({});
       expect(res.status).toBe(401);
     });
 

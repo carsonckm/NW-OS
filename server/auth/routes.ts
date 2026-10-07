@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { UserRole } from '../../src/types';
-import type { Pool } from '../db/pool';
+import { withTransaction, type Pool } from '../db/pool';
+import { reevaluateRoutes } from '../modules/approvalRouting';
 import { dummyPasswordHash, passwordProblem, verifyPassword } from './password';
 import { isRole, permissionsFor } from './permissions';
 import {
@@ -176,6 +177,8 @@ export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStor
         before: Object.fromEntries(Object.keys(auditPatch).map((k) => [k, (target as unknown as Record<string, unknown>)[k]])),
         after: { ...auditPatch, ...(patch.password ? { password: '(changed)' } : {}) },
       });
+      // A user who is deactivated or changes role may no longer be the right approver: re-route.
+      if ('role' in patch || 'is_active' in patch) await withTransaction(pool, (db) => reevaluateRoutes(db, actorOf(req), {}, `user ${target.id} ${patch.is_active === false ? 'deactivated' : 'changed'}`));
       res.json(await store.toPublic(updated!));
     })
   );
@@ -194,6 +197,8 @@ export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStor
       const before = await store.assignedProjectIds(target.id);
       await store.setAssignments(target.id, ids);
       await writeAudit(pool, actorOf(req), { action: 'user.assignments', entityType: 'user', entityId: target.id, before, after: ids });
+      // Project scope decides who can be routed approvals: re-route.
+      await withTransaction(pool, (db) => reevaluateRoutes(db, actorOf(req), {}, `user ${target.id} project assignments changed`));
       res.json(await store.toPublic(target));
     })
   );

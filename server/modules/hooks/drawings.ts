@@ -5,6 +5,8 @@ import { ValidationError } from '../../core/repository';
 import type { Pool, PoolClient } from '../../db/pool';
 import type { PermissionKey } from '../../../src/types';
 import type { HookContext, ModuleHooks, Row } from '../types';
+import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 
 type Db = Pool | PoolClient;
 
@@ -105,8 +107,9 @@ function statusOfNw(rev: Row) {
 
 /**
  * Client revision workflow: Draft -> Internal Review -> Approved -> Superseded (or Rejected).
- * Uploading never approves. Only drawings.approve approves or rejects, and only a revision
- * under review. The approved revision becomes current and the previously approved one is
+ * Uploading never approves. Approving or rejecting a revision under review is a drawing
+ * decision: the authority resolver decides who may (today: drawings.approve, i.e. the Owner,
+ * or someone the Owner delegated drawing authority to). The approved revision becomes current and the previously approved one is
  * superseded by the server; a browser can't supersede or reinstate a revision itself.
  * 'Pending Review' and 'Review' are older names for Internal Review.
  */
@@ -127,9 +130,9 @@ function checkClientTransition(h: HookContext, revId: string, from: string, to: 
   };
   if (to === 'Approved') {
     if (!isReview(from)) throw new ForbiddenError(`Revision ${revId} must go through Internal Review before it is approved`);
-    need('drawings.approve');
+    // Who may approve: the authority resolver (upsertRevision).
   } else if (to === 'Rejected') {
-    need('drawings.approve');
+    // Who may reject: the authority resolver (upsertRevision).
   } else if (isReview(to) && from === 'Draft') {
     need('drawings.upload');
   } else if (to === 'Draft' && isReview(from)) {
@@ -159,8 +162,8 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
       if (isClient && !UPLOAD_STATES.has(status)) {
         throw new ForbiddenError('A new revision is uploaded as Draft or Internal Review; only an approver can approve it');
       }
-      if (!isClient && (status === 'Approved' || status === 'Approved for Production' || approvedForProduction) && !h.ctx.can('drawings.approve')) {
-        throw new ForbiddenError('A new NW production drawing cannot be uploaded as approved without drawings.approve');
+      if (!isClient && (status === 'Approved' || status === 'Approved for Production' || approvedForProduction)) {
+        await requireAuthority(h.db, h.ctx, { resource: { kind: 'drawing', id: drawingId } }, (r) => `A new NW production drawing cannot be uploaded as approved: ${r.reason}`);
       }
     }
     // Client: only the server decides which approved revision is current (settleCurrent).
@@ -190,6 +193,7 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
         details: `${drawingId} ${String(rev.revision)} (${status})`,
         after: data,
       });
+      await syncRoute(h.db, h.actor, 'drawing_revision', rev.id);
     }
     return undefined;
   }
@@ -202,14 +206,18 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
   }
   let approving: boolean;
   let isCurrent: boolean;
+  let authority: AuthorityResolution | undefined;
   if (isClient) {
     if (!importing) status = checkClientTransition(h, rev.id, existing.approval_status, status);
+    if (!importing && status !== existing.approval_status && (status === 'Approved' || status === 'Rejected')) {
+      authority = await requireAuthority(h.db, h.ctx, { resource: { kind: 'drawing_revision', id: rev.id }, action: status === 'Approved' ? 'approve' : 'reject' });
+    }
     approving = status === 'Approved' && existing.approval_status !== 'Approved';
     // settleCurrent makes an approved revision current once the old current one is cleared.
     isCurrent = existing.is_current;
   } else {
     approving = (status === 'Approved' && existing.approval_status !== 'Approved') || (approvedForProduction && !existing.approved_for_production);
-    if (approving && !importing && !h.ctx.can('drawings.approve')) throw new ForbiddenError('Missing permission: drawings.approve');
+    if (approving && !importing) authority = await requireAuthority(h.db, h.ctx, { resource: { kind: 'drawing_revision', id: rev.id } });
     if (existing.approval_status === 'Superseded' && status !== 'Superseded') {
       throw new ForbiddenError(`Revision ${rev.id} is superseded and cannot be reinstated`);
     }
@@ -245,8 +253,9 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
       entityType: kind === 'client' ? 'drawing_revision' : 'nw_production_drawing',
       entityId: rev.id,
       before: { status: existing.approval_status, approved_for_production: existing.approved_for_production },
-      after: { status, approved_for_production: approvedForProduction },
+      after: { status, approved_for_production: approvedForProduction, ...(authority ? { authority: authorityAudit(authority) } : {}) },
     });
+    if (!importing) await syncRoute(h.db, h.actor, 'drawing_revision', rev.id);
   }
   return isClient && approving ? rev.id : undefined;
 }

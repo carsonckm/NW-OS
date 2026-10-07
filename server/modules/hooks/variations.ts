@@ -3,6 +3,8 @@ import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { HookContext, ModuleHooks, Row } from '../types';
+import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 
 /**
  * Identified -> Costing -> Internal Approval -> Client Approval -> Approved -> Implemented -> Closed,
@@ -14,11 +16,14 @@ export const APPROVED_STATES = new Set(['Approved', 'Implemented', 'Closed']);
 const PRE_APPROVAL = new Set(['Identified', 'Costing', 'Internal Approval', 'Client Approval']);
 const MONEY = ['estimated_cost', 'client_amount'];
 
-/** Permission needed to move a variation into each state (from the state before it). */
+/**
+ * Permission needed to move a variation into each state (from the state before it). Internal
+ * approval (-> Client Approval) and an internal rejection are variation decisions: the
+ * authority resolver decides who may take them (see variationDecision).
+ */
 const GATE: Record<string, PermissionKey[]> = {
   Costing: ['variations.create'],
   'Internal Approval': ['variations.create'],
-  'Client Approval': ['variations.approve'], // internal approval granted
   Approved: ['variations.client_approve'], // client accepts
   Implemented: ['variations.approve', 'variations.create'],
   Closed: ['variations.approve'],
@@ -28,8 +33,7 @@ export function checkTransition(h: HookContext, from: string, to: string) {
   if (from === to) return;
   if (to === 'Rejected') {
     if (!PRE_APPROVAL.has(from)) throw new ForbiddenError(`A ${from} variation cannot be rejected`);
-    const clientAtClientStage = from === 'Client Approval' && h.ctx.can('variations.client_approve');
-    if (!h.ctx.can('variations.approve') && !clientAtClientStage) throw new ForbiddenError('Missing permission to reject this variation');
+    // The client declining at the client stage is the client's consent; otherwise the resolver decides.
     return;
   }
   const i = VARIATION_FLOW.indexOf(from);
@@ -42,7 +46,23 @@ export function checkTransition(h: HookContext, from: string, to: string) {
     if (!skippable.has(step)) throw new ForbiddenError(`A variation must pass ${step} before ${to}`);
   }
   const needed = GATE[to] ?? [];
-  if (!needed.some((p) => h.ctx.can(p))) throw new ForbiddenError(`Missing permission to move a variation to ${to}: ${needed.join(' or ')}`);
+  // Client Approval (internal approval) has no permission gate here: the authority resolver decides.
+  if (to !== 'Client Approval' && !needed.some((p) => h.ctx.can(p))) throw new ForbiddenError(`Missing permission to move a variation to ${to}: ${needed.join(' or ')}`);
+}
+
+/** The client (or the Owner recording it) declining at the client stage: client consent, not internal authority. */
+const clientDeclines = (h: HookContext, from: string, to: string) => to === 'Rejected' && from === 'Client Approval' && h.ctx.can('variations.client_approve');
+
+/** Internal approval and internal rejection go through the authority resolver. */
+async function variationDecision(h: HookContext, existing: Row, incoming: Row, from: string, to: string): Promise<AuthorityResolution | undefined> {
+  if (from === to) return undefined;
+  // The amount and project being approved are the ones this write stores.
+  const pending = { value: Number(incoming.client_amount ?? existing.client_amount), projectId: String(incoming.project_id ?? existing.project_id) };
+  if (to === 'Client Approval') return requireAuthority(h.db, h.ctx, { resource: { kind: 'variation', id: String(existing.id) }, action: 'approve', pending });
+  if (to === 'Rejected' && !clientDeclines(h, from, to)) {
+    return requireAuthority(h.db, h.ctx, { resource: { kind: 'variation', id: String(existing.id) }, action: 'reject', pending }, (r) => `Missing authority to reject this variation: ${r.reason}`);
+  }
+  return undefined;
 }
 
 type HistoryEntry = { from?: string; to: string; by_id: string; by_name: string; role: string; at: string; note?: string; reference?: string };
@@ -109,6 +129,7 @@ export const variationHooks: ModuleHooks = {
     checkTransition(h, from, to);
     if (from === to) return values;
     checkApprovers(h, existing, to, incoming);
+    const authority = await variationDecision(h, existing, incoming, from, to);
     const note = typeof incoming.transition_note === 'string' ? incoming.transition_note : undefined;
     const reference = typeof incoming.client_approval_reference === 'string' ? incoming.client_approval_reference : undefined;
     delete values.transition_note;
@@ -122,8 +143,14 @@ export const variationHooks: ModuleHooks = {
       entityId: existing.id as string,
       projectId: existing.project_id as string,
       before: { status: from },
-      after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}) },
+      after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}), ...(authority ? { authority: authorityAudit(authority) } : {}) },
     });
     return values;
+  },
+
+  // Internal approval is routed while the variation waits for it, and closed once decided.
+  async afterWrite(h, existing, stored) {
+    if (h.mode === 'import') return;
+    if (!existing || existing.status !== stored.status || existing.project_id !== stored.project_id) await syncRoute(h.db, h.actor, 'variation', String(stored.id));
   },
 };

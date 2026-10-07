@@ -18,6 +18,20 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   escalations; the Owner sees the exceptions, asks the assistant why, approves one proposed
   action that the system executes; the people fix the problems and the project returns to
   On Track. Recorded in `docs/phase5-acceptance-run.txt`.
+- `node scripts/acceptance/phase6.cjs` — Phase 6 Batch 2: a PM with a delegated drawing rule
+  approves on a Normal project, is refused on Sensitive and Strategic (the Owner approves), and
+  approves again once the Owner lowers the sensitivity; purchases, invoices and every audit
+  record go through the authority resolver. Recorded in `docs/phase6-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-ui.cjs` — Phase 6 Batch 2 review: the approval screens show
+  what the server's authority resolver decides (delegated PM sees Approve on Normal, "Owner
+  approval required" on Sensitive / Strategic, nothing with the baseline permission only,
+  OUT_OF_SCOPE for another project's authority; Client and Major Purchase hardening; Issue PO),
+  each checked against the API and the database. Recorded in `docs/phase6-ui-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-routing.cjs` — Phase 6 Batch 3: the Owner creates delegated
+  authority on the settings screen (server preview first), approvals are routed by the server to
+  the delegated PM and shown in their inbox, Sensitive / Strategic / expiry / deactivation route
+  them to the Owner, and no pending approval is left without a route. Recorded in
+  `docs/phase6-routing-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

@@ -46,6 +46,7 @@ const projectFields: Record<keyof Project, FieldKind> = {
   description: 'text',
   is_at_risk: 'bool?',
   risk_reason: 'text?',
+  sensitivity: 'text', // NOT NULL; the server always sets it (Owner-only, default Normal)
   created_at: 'ts',
   updated_at: 'ts',
 };

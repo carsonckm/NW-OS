@@ -4,6 +4,8 @@
  * actions — a proposal the person can send for approval and then approve. Nothing runs
  * until a person approves it; the server executes it with that person's permissions.
  */
+import { AuthorityNote } from './AuthorityNote';
+import { authorityItem, useAuthority } from '../services/authority';
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { api } from '../services/coreApi';
@@ -26,6 +28,9 @@ const TONE: Record<Confidence, 'good' | 'warn' | 'neutral'> = { Confirmed: 'good
 
 const ProposalButton: React.FC<{ proposal: NonNullable<AssistantResult['recommendations'][number]['proposal']>; rationale: string }> = ({ proposal, rationale }) => {
   const [state, setState] = useState<{ id?: string; title?: string; done?: boolean; error?: string; busy?: boolean }>({});
+  // Whether this person may decide the proposal: the server's authority resolver.
+  const authority = useAuthority(state.id && !state.done ? [authorityItem('approval', state.id)] : []);
+  const decision = state.id ? authority.get(authorityItem('approval', state.id)) : undefined;
   const propose = async () => {
     setState({ busy: true });
     try {
@@ -55,10 +60,14 @@ const ProposalButton: React.FC<{ proposal: NonNullable<AssistantResult['recommen
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-[10px]" data-testid="assistant-proposal">
           <p className="font-bold text-amber-900">{state.title}</p>
           <p className="text-amber-800">Waiting for a person to approve. Nothing has been done yet.</p>
-          <div className="mt-1 flex gap-1">
-            <button type="button" disabled={state.busy} onClick={() => void decide('Approved')} className="rounded bg-emerald-600 px-2 py-0.5 font-bold text-white disabled:opacity-50">Approve &amp; run</button>
-            <button type="button" disabled={state.busy} onClick={() => void decide('Rejected')} className="rounded border border-slate-300 bg-white px-2 py-0.5 font-bold text-slate-700 disabled:opacity-50">Reject</button>
-          </div>
+          {decision?.allowed ? (
+            <div className="mt-1 flex gap-1">
+              <button type="button" disabled={state.busy} onClick={() => void decide('Approved')} className="rounded bg-emerald-600 px-2 py-0.5 font-bold text-white disabled:opacity-50">Approve &amp; run</button>
+              <button type="button" disabled={state.busy} onClick={() => void decide('Rejected')} className="rounded border border-slate-300 bg-white px-2 py-0.5 font-bold text-slate-700 disabled:opacity-50">Reject</button>
+            </div>
+          ) : (
+            <AuthorityNote always className="mt-1" authority={decision} />
+          )}
         </div>
       )}
       {state.error && <p className="text-[10px] font-bold text-rose-700" role="alert">{state.error}</p>}

@@ -16,6 +16,9 @@ import {
   canEvaluateApproval,
   ROLE_DEFINITIONS,
 } from '../utils/permissions';
+import { AuthorityNote } from '../components/AuthorityNote';
+import { ApprovalInbox } from '../components/ApprovalInbox';
+import { authorityItem, useAuthority } from '../services/authority';
 import {
   CheckCircle2,
   XCircle,
@@ -49,6 +52,10 @@ export const ApprovalsView: React.FC = () => {
     userProjects,
     projects,
   } = useNW();
+
+  // Who may decide each pending request: the server's authority resolver (live system). Demo
+  // mode has no server and keeps the old on-screen rules (nothing there is stored or enforced).
+  const authority = useAuthority(approvals.filter((a) => a.decision === 'Pending').map((a) => authorityItem('approval', a.id)));
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'technical' | 'variations' | 'purchases' | 'completed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -203,6 +210,8 @@ export const ApprovalsView: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      {/* Phase 6: what the server routed to me (live system) */}
+      <ApprovalInbox />
       {/* Top Banner & Header */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -307,7 +316,8 @@ export const ApprovalsView: React.FC = () => {
           </div>
         ) : (
           filteredApprovals.map((item) => {
-            const auth = canEvaluateApproval(currentUser, item);
+            const server = authority.get(authorityItem('approval', item.id));
+            const auth = authority.live ? { canApprove: Boolean(server?.allowed), blockedReason: server?.reason } : canEvaluateApproval(currentUser, item);
             const statusInfo = getDecisionBadge(item.decision);
 
             return (
@@ -465,6 +475,14 @@ export const ApprovalsView: React.FC = () => {
                               <span>Reject Request</span>
                             </button>
                           </>
+                        ) : authority.live ? (
+                          server ? (
+                            <AuthorityNote always authority={server} />
+                          ) : (
+                            <div className="bg-slate-100 text-slate-500 border border-slate-200 p-2.5 rounded-xl text-center text-[10px]" data-testid="authority-loading">
+                              Checking who may decide…
+                            </div>
+                          )
                         ) : currentUser.role === 'Owner / CEO' ? (
                           // Owner Override Option
                           <div className="space-y-1.5">

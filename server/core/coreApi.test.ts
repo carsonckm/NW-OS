@@ -247,7 +247,8 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
       }
       for (const original of INITIAL_PROJECTS) {
         const stored = snap.projects.find((p: Project) => p.id === original.id);
-        expect(norm(stored)).toEqual(norm(original as unknown as Record<string, unknown>));
+        // Sensitivity is the server's (Owner-only, Phase 6): every imported project starts Normal.
+        expect(norm(stored)).toEqual(norm({ ...original, sensitivity: 'Normal' } as unknown as Record<string, unknown>));
       }
     });
 
