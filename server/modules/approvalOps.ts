@@ -308,7 +308,7 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
   // ---------- approvals
   const routes = (
     await pool.query(
-      `SELECT ar.*, p.project_name, p.risk_status, p.project_status, c.company_name AS client_name, u.name AS assignee_name, u.role AS assignee_role, u.is_active AS assignee_active,
+      `SELECT ar.*, p.project_name, p.risk_status, p.project_status, p.sensitivity AS live_sensitivity, c.company_name AS client_name, u.name AS assignee_name, u.role AS assignee_role, u.is_active AS assignee_active,
               ap.approval_type, ap.related_entity_type AS related_type, ci.data->>'due_date' AS invoice_due
        FROM approval_routes ar
        LEFT JOIN projects p ON p.id = ar.project_id
@@ -361,8 +361,9 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
     } else if (life.state === 'due_soon') {
       f.push({ code: 'DUE_SOON', label: `Due ${life.due_at ? localDay(new Date(life.due_at)) : 'soon'}`, points: 10, level: 'attention' });
     }
-    if (r.project_sensitivity === 'Strategic') f.push({ code: 'STRATEGIC', label: 'Strategic project: only the Owner decides', points: 80, level: toOwner ? 'critical' : 'urgent' });
-    else if (r.project_sensitivity === 'Sensitive') f.push({ code: 'SENSITIVE', label: 'Sensitive project', points: 20, level: null });
+    const sensitivity = r.live_sensitivity ?? r.project_sensitivity;
+    if (sensitivity === 'Strategic') f.push({ code: 'STRATEGIC', label: 'Strategic project: only the Owner decides', points: 80, level: toOwner ? 'critical' : 'urgent' });
+    else if (sensitivity === 'Sensitive') f.push({ code: 'SENSITIVE', label: 'Sensitive project', points: 20, level: null });
     if (r.approval_type && /safety/i.test(r.approval_type)) f.push({ code: 'SAFETY', label: 'Safety-related decision', points: 100, level: 'critical' });
     if (r.decision_type === 'drawing' && r.project_id && blockedProduction.has(r.project_id)) f.push({ code: 'PRODUCTION_BLOCKED', label: 'Production is blocked on this project', points: 60, level: 'critical' });
     if ((r.approval_type && /site|installation/i.test(r.approval_type)) || r.related_type === 'installation') f.push({ code: 'SITE_BLOCKED', label: 'Site work is waiting for it', points: 40, level: 'critical' });

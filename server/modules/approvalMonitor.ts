@@ -153,7 +153,10 @@ async function escalate(db: PoolClient, route: RouteRow, state: NonNullable<Awai
   }
   if (!target) {
     const owner = await fallbackOwner(db, kind, id, cache, now);
-    if (owner.id === route.assigned_user_id) {
+    // The Owner receives it only if the Owner may decide it (e.g. not the Owner's own variation);
+    // otherwise it is escalated where it is and the Owners are told (escalation record).
+    const ownerMay = owner.id === route.assigned_user_id || (await assigneeMayDecide(db, { ...route, assigned_user_id: owner.id, routing_basis: 'OWNER_FALLBACK' }, cache, now)).ok;
+    if (owner.id === route.assigned_user_id || !ownerMay) {
       const row = (
         await db.query(
           `UPDATE approval_routes SET lifecycle_state = 'escalated', escalated_at = $2, escalation_count = escalation_count + 1, last_checked_at = $2,
@@ -162,7 +165,7 @@ async function escalate(db: PoolClient, route: RouteRow, state: NonNullable<Awai
           [route.id, now]
         )
       ).rows[0] as RouteRow;
-      await writeAudit(db, MONITOR_ACTOR, { action: 'approval.route.escalate', entityType: 'approval_route', entityId: String(route.id), projectId: route.project_id as string | null, after: { resource: `${kind}:${id}`, assignee: owner.id, reason: 'escalated_overdue' }, details: `${why}; already with the Owner` });
+      await writeAudit(db, MONITOR_ACTOR, { action: 'approval.route.escalate', entityType: 'approval_route', entityId: String(route.id), projectId: route.project_id as string | null, after: { resource: `${kind}:${id}`, assignee: owner.id, reason: 'escalated_overdue' }, details: `${why}; ${ownerMay ? 'already with the Owner' : 'the Owner may not decide it, so it stays with the approver'}` });
       return row;
     }
     target = {
@@ -241,6 +244,7 @@ export async function monitorPendingApprovals(pool: Pool, now: Date, config: Rec
   // Escalation records for every escalated open decision (kept open while it is escalated; the
   // engine resolves them once the decision is taken).
   const escalated = (await pool.query(`SELECT ar.*, u.role AS assignee_role FROM approval_routes ar JOIN users u ON u.id = ar.assigned_user_id WHERE ar.status = 'open' AND ar.lifecycle_state = 'escalated'`)).rows as (RouteRow & Row)[];
+  const owners = (await pool.query(`SELECT id FROM users WHERE role = 'Owner / CEO' AND is_active`)).rows.map((u) => u.id as string);
   for (const r of escalated) {
     const data = (r.data ?? {}) as Row;
     const title = data.title ?? `${r.resource_kind} ${r.resource_id}`;
@@ -249,7 +253,7 @@ export async function monitorPendingApprovals(pool: Pool, now: Date, config: Rec
       kind: 'escalation',
       key: `approval_monitor:${r.resource_kind}:${r.resource_id}:escalated:${r.escalation_count}`,
       level: 2,
-      users: [r.assigned_user_id],
+      users: [...new Set([r.assigned_user_id, ...(toOwner ? [] : owners)])],
       record: { source_record_type: 'Approval', source_record_id: r.resource_id, project_id: r.project_id ?? null, title: `Approval overdue: ${title}`, reason: data.owner_reason ?? data.why ?? 'Overdue past the escalation threshold', previous_level: 'Approver', current_level: toOwner ? 'Owner' : 'Delegate', assigned_role: r.assignee_role, is_critical: true },
       note: { title: `Escalation: ${title}`, message: `Overdue (due ${r.due_at ? new Date(r.due_at).toISOString().slice(0, 10) : '-'}). Escalated to you.`, type: 'escalation', priority: 'urgent', project_id: r.project_id ?? null, link_tab: 'approvals', entity_type: 'approval_route', entity_id: String(r.id) },
     });

@@ -437,7 +437,7 @@ export async function insertRoute(
         }),
         requestedAt, sla, due, escalated ? 'escalated' : open?.lifecycle_state ?? 'assigned', opts.reason,
         open?.reminded_at ?? null, open?.due_soon_at ?? null, open?.overdue_at ?? null, escalated ? now : open?.escalated_at ?? null,
-        (open?.reroute_count ?? 0) + (open && !escalated ? 1 : 0), (open?.escalation_count ?? 0) + (escalated ? 1 : 0), now,
+        (open?.reroute_count ?? 0) + (open && !escalated ? 1 : 0), (open?.escalation_count ?? 0) + (escalated ? 1 : 0), null, // checked first on the monitor's next run
       ]
     )
   ).rows[0] as RouteRow;
