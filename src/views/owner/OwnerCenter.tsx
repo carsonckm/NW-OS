@@ -15,6 +15,7 @@ import { FormError } from '../../components/ui/FormError';
 import { Pill, rm } from '../../components/ui/forms';
 import { RISK_TONE, type RiskLevel } from '../../components/ProjectHealth';
 import { OwnerExceptions } from '../../components/OwnerExceptions';
+import { OwnerDependency } from '../../components/OwnerDependency';
 
 interface Item {
   id: string;
@@ -130,6 +131,8 @@ export const OwnerCenter: React.FC = () => {
       <FormError error={error} />
       {/* Phase 6 Batch 4: approvals and authority exceptions that need the Owner (Owner only). */}
       {currentUser.role === 'Owner / CEO' && <OwnerExceptions />}
+      {/* Phase 6 Batch 5: how much still depends on the Owner, and delegation opportunities (Owner only). */}
+      {currentUser.role === 'Owner / CEO' && <OwnerDependency />}
       {c && h && (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" data-testid="owner-health">
