@@ -224,7 +224,7 @@ export const OwnerDependency: React.FC = () => {
   };
   const t = a?.totals;
   return (
-    <div className="space-y-3 rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm" data-testid="owner-dependency">
+    <div className="space-y-3 rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm" data-testid="owner-dependency-analytics">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <TrendingDown className="h-4 w-4 text-indigo-600" />
