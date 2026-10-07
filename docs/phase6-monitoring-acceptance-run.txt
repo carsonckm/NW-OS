@@ -1,0 +1,25 @@
+Phase 6 Batch 4 browser acceptance: scripts/acceptance/phase6-monitoring.cjs
+Run against the dev server (PostgreSQL nwos_dev, 20 migrations), dev accounts, 2026-10-07.
+Simulated time: the test approval's requested_at is moved back in PostgreSQL; everything else goes through the API and the screens.
+
+1 [Routed with a due date] PASS — route user-accountant SYSTEM_POLICY assigned initial -; due 2026-10-08 22:10 MYT; Accountant inbox shows "Assigned"
+2 [Reminder once] PASS — route user-accountant SYSTEM_POLICY reminded initial -; reminders to the Accountant: 1 (two monitor runs)
+3 [Overdue] PASS — route user-accountant SYSTEM_POLICY overdue initial -; inbox: "Overdue Waiting 27h (1.1 working days) · overdue by 3h P6 Monitor muy6qazw "; Owner card: "🟠 OVERDUE APPROVAL APR-P6M-MUY6QAZW: po-p6m-muy6qazw RM 25,000 Overdue Priority 53 Project: P6 Monitor muy6qazw · Client: Bangsar South Corporate Hub Sdn Bhd ·"
+4 [Escalated to the Owner] PASS — route user-owner OWNER_FALLBACK escalated escalated_overdue ESCALATED_OVERDUE; escalation records 1; Accountant told it moved: 1; card: "🟠 ESCALATED APPROVAL APR-P6M-MUY6QAZW: po-p6m-muy6qazw RM 25,000 Escalated Priority 62 Project: P6 Monitor muy6qazw · C"; history: "07 Oct, 14:10 Routed to David Lim, CA · Faridah Osman Basis SYSTEM_POLICY (SYS-PURCHASE-ACCOUNTANT) 07 Oct, 14:10 Now reminded · NW OS Approval Monitor Reason: 54% of the SLA used 07 Oct, 14:10 Reminder sent to user-accountant · NW OS Approval Monitor 07 Oct, "
+5 [Owner decides from the exception card (resolver checks again)] PASS — approval Approved by Owner / CEO; route completed approved; audit authority owner ALLOWED; escalation Resolved
+6 [Authority expired: re-routed (not escalated)] PASS — before user-pm PROJECT_ROLE_RULE assigned initial -; PM approve HTTP 403 AUTHORITY_EXPIRED; after user-owner OWNER_FALLBACK assigned authority_changed AUTHORITY_EXPIRED; audit "AUTHORITY_EXPIRED: DA-0029 ended on 2026-10-07; the Owner (or someone with authority) must decide"; in PM inbox: 0
+7 [Critical exception] PASS — card: "🔴 OWNER DECISION APR-P6M-SAFETY-MUY6QAZW: Temporary works sign-off Owner Required Priority 120 Project: P6 Monitor muy6qazw · Client: Bangsar South Corporate Hub Sdn Bhd · Decision: approval request "; snooze buttons 0; snooze API HTTP 400; summary "🔴 Critical 28 🟠 Urgent 14 🟡 Attention 38 Approvals 0 overdue · 0 escalated 12 blocked · 0 due today 62 waiting for you Projects 4 critical 1 at risk Delegation 0 rule(s) expiring in 7 days 20 appro"
+8 [Owner only] PASS — exceptions: Admin 403, PM 403, Accountant 403; Admin changing Owner routing: 403; PM assigning to self: 403
+9 [SLA and Owner routing settings] PASS — "Approval SLAs SLAs set when approvals are due and when they are escalated. They never change who may approve: that is the authority policy. DECISION SLA REMINDER / DUE SOON / OVERDUE / ESCALATE ESCALATES TO AI proposal approval 1 working day(s) 50% / 80% / 100"
+10 [No orphan, no inactive assignee, every internal approval has a due date] PASS — orphans 0; open routes to inactive users 0; open internal routes without a due date 0; monitor runs succeeded:20
+Page errors (expected 400/403 refusals filtered): {"owner-ceo":[],"project-manager":[],"purchasing":[],"accountant":[],"admin":[]}
+10/10 passed
+exit 0
+
+Regression runs on the same server for this branch:
+- run.cjs (Phase 4, 34 steps): exit 0
+- phase5.cjs (18 steps): exit 0
+- phase6.cjs (Batch 2, 11 steps): exit 0
+- phase6-ui.cjs: 12/12
+- phase6-routing.cjs: 8/8
+- roles.cjs (10 roles, 140 tab clicks): 0 errors, no failed API calls
