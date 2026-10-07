@@ -1,15 +1,15 @@
-Phase 6 Batch 2 acceptance run (2026-10-06, dev server on PostgreSQL nwos_dev, real dev accounts)
+Phase 6 Batch 2 acceptance run (2026-10-07, dev server on PostgreSQL nwos_dev, real dev accounts)
 node scripts/acceptance/phase6.cjs
 
-1 [Normal project set up] proj-p6-muwu7ldk sensitivity Normal
+1 [Normal project set up] proj-p6-muxg8m9s sensitivity Normal
 2 [PM without a rule] HTTP 403 NO_MATCHING_AUTHORITY; revision Internal Review
-3 [Owner delegates] DA-0012: Project Manager may approve drawing approval on P6 Lobby muwu7ldk.
-4 [Normal: PM approves] HTTP 200; revision Approved; audit ALLOWED DA-0012 (Normal)
+3 [Owner delegates] DA-0016: Project Manager may approve drawing approval on P6 Lobby muxg8m9s.
+4 [Normal: PM approves] HTTP 200; revision Approved; audit ALLOWED DA-0016 (Normal)
 5 [Sensitive: PM refused, Owner approves] PM HTTP 403 SENSITIVITY_BLOCKED (requires_owner true); Owner: revision Approved, audit ALLOWED - (Sensitive)
 6 [Strategic: PM refused, Owner approves] PM HTTP 403 SENSITIVITY_BLOCKED (requires_owner true); Owner: revision Approved, audit ALLOWED - (Strategic)
-7 [Back to Normal] PM lowering: HTTP 403; Owner lowered; PM approves HTTP 200, audit ALLOWED DA-0012 (Normal)
+7 [Back to Normal] PM lowering: HTTP 403; Owner lowered; PM approves HTTP 200, audit ALLOWED DA-0016 (Normal)
 8 [Sensitivity audit trail] Normal->Sensitive by Dato’ Nicholas Wong (Acceptance: Sensitive); Sensitive->Strategic by Dato’ Nicholas Wong (Acceptance: Strategic); Strategic->Normal by Dato’ Nicholas Wong (Acceptance: board review finished)
-9 [Purchases unchanged] RM 5,000 issued: HTTP 200 (SYS-PURCHASE-STANDARD); RM 25,000: HTTP 403 OWNER_REQUIRED; Accountant approved apr-p6-muwu7ldk (SYS-PURCHASE-ACCOUNTANT); then issued HTTP 200 (SYS-PURCHASE-APPROVED)
+9 [Purchases unchanged] RM 5,000 issued: HTTP 200 (SYS-PURCHASE-STANDARD); RM 25,000: HTTP 403 OWNER_REQUIRED; Accountant approved apr-p6-muxg8m9s (SYS-PURCHASE-ACCOUNTANT); then issued HTTP 200 (SYS-PURCHASE-APPROVED)
 10 [Invoice self-approval] HTTP 403 SELF_APPROVAL_BLOCKED: You cannot approve an invoice you recorded
 11 [Rule history] authority.rule.create, authority.rule.deactivate
-API refusals / page errors (the refusals above are expected): {"owner-ceo":[],"project-manager":["POST /api/drawings/dwg-muwu7ldk/revisions/rev-muwu7ldk-1/status 403","POST /api/drawings/dwg-muwu7ldk/revisions/rev-muwu7ldk-2/status 403","POST /api/drawings/dwg-muwu7ldk/revisions/rev-muwu7ldk-3/status 403","PUT /api/projects/proj-p6-muwu7ldk/sensitivity 403"],"purchasing":["PATCH /api/purchase-orders/po-p6-muwu7ldk-25000 403"],"accountant":["PATCH /api/invoices/inv-p6-muwu7ldk 403"]}
+API refusals / page errors (the refusals above are expected): {"owner-ceo":[],"project-manager":["POST /api/drawings/dwg-muxg8m9s/revisions/rev-muxg8m9s-1/status 403","POST /api/drawings/dwg-muxg8m9s/revisions/rev-muxg8m9s-2/status 403","POST /api/drawings/dwg-muxg8m9s/revisions/rev-muxg8m9s-3/status 403","PUT /api/projects/proj-p6-muxg8m9s/sensitivity 403"],"purchasing":["PATCH /api/purchase-orders/po-p6-muxg8m9s-25000 403"],"accountant":["PATCH /api/invoices/inv-p6-muxg8m9s 403"]}
