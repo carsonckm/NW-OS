@@ -2,6 +2,7 @@ import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { AI_PROPOSAL_TYPE, executeProposal } from '../assistantActions';
 import { authorityAudit, clientConsentAllowed, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 import type { HookContext, ModuleHooks, Row } from '../types';
 
 const FINAL = new Set(['Approved', 'Rejected']);
@@ -62,9 +63,11 @@ export async function applyDecision(h: HookContext, existing: Row, values: Row) 
 
 export const approvalHooks: ModuleHooks = {
   // AI proposal approved → the system executes it, as the approver, in this transaction.
+  // Then the request's route follows its decision (routed while Pending, closed once decided).
   async afterWrite(h, existing, stored) {
-    if (h.mode === 'import' || stored.approval_type !== AI_PROPOSAL_TYPE) return;
-    if (stored.decision === 'Approved' && existing?.decision !== 'Approved') await executeProposal(h, stored);
+    if (h.mode === 'import') return;
+    if (stored.approval_type === AI_PROPOSAL_TYPE && stored.decision === 'Approved' && existing?.decision !== 'Approved') await executeProposal(h, stored);
+    if (!existing || existing.decision !== stored.decision || existing.project_id !== stored.project_id) await syncRoute(h.db, h.actor, 'approval', String(stored.id));
   },
 
   async beforeWrite(h, existing, incoming) {

@@ -4,6 +4,7 @@ import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { HookContext, ModuleHooks, Row } from '../types';
 import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 
 /**
  * Identified -> Costing -> Internal Approval -> Client Approval -> Approved -> Implemented -> Closed,
@@ -145,5 +146,11 @@ export const variationHooks: ModuleHooks = {
       after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}), ...(authority ? { authority: authorityAudit(authority) } : {}) },
     });
     return values;
+  },
+
+  // Internal approval is routed while the variation waits for it, and closed once decided.
+  async afterWrite(h, existing, stored) {
+    if (h.mode === 'import') return;
+    if (!existing || existing.status !== stored.status || existing.project_id !== stored.project_id) await syncRoute(h.db, h.actor, 'variation', String(stored.id));
   },
 };

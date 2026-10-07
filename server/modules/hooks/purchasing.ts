@@ -4,6 +4,7 @@ import { ValidationError } from '../../core/repository';
 import type { PoolClient } from '../../db/pool';
 import type { ModuleHooks, Row } from '../types';
 import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
 const qty = (n: unknown) => Math.max(0, Number(n) || 0);
@@ -76,6 +77,12 @@ export const purchaseOrderHooks: ModuleHooks = {
       });
     }
     return next;
+  },
+
+  // A PO waiting for approval is routed; issuing (or cancelling) closes the route.
+  async afterWrite(h, existing, stored) {
+    if (h.mode === 'import') return;
+    if (!existing || existing.status !== stored.status || existing.project_id !== stored.project_id) await syncRoute(h.db, h.actor, 'purchase_order', String(stored.id));
   },
 };
 
@@ -234,6 +241,7 @@ export const invoiceHooks: ModuleHooks = {
 
   async afterWrite(h, existing, stored) {
     if (h.mode === 'import') return;
+    if (!existing || existing.status !== stored.status || existing.project_id !== stored.project_id) await syncRoute(h.db, h.actor, 'invoice', String(stored.id));
     const approvedNow = stored.status === 'Approved' && existing?.status !== 'Approved' && !stored.ledger_cost_id;
     if (!approvedNow || stored.invoice_type === 'Client Billing Invoice') return;
     // Post the actual cost once (amount before recoverable tax).

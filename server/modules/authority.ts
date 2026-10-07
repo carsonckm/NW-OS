@@ -19,6 +19,7 @@ import { writeAudit, type AuditActor } from '../audit';
 import { NotFoundError, ValidationError } from '../core/repository';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import { ruleExceedsCeiling } from './authorityCeiling';
+import { reevaluateRoutes } from './approvalRouting';
 import type { PermissionKey, UserRole } from '../../src/types';
 
 type Db = Pool | PoolClient;
@@ -111,10 +112,14 @@ export async function listRules(db: Db, filter: { decision_type?: string; active
   const rows = (
     await db.query(
       `SELECT a.*, t.label AS decision_type_label, t.baseline_permission, g.name AS granted_by_name, u.name AS target_user_name,
+              cb.name AS created_by_name, ub.name AS updated_by_name, db.name AS deactivated_by_name,
               p.project_name, c.company_name AS client_name
        FROM delegated_authorities a
        JOIN authority_decision_types t ON t.key = a.decision_type
        LEFT JOIN users g ON g.id = a.granted_by
+       LEFT JOIN users cb ON cb.id = a.created_by
+       LEFT JOIN users ub ON ub.id = a.updated_by
+       LEFT JOIN users db ON db.id = a.deactivated_by
        LEFT JOIN users u ON u.id = a.target_user_id
        LEFT JOIN projects p ON p.id = a.project_id
        LEFT JOIN clients c ON c.id = a.client_id
@@ -144,7 +149,7 @@ export async function getRule(db: Db, id: string) {
 const isObject = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 
-function refuseUnknown(body: Row, allowed: string[]) {
+export function refuseUnknown(body: Row, allowed: string[]) {
   const extra = Object.keys(body).filter((k) => !allowed.includes(k));
   if (extra.length) throw new ValidationError(`These fields are set by the server or not allowed: ${extra.join(', ')}`);
 }
@@ -167,7 +172,7 @@ function parseValue(v: unknown, field: string): number | null {
  * Validates an Owner rule (a whole rule: on update, the stored rule merged with the change).
  * Checks every reference against the database and the baseline permission of the decision type.
  */
-async function validateOwnerRule(db: Db, input: Row, now: Date, { creating }: { creating: boolean }): Promise<Row> {
+export async function validateOwnerRule(db: Db, input: Row, now: Date, { creating }: { creating: boolean }): Promise<Row> {
   const r: Row = {};
   r.name = str(input.name);
   if (r.name.length < 3 || r.name.length > 120) throw new ValidationError('name must be 3 to 120 characters');
@@ -249,10 +254,11 @@ async function validateOwnerRule(db: Db, input: Row, now: Date, { creating }: { 
   return r;
 }
 
+export const RULE_FIELDS_FOR_PREVIEW = RULE_FIELDS;
 const STORED = ['name', 'description', 'effect', 'decision_type', 'target_role', 'target_user_id', 'project_id', 'client_id', 'min_value', 'max_value', 'max_risk', 'conditions', 'start_at', 'end_at', 'priority', 'active'];
 const snapshot = (r: Row) => Object.fromEntries(STORED.map((k) => [k, r[k] ?? null]));
 
-function requireManage(ctx: AccessContext) {
+export function requireManage(ctx: AccessContext) {
   if (!ctx.can('authority.manage')) throw new ForbiddenError('Only the Owner manages delegated authority (authority.manage)');
 }
 
@@ -275,7 +281,9 @@ export async function createRule(pool: Pool, ctx: AccessContext, actor: AuditAct
     );
     const stored = await getRule(db, id);
     await writeAudit(db, actor, { action: 'authority.rule.create', entityType: 'delegated_authority', entityId: id, projectId: r.project_id, after: { code, ...snapshot(stored), summary: stored.summary } });
-    return stored;
+    // Pending approvals this rule could change are routed again now (same transaction).
+    const routing_changes = await reevaluateRoutes(db, actor, { decisionType: r.decision_type, projectId: r.project_id ?? undefined }, `rule ${code} created`);
+    return { ...stored, routing_changes };
   });
 }
 
@@ -302,7 +310,10 @@ export async function updateRule(pool: Pool, ctx: AccessContext, actor: AuditAct
     const before = await snapshotOf(existing);
     const stored = await getRule(db, id);
     await writeAudit(db, actor, { action: 'authority.rule.update', entityType: 'delegated_authority', entityId: id, projectId: stored.project_id, before, after: { ...snapshot(stored), summary: stored.summary }, details: reason });
-    return stored;
+    // Before and after the change may cover different projects: re-route both.
+    const scope = existing.project_id && existing.project_id === stored.project_id ? { projectId: existing.project_id as string } : {};
+    const routing_changes = await reevaluateRoutes(db, actor, { decisionType: stored.decision_type, ...scope }, `rule ${stored.code} changed`);
+    return { ...stored, routing_changes };
   });
 }
 
@@ -347,7 +358,8 @@ export async function setRuleActive(pool: Pool, ctx: AccessContext, actor: Audit
       after: { active, kind: existing.kind, code: existing.code },
       details: reason,
     });
-    return getRule(db, id);
+    const routing_changes = await reevaluateRoutes(db, actor, { decisionType: existing.decision_type, projectId: existing.project_id ?? undefined }, `rule ${existing.code} ${active ? 'reactivated' : 'deactivated'}`);
+    return { ...(await getRule(db, id)), routing_changes };
   });
 }
 
@@ -391,6 +403,8 @@ export async function setProjectSensitivity(pool: Pool, ctx: AccessContext, acto
       after: { sensitivity: b.sensitivity, rules_above_ceiling: capped },
       details: reason,
     });
-    return { project_id: p.id, project_name: p.project_name, sensitivity: b.sensitivity, changed: true, rules_above_ceiling: capped };
+    // The new ceiling applies to pending approvals at once: re-route this project's.
+    const routing_changes = await reevaluateRoutes(db, actor, { projectId }, `sensitivity ${p.sensitivity} -> ${b.sensitivity}`);
+    return { project_id: p.id, project_name: p.project_name, sensitivity: b.sensitivity, changed: true, rules_above_ceiling: capped, routing_changes };
   });
 }

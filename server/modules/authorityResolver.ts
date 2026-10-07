@@ -131,6 +131,8 @@ export interface AuthorityResolution {
   projectId: string | null;
   clientId: string | null;
   projectSensitivity: string | null;
+  /** The amount of the decision as the server knows it (from the record), if it has one. */
+  resourceValue: number | null;
   baselinePermission: string | null;
   matchedRuleId: string | null;
   matchedRuleCode: string | null;
@@ -271,6 +273,7 @@ function result(ctx: AccessContext, facts: Partial<Facts> & { decisionType: stri
     projectId: facts.projectId ?? null,
     clientId: facts.clientId ?? null,
     projectSensitivity: null,
+    resourceValue: facts.value ?? null,
     baselinePermission: null,
     matchedRuleId: null,
     matchedRuleCode: null,

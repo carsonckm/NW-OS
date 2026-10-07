@@ -34,6 +34,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
   });
   // Every test starts with no Owner rule (test database only).
   afterEach(async () => {
+    // Routes that cite a rule keep it from being deleted (as they should); this file's tests
+    // don't use routes, so clear them first (test database only).
+    await db.pool.query(`DELETE FROM approval_routes`);
     await db.pool.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
   });
 
@@ -178,6 +181,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       await db.pool.query(`INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, target_role, granted_by) VALUES ('da-nobase', 'DA-NOBASE', 'Admin drawings', 'x', 'owner', 'allow', 'drawing', 'Admin', 'user-owner')`);
       const r = codesSeen(await resolve('user-admin', { resource: { kind: 'drawing_revision', id: await revision() } }));
       expect(r).toMatchObject({ allowed: false, reasonCode: 'INSUFFICIENT_PERMISSION', baselinePermission: 'drawings.review' });
+      await db.pool.query('DELETE FROM approval_routes');
       await db.pool.query(`DELETE FROM delegated_authorities WHERE id = 'da-nobase'`);
     });
 
@@ -235,6 +239,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       expect(codesSeen(await resolve('user-pm', vo(id)))).toMatchObject({ reasonCode: 'AUTHORITY_NOT_YET_ACTIVE', matchedRuleCode: later.code, evaluatedDates: { passed: false } });
       await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '10 days', end_at = now() - interval '1 day' WHERE id = $1`, [later.id]);
       expect(codesSeen(await resolve('user-pm', vo(id)))).toMatchObject({ reasonCode: 'AUTHORITY_EXPIRED', matchedRuleCode: later.code });
+      await db.pool.query('DELETE FROM approval_routes');
       await db.pool.query('DELETE FROM delegated_authorities WHERE id = $1', [later.id]);
       const off = await grant({ name: 'Paused' });
       await owner().post(`/api/authority/rules/${off.id}/deactivate`).send({ reason: 'PM on leave' }).expect(200);
@@ -494,6 +499,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     it('several in-scope failures: the earlier code in the precedence wins, whatever the priority or creation order', async () => {
       const id = await variation(projA, 5000);
       const run = async (order: 'value-first' | 'expired-first') => {
+        await db.pool.query(`DELETE FROM approval_routes`);
         await db.pool.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
         const make = async (k: string) => {
           if (k === 'value') return grant({ max_value: 1000, priority: 600, name: 'Value' });

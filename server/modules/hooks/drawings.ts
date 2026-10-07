@@ -6,6 +6,7 @@ import type { Pool, PoolClient } from '../../db/pool';
 import type { PermissionKey } from '../../../src/types';
 import type { HookContext, ModuleHooks, Row } from '../types';
 import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { syncRoute } from '../approvalRouting';
 
 type Db = Pool | PoolClient;
 
@@ -192,6 +193,7 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
         details: `${drawingId} ${String(rev.revision)} (${status})`,
         after: data,
       });
+      await syncRoute(h.db, h.actor, 'drawing_revision', rev.id);
     }
     return undefined;
   }
@@ -253,6 +255,7 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
       before: { status: existing.approval_status, approved_for_production: existing.approved_for_production },
       after: { status, approved_for_production: approvedForProduction, ...(authority ? { authority: authorityAudit(authority) } : {}) },
     });
+    if (!importing) await syncRoute(h.db, h.actor, 'drawing_revision', rev.id);
   }
   return isClient && approving ? rev.id : undefined;
 }
