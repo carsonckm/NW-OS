@@ -17,6 +17,7 @@ import {
   ROLE_DEFINITIONS,
 } from '../utils/permissions';
 import { AuthorityNote } from '../components/AuthorityNote';
+import { ApprovalInbox } from '../components/ApprovalInbox';
 import { authorityItem, useAuthority } from '../services/authority';
 import {
   CheckCircle2,
@@ -209,6 +210,8 @@ export const ApprovalsView: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      {/* Phase 6: what the server routed to me (live system) */}
+      <ApprovalInbox />
       {/* Top Banner & Header */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

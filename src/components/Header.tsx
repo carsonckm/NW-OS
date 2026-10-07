@@ -548,6 +548,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
               show: hasPermission(currentUser, 'users.view'),
             },
             {
+              id: 'authority',
+              label: 'Delegated Authority',
+              show: coreDataSync.mode === 'database' && hasPermission(currentUser, 'authority.view'),
+            },
+            {
               id: 'audit-logs',
               label: 'Audit Log & Architecture',
               show: hasPermission(currentUser, 'audit.view'),

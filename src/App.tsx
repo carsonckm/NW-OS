@@ -42,6 +42,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
 import { NotificationCenter } from './views/notifications/NotificationCenter';
 import { NAVIGATE_EVENT, type NavigateDetail } from './services/navigation';
+import { AuthoritySettingsView } from './views/AuthoritySettingsView';
 import {
   authApi,
   claimCoreCache,
@@ -118,6 +119,7 @@ const NWAppContent: React.FC = () => {
         {activeTab === 'purchasing' && <PurchasingView />}
         {activeTab === 'finance' && <FinanceView />}
         {activeTab === 'users' && <UserManagementView />}
+        {activeTab === 'authority' && <AuthoritySettingsView />}
         {activeTab === 'clients' && (
           <ClientsView onNavigateToWorkItems={() => setActiveTab('work-items')} />
         )}
