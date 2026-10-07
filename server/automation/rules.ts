@@ -10,6 +10,7 @@ import type { PlannedAction, RuleContext, RuleDef } from './types';
 import { refreshStoredRisk } from '../modules/risk';
 import { writeAudit } from '../audit';
 import { approvalMonitorRule } from '../modules/approvalMonitor';
+import { delegationRecommendationRule } from '../modules/delegationIntelligence';
 
 type Row = Record<string, any>;
 
@@ -517,5 +518,5 @@ const recurringProblems: RuleDef = {
   },
 };
 
-export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue, recurringProblems, approvalMonitorRule];
+export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue, recurringProblems, approvalMonitorRule, delegationRecommendationRule];
 export const RULE_BY_KEY = new Map(RULES.map((r) => [r.key, r]));

@@ -107,13 +107,13 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 end-to-end acceptance: automation, 
     await scheduler.start(200);
     try {
       // Every rule has a finished scheduled run (started runs are logged as 'running' first).
-      await waitFor(async () => (await count(`SELECT count(DISTINCT rule_key) AS n FROM automation_runs WHERE trigger = 'schedule' AND status <> 'running' AND id > $1`, [since])) >= 11 || undefined, 20000);
+      await waitFor(async () => (await count(`SELECT count(DISTINCT rule_key) AS n FROM automation_runs WHERE trigger = 'schedule' AND status <> 'running' AND id > $1`, [since])) >= 12 || undefined, 20000);
     } finally {
       await scheduler.stop();
     }
-    expect(await count(`SELECT count(*) AS n FROM automation_runs WHERE trigger = 'schedule'`)).toBeGreaterThanOrEqual(before + 11);
+    expect(await count(`SELECT count(*) AS n FROM automation_runs WHERE trigger = 'schedule'`)).toBeGreaterThanOrEqual(before + 12);
     const runs = (await db.pool.query(`SELECT DISTINCT ON (rule_key) rule_key, status FROM automation_runs WHERE trigger = 'schedule' ORDER BY rule_key, id DESC`)).rows;
-    expect(runs.length).toBe(11); // ten Phase 5 rules + the Phase 6 approval monitor
+    expect(runs.length).toBe(12); // ten Phase 5 rules + the Phase 6 approval monitor and delegation recommendations
     expect(runs.every((r) => r.status === 'succeeded')).toBe(true);
     expect(await count(`SELECT count(*) AS n FROM automation_rules WHERE next_run_at <= now()`)).toBe(0);
   });
