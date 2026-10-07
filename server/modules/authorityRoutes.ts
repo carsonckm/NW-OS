@@ -14,6 +14,11 @@
  *
  * There is no delete: rules are deactivated so their history stays readable.
  *
+ *   GET  /api/authority/overview                  (dashboard; authority.view)
+ *   POST /api/authority/rules/preview             (what a new rule would do; Owner)
+ *   POST /api/authority/rules/:id/preview         (what an edit would do; Owner)
+ *   GET  /api/authority/rules/:id/impact?action=deactivate|reactivate   (authority.view)
+ *
  *   GET  /api/authority/resolve?items=kind:id[:action],...   (any signed-in user)
  *
  * The approval screens ask the server, for the signed-in user, what the authority resolver
@@ -29,6 +34,7 @@ import type { AuditActor } from '../audit';
 import type { Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import { createRule, decisionTypes, getRule, listRules, ruleHistory, setProjectSensitivity, setRuleActive, updateRule } from './authority';
+import { authorityOverview, previewRule, ruleImpact } from './authoritySettings';
 import { authorityForScreen, clientConsentAllowed, resolveApprovalAuthority, type DecisionAction, type ResourceKind } from './authorityResolver';
 import { ValidationError } from '../core/repository';
 
@@ -70,6 +76,17 @@ export function createAuthorityRouter({ pool, store }: { pool: Pool; store: Auth
         out.push({ item, ...authorityForScreen(r) });
       }
       res.json(out);
+    })
+  );
+  // Owner Authority Settings (Batch 3): dashboard, preview before saving, impact before switching.
+  router.get('/authority/overview', wrap(async (req, res) => res.json(await authorityOverview(pool, req.access!))));
+  router.post('/authority/rules/preview', wrap(async (req, res) => res.json(await previewRule(pool, req.access!, req.body))));
+  router.post('/authority/rules/:id/preview', wrap(async (req, res) => res.json(await previewRule(pool, req.access!, req.body, req.params.id))));
+  router.get(
+    '/authority/rules/:id/impact',
+    wrap(async (req, res) => {
+      const action = req.query.action === 'reactivate' ? 'reactivate' : 'deactivate';
+      res.json(await ruleImpact(pool, req.access!, req.params.id, action));
     })
   );
   router.get('/authority/decision-types', wrap(async (req, res) => { needView(req.access!); res.json(await decisionTypes(pool)); }));

@@ -7,6 +7,9 @@ import { createModuleRouter } from './modules/routes';
 import { createOpsRouter } from './modules/opsRoutes';
 import { createAuthorityRouter } from './modules/authorityRoutes';
 import { AutomationEngine } from './automation/engine';
+import { withTransaction } from './db/pool';
+import { reevaluateRoutes } from './modules/approvalRouting';
+import { createApprovalRoutingRouter } from './modules/approvalRoutingRoutes';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -41,6 +44,7 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
 
   // Phase 6: delegated authority (mounted first so /projects/:id/sensitivity is its own route).
   if (pool && store) app.use('/api', createAuthorityRouter({ pool, store }));
+  if (pool && store) app.use('/api', createApprovalRoutingRouter({ pool, store }));
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));
@@ -52,6 +56,11 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
     // the engine directly instead; AUTOMATION_SCHEDULER=off disables it (e.g. read replicas).
     if (process.env.AUTOMATION_SCHEDULER !== 'off' && !process.env.VITEST && process.env.NODE_ENV !== 'test') {
       void engine.start(Number(process.env.AUTOMATION_TICK_MS) || 30_000).catch((err) => console.error('automation scheduler failed to start:', err));
+      // Phase 6: every pending approval gets its route (records imported or created before
+      // routing existed), and routes follow authority changed while the server was down.
+      void withTransaction(pool, (db) => reevaluateRoutes(db, { name: 'NW OS approval routing' }, {}, 'server start'))
+        .then((r) => console.log(`approval routing: ${r.checked} pending, ${r.created} routed, ${r.rerouted} re-routed, ${r.closed} closed`))
+        .catch((err) => console.error('approval routing pass failed:', err));
     }
   }
   return { store };
