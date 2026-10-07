@@ -3,6 +3,8 @@
  * with why they were routed here and the authority resolver's answer for them right now. For
  * the Owner: what is waiting for the Owner and why delegation was not available. Opening an
  * item goes to the record, where the usual approval action (checked again by the server) is.
+ * Batch 4: each item shows its server-calculated lifecycle (due, overdue, escalated, re-routes)
+ * and its history.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { Inbox } from 'lucide-react';
@@ -11,6 +13,7 @@ import { api } from '../services/coreApi';
 import { navigateTo } from '../services/navigation';
 import { actionErrorOf } from '../services/records';
 import { Button, Pill } from './ui/forms';
+import { ApprovalHistory } from './ApprovalHistory';
 
 type Row = Record<string, any>;
 const BASIS: Record<string, string> = {
@@ -25,6 +28,8 @@ const BASIS: Record<string, string> = {
   OWNER_FALLBACK: 'Owner',
 };
 const TONE: Record<string, 'bad' | 'warn' | 'neutral' | 'info'> = { Critical: 'bad', High: 'warn', Normal: 'neutral', Low: 'info' };
+const LIFE_TONE: Record<string, 'bad' | 'warn' | 'neutral' | 'info' | 'good'> = { Escalated: 'bad', Overdue: 'bad', 'Due Soon': 'warn', 'Owner Required': 'info', 'Owner Review': 'warn', Assigned: 'good' };
+const hours = (h: number) => (h >= 48 ? `${Math.floor(h / 24)} days` : `${h}h`);
 
 export const ApprovalInbox: React.FC = () => {
   const { currentUser, coreDataSync } = useNW();
@@ -32,6 +37,7 @@ export const ApprovalInbox: React.FC = () => {
   const [items, setItems] = useState<Row[] | null>(null);
   const [unrouted, setUnrouted] = useState<Row[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<string | null>(null);
   const load = useCallback(async () => {
     try {
       const r = await api.get<{ items: Row[]; unrouted: Row[] }>('/approval-routing/inbox');
@@ -65,18 +71,31 @@ export const ApprovalInbox: React.FC = () => {
       {items && items.length === 0 && unrouted.length === 0 && <p className="text-xs text-slate-500">Nothing to decide.</p>}
       <ul className="divide-y divide-slate-100">
         {(items ?? []).map((i) => (
-          <li key={i.route_id} className="flex flex-col gap-2 py-3 md:flex-row md:items-start md:justify-between" data-testid={`inbox-${i.resource_kind}-${i.resource_id}`}>
+          <li key={i.route_id} className="flex flex-col gap-2 py-3 md:flex-row md:flex-wrap md:items-start md:justify-between" data-testid={`inbox-${i.resource_kind}-${i.resource_id}`}>
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs font-black text-slate-900">{i.title}</span>
                 <Pill tone={TONE[i.priority] ?? 'neutral'}>{i.priority}</Pill>
                 {i.project_sensitivity && i.project_sensitivity !== 'Normal' && <Pill tone="bad">{i.project_sensitivity}</Pill>}
+                {i.lifecycle && (
+                  <span data-testid="inbox-lifecycle">
+                    <Pill tone={LIFE_TONE[i.lifecycle.status] ?? 'neutral'}>{i.lifecycle.status}</Pill>
+                  </span>
+                )}
               </div>
+              {i.lifecycle && (
+                <div className="text-[11px] text-slate-600" data-testid="inbox-aging">
+                  Waiting {hours(i.lifecycle.age_hours)} ({i.lifecycle.waiting_working_days} working days)
+                  {i.lifecycle.overdue_hours != null ? ` · overdue by ${hours(i.lifecycle.overdue_hours)}` : i.lifecycle.due_in_hours != null ? ` · due in ${hours(i.lifecycle.due_in_hours)}` : ''}
+                  {i.lifecycle.reroute_count ? ` · re-routed ${i.lifecycle.reroute_count}×` : ''}
+                  {i.lifecycle.escalation_count ? ` · escalated ${i.lifecycle.escalation_count}×` : ''}
+                </div>
+              )}
               <div className="text-[11px] text-slate-600">
                 {i.project_name ?? 'No project'} · {i.decision_type.replace('_', ' ')}
                 {i.value != null ? ` · RM ${Number(i.value).toLocaleString('en-US')}` : ''}
                 {i.project_risk ? ` · risk ${i.project_risk}` : ''}
-                {i.due_at ? ` · due ${String(i.due_at).slice(0, 10)}` : ''} · routed {String(i.routed_at).slice(0, 10)}
+                {i.lifecycle?.due_at ? ` · due ${String(i.lifecycle.due_at).slice(0, 10)}` : ''} · routed {String(i.routed_at).slice(0, 10)}
               </div>
               <div className="text-[11px]" data-testid="inbox-why">
                 {i.routing_basis === 'OWNER_FALLBACK' ? (
@@ -97,9 +116,17 @@ export const ApprovalInbox: React.FC = () => {
                 </div>
               )}
             </div>
-            <Button tone="primary" onClick={() => i.link && navigateTo(i.link.tab, i.project_id ?? undefined, i.link.focus)}>
-              Open record
-            </Button>
+            <div className="flex flex-col items-start gap-1 md:items-end">
+              <Button tone="primary" onClick={() => i.link && navigateTo(i.link.tab, i.project_id ?? undefined, i.link.focus)}>
+                Open record
+              </Button>
+              <Button onClick={() => setHistory(history === i.route_id ? null : i.route_id)}>{history === i.route_id ? 'Hide history' : 'History'}</Button>
+            </div>
+            {history === i.route_id && (
+              <div className="md:basis-full">
+                <ApprovalHistory kind={i.resource_kind} id={i.resource_id} />
+              </div>
+            )}
           </li>
         ))}
       </ul>

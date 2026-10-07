@@ -1,7 +1,9 @@
 /**
  * Owner Exception Center: "What needs me today?" Decisions, critical / financial / client
  * exceptions and company health from /api/owner/center, and how much still depends on the
- * Owner from /api/owner/dependency. Every item opens the record to act on.
+ * Owner from /api/owner/dependency. Every item opens the record to act on. For the Owner,
+ * Owner Exceptions (Phase 6 Batch 4) comes first: approvals, authority and project exceptions
+ * ranked by the server.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { AlertOctagon, Gavel, HeartPulse, RefreshCw, TrendingDown, Users } from 'lucide-react';
@@ -12,6 +14,7 @@ import { navigateTo } from '../../services/navigation';
 import { FormError } from '../../components/ui/FormError';
 import { Pill, rm } from '../../components/ui/forms';
 import { RISK_TONE, type RiskLevel } from '../../components/ProjectHealth';
+import { OwnerExceptions } from '../../components/OwnerExceptions';
 
 interface Item {
   id: string;
@@ -94,7 +97,7 @@ const List: React.FC<{ title: string; icon: React.ReactNode; items: Item[]; empt
 };
 
 export const OwnerCenter: React.FC = () => {
-  const { coreDataSync } = useNW();
+  const { coreDataSync, currentUser } = useNW();
   const [c, setC] = useState<Center | null>(null);
   const [d, setD] = useState<Dependency | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +128,8 @@ export const OwnerCenter: React.FC = () => {
         </button>
       </div>
       <FormError error={error} />
+      {/* Phase 6 Batch 4: approvals and authority exceptions that need the Owner (Owner only). */}
+      {currentUser.role === 'Owner / CEO' && <OwnerExceptions />}
       {c && h && (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" data-testid="owner-health">
