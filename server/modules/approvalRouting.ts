@@ -31,7 +31,8 @@ import { ValidationError } from '../core/repository';
 import { insertNotifications } from '../automation/notify';
 import type { Pool, PoolClient } from '../db/pool';
 import type { PermissionKey } from '../../src/types';
-import { REASON_PRECEDENCE, resolveApprovalAuthority, type AuthorityResolution, type ResourceKind } from './authorityResolver';
+import { clientConsentAllowed, REASON_PRECEDENCE, resolveApprovalAuthority, type AuthorityResolution, type ResourceKind } from './authorityResolver';
+import { addBusinessDays, loadCalendar } from './businessCalendar';
 
 type Db = Pool | PoolClient;
 type Row = Record<string, any>;
@@ -57,7 +58,7 @@ const EXTERNAL = new Set(['Client', 'Contractor']);
 const REVIEW_STATES = new Set(['Internal Review', 'Pending Review', 'Review']);
 
 /** The record's state as far as routing is concerned. */
-interface DecisionState {
+export interface DecisionState {
   pending: boolean;
   completion?: Completion;
   title: string;
@@ -183,11 +184,19 @@ async function contextFor(db: Db, user: AuthUser, cache: ContextCache) {
   return ctx;
 }
 
-async function ownerUser(db: Db) {
-  const owner = (await db.query(`SELECT id, name, role FROM users WHERE role = $1 AND is_active ORDER BY id LIMIT 1`, [OWNER_ROLE])).rows[0];
+/**
+ * The Owner routing policy (Batch 4): the active primary Owner, then the active Owner with the
+ * highest owner_priority, then user id. With a single Owner this is that Owner, as before.
+ */
+export const OWNER_POLICY_ORDER = 'is_primary_owner DESC, owner_priority DESC, id';
+
+export async function ownerUser(db: Db): Promise<AuthUser> {
+  const owner = (await db.query(`SELECT * FROM users WHERE role = $1 AND is_active ORDER BY ${OWNER_POLICY_ORDER} LIMIT 1`, [OWNER_ROLE])).rows[0];
   if (!owner) throw new ValidationError('No active Owner to route this approval to; it cannot be created without an accountable person');
-  return owner as { id: string; name: string; role: string };
+  return owner as AuthUser;
 }
+
+const CLOSED_PROJECT = new Set(['Completed', 'Closed', 'Cancelled']);
 
 function basisOf(r: AuthorityResolution, rule: Row | undefined): RoutingBasis {
   if (r.basis === 'prior_owner_approval') return 'PRIOR_OWNER_APPROVAL';
@@ -211,9 +220,16 @@ const rankOfReason = (c: string) => {
 export async function computeRouting(db: Db, kind: RoutedKind, id: string, cache: ContextCache = new Map(), now = new Date()): Promise<RoutingDecision> {
   const state = await decisionState(db, kind, id);
   if (!state) throw new ValidationError(`${kind} ${id} was not found`);
-  const project = state.projectId ? (await db.query('SELECT client_id, sensitivity FROM projects WHERE id = $1', [state.projectId])).rows[0] : undefined;
+  const project = state.projectId ? (await db.query('SELECT client_id, sensitivity, project_status FROM projects WHERE id = $1', [state.projectId])).rows[0] : undefined;
   const base = { projectId: state.projectId, clientId: project?.client_id ?? null, sensitivity: project?.sensitivity ?? null };
-  const owner = await ownerUser(db);
+  const ownerRow = await ownerUser(db);
+
+  // A pending decision on a closed project is not delegated: the Owner reviews it (decides,
+  // or withdraws it). It is never deleted.
+  if (project && CLOSED_PROJECT.has(project.project_status)) {
+    const view = await resolveApprovalAuthority(db, await contextFor(db, ownerRow, cache), { resource: { kind: kind as ResourceKind, id }, now });
+    return { ...base, assignee: await fallbackOwner(db, kind, id, cache, now), basis: 'OWNER_FALLBACK', ruleId: null, ruleCode: null, ownerReasonCode: 'PROJECT_CLOSED', ownerReason: `The project is ${project.project_status}: the Owner reviews what is still pending`, decisionType: view.decisionType, value: view.resourceValue, eligible: [], checked: 0 };
+  }
 
   // Client consent (a client-facing request put to the client) goes to the client, never to staff.
   if (kind === 'approval' && (state.approvalType === 'Variation' || state.approvalType === 'Client Scope Change') && state.assignedApproverRole === 'Client' && base.clientId) {
@@ -223,8 +239,7 @@ export async function computeRouting(db: Db, kind: RoutedKind, id: string, cache
     }
   }
 
-  const owners = (await db.query(`SELECT * FROM users WHERE role = $1 AND is_active ORDER BY id LIMIT 1`, [OWNER_ROLE])).rows[0] as AuthUser;
-  const ownerView = await resolveApprovalAuthority(db, await contextFor(db, owners, cache), { resource: { kind: kind as ResourceKind, id }, now });
+  const ownerView = await resolveApprovalAuthority(db, await contextFor(db, ownerRow, cache), { resource: { kind: kind as ResourceKind, id }, now });
   const decisionType = ownerView.decisionType;
   const type = (await db.query('SELECT baseline_permission FROM authority_decision_types WHERE key = $1', [decisionType])).rows[0];
   const rules = new Map<string, Row>((await db.query('SELECT id, kind, target_user_id, target_role, project_id, client_id, priority FROM delegated_authorities')).rows.map((r) => [r.id, r]));
@@ -278,7 +293,22 @@ export async function computeRouting(db: Db, kind: RoutedKind, id: string, cache
     if (told) [code, reason] = [told.reasonCode, `${told.userRole} ${told.userId}: ${told.reason}`];
     else [code, reason] = ['NO_MATCHING_AUTHORITY', results.length ? 'Nobody holds delegated authority for this decision' : 'Nobody else takes part in this decision'];
   }
-  return { ...base, assignee: owner, basis: 'OWNER_FALLBACK', ruleId: null, ruleCode: null, ownerReasonCode: code, ownerReason: reason, decisionType, value, eligible: [], checked: candidates.length };
+  return { ...base, assignee: await fallbackOwner(db, kind, id, cache, now), basis: 'OWNER_FALLBACK', ruleId: null, ruleCode: null, ownerReasonCode: code, ownerReason: reason, decisionType, value, eligible: [], checked: candidates.length };
+}
+
+/**
+ * The Owner who receives a fallback: in Owner routing policy order, the first active Owner the
+ * resolver allows (e.g. not the Owner who raised the variation); the first Owner if none is.
+ */
+export async function fallbackOwner(db: Db, kind: RoutedKind, id: string, cache: ContextCache = new Map(), now = new Date()) {
+  const owners = (await db.query(`SELECT * FROM users WHERE role = $1 AND is_active ORDER BY ${OWNER_POLICY_ORDER}`, [OWNER_ROLE])).rows as AuthUser[];
+  if (!owners.length) throw new ValidationError('No active Owner to route this approval to; it cannot be created without an accountable person');
+  for (const o of owners) {
+    if (owners.length === 1) break;
+    const r = await resolveApprovalAuthority(db, await contextFor(db, o, cache), { resource: { kind: kind as ResourceKind, id }, now });
+    if (r.allowed) return { id: o.id, name: o.name, role: o.role };
+  }
+  return { id: owners[0].id, name: owners[0].name, role: owners[0].role };
 }
 
 export interface RouteRow {
@@ -289,11 +319,37 @@ export interface RouteRow {
   routing_basis: RoutingBasis;
   authority_rule_id: string | null;
   status: string;
+  route_reason: RouteReason;
+  requested_at: Date;
+  due_at: Date | null;
+  lifecycle_state: LifecycleState;
+  reroute_count: number;
+  escalation_count: number;
   [k: string]: unknown;
 }
 
-async function openRoute(db: Db, kind: RoutedKind, id: string): Promise<RouteRow | undefined> {
+/** Why a route exists (Batch 4): an escalation is not a re-route, and both differ from the first routing. */
+export type RouteReason = 'initial' | 'authority_changed' | 'escalated_overdue' | 'project_closed' | 'owner_assigned';
+export type LifecycleState = 'assigned' | 'reminded' | 'due_soon' | 'overdue' | 'escalated';
+/** Routes that stay with their assignee while that person may still decide: re-evaluation never undoes an escalation or the Owner's assignment. */
+const STICKY: RouteReason[] = ['escalated_overdue', 'owner_assigned'];
+
+export async function openRoute(db: Db, kind: RoutedKind, id: string): Promise<RouteRow | undefined> {
   return (await db.query(`SELECT * FROM approval_routes WHERE resource_kind = $1 AND resource_id = $2 AND status = 'open' FOR UPDATE`, [kind, id])).rows[0];
+}
+
+/** Whether the person a route is assigned to may still decide it now: active, and allowed by the resolver. */
+export async function assigneeMayDecide(db: Db, open: Pick<RouteRow, 'assigned_user_id' | 'routing_basis' | 'resource_kind' | 'resource_id'>, cache: ContextCache = new Map(), now = new Date()) {
+  const u = (await db.query('SELECT * FROM users WHERE id = $1', [open.assigned_user_id])).rows[0] as AuthUser | undefined;
+  if (!u || !u.is_active) return { ok: false, code: 'APPROVER_INACTIVE', reason: `${u?.name ?? open.assigned_user_id} is no longer active` };
+  const ctx = await contextFor(db, u, cache);
+  if (open.routing_basis === 'CLIENT_CONSENT') {
+    const row = (await db.query('SELECT approval_type, project_id FROM approvals WHERE id = $1', [open.resource_id])).rows[0];
+    const ok = Boolean(row && clientConsentAllowed(ctx, row));
+    return { ok, code: ok ? 'ALLOWED' : 'INSUFFICIENT_PERMISSION', reason: ok ? "The client's consent on their own project" : 'Not a consent this user can give' };
+  }
+  const r = await resolveApprovalAuthority(db, ctx, { resource: { kind: open.resource_kind as ResourceKind, id: open.resource_id }, now });
+  return { ok: r.allowed, code: r.reasonCode as string, reason: r.reason };
 }
 
 /**
@@ -301,7 +357,13 @@ async function openRoute(db: Db, kind: RoutedKind, id: string): Promise<RouteRow
  * same transaction): pending -> an open route to the right person (re-routed if that changed);
  * no longer pending -> the open route is closed with how it ended.
  */
-export async function syncRoute(db: PoolClient, actor: AuditActor, kind: RoutedKind, id: string, opts: { cache?: ContextCache; why?: string; completedBy?: string | null } = {}) {
+export async function syncRoute(
+  db: PoolClient,
+  actor: AuditActor,
+  kind: RoutedKind,
+  id: string,
+  opts: { cache?: ContextCache; why?: string; completedBy?: string | null; reason?: RouteReason; now?: Date } = {}
+) {
   const state = await decisionState(db, kind, id);
   const open = await openRoute(db, kind, id);
   if (!state || !state.pending) {
@@ -315,14 +377,52 @@ export async function syncRoute(db: PoolClient, actor: AuditActor, kind: RoutedK
     }
     return undefined;
   }
-  const d = await computeRouting(db, kind, id, opts.cache);
-  if (open && open.assigned_user_id === d.assignee.id && open.routing_basis === d.basis && (open.authority_rule_id ?? null) === d.ruleId) return open;
+  const cache = opts.cache ?? new Map();
+  const now = opts.now ?? new Date();
+  if (open && STICKY.includes(open.route_reason) && !opts.reason) {
+    const closed = state.projectId ? CLOSED_PROJECT.has((await db.query('SELECT project_status FROM projects WHERE id = $1', [state.projectId])).rows[0]?.project_status) : false;
+    if (!closed && (await assigneeMayDecide(db, open, cache, now)).ok) return open;
+  }
+  const d = await computeRouting(db, kind, id, cache, now);
+  const sameClosure = (d.ownerReasonCode === 'PROJECT_CLOSED') === (open?.owner_reason_code === 'PROJECT_CLOSED');
+  if (open && open.assigned_user_id === d.assignee.id && open.routing_basis === d.basis && (open.authority_rule_id ?? null) === d.ruleId && sameClosure) return open;
+  const reason: RouteReason = opts.reason ?? (d.ownerReasonCode === 'PROJECT_CLOSED' ? 'project_closed' : open ? 'authority_changed' : 'initial');
+  return insertRoute(db, actor, kind, id, state, d, open, { reason, why: opts.why, now });
+}
+
+/**
+ * Writes a new open route (closing the previous one as re-routed), audits and notifies. The
+ * decision's clock (requested_at, SLA, due_at) and lifecycle carry over from the previous
+ * route: moving an approval never resets how long it has waited.
+ */
+export async function insertRoute(
+  db: PoolClient,
+  actor: AuditActor,
+  kind: RoutedKind,
+  id: string,
+  state: DecisionState,
+  d: Pick<RoutingDecision, 'assignee' | 'basis' | 'ruleId' | 'ruleCode' | 'ownerReasonCode' | 'ownerReason' | 'decisionType' | 'projectId' | 'clientId' | 'sensitivity' | 'value'> & Partial<Pick<RoutingDecision, 'eligible' | 'checked'>>,
+  open: RouteRow | undefined,
+  opts: { reason: RouteReason; why?: string; now?: Date }
+) {
+  const now = opts.now ?? new Date();
+  const requestedAt = open?.requested_at ? new Date(open.requested_at) : now;
+  let sla: number | null = open?.sla_business_days == null ? null : Number(open.sla_business_days);
+  let due: Date | null = open?.due_at ? new Date(open.due_at) : null;
+  if (d.basis !== 'CLIENT_CONSENT' && sla === null) {
+    // The SLA for this decision type (defaults in migration 020; the Owner can change them).
+    sla = Number((await db.query('SELECT sla_business_days FROM approval_sla_policies WHERE decision_type = $1', [d.decisionType])).rows[0]?.sla_business_days ?? 1);
+    due = addBusinessDays(await loadCalendar(db), requestedAt, sla);
+  }
+  const escalated = opts.reason === 'escalated_overdue';
   if (open) await db.query(`UPDATE approval_routes SET status = 'rerouted', completed_at = now() WHERE id = $1`, [open.id]);
+  const why = opts.why ?? (opts.reason === 'escalated_overdue' ? 'overdue: escalated' : 'authority changed');
   const row = (
     await db.query(
       `INSERT INTO approval_routes (resource_kind, resource_id, decision_type, project_id, client_id, assigned_user_id, routing_basis, authority_rule_id, authority_rule_code,
-         owner_reason_code, project_sensitivity, value, priority, replaces_route_id, data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+         owner_reason_code, project_sensitivity, value, priority, replaces_route_id, data, requested_at, sla_business_days, due_at, lifecycle_state, route_reason,
+         reminded_at, due_soon_at, overdue_at, escalated_at, reroute_count, escalation_count, last_checked_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) RETURNING *`,
       [
         kind, id, d.decisionType, d.projectId, d.clientId, d.assignee.id, d.basis, d.ruleId, d.ruleCode, d.ownerReasonCode, d.sensitivity, d.value, state.priority, open?.id ?? null,
         JSON.stringify({
@@ -331,30 +431,38 @@ export async function syncRoute(db: PoolClient, actor: AuditActor, kind: RoutedK
           assignee_name: d.assignee.name,
           assignee_role: d.assignee.role,
           owner_reason: d.ownerReason,
-          candidates_checked: d.checked,
-          eligible: d.eligible.slice(0, 5).map((c) => ({ user_id: c.user_id, name: c.name, role: c.role, basis: c.basis, rule_code: c.rule_code, rule_priority: c.rule_priority })),
-          ...(open ? { previous_assignee: open.assigned_user_id, previous_basis: open.routing_basis, why: opts.why ?? 'authority changed' } : {}),
+          candidates_checked: d.checked ?? null,
+          eligible: (d.eligible ?? []).slice(0, 5).map((c) => ({ user_id: c.user_id, name: c.name, role: c.role, basis: c.basis, rule_code: c.rule_code, rule_priority: c.rule_priority })),
+          ...(open ? { previous_assignee: open.assigned_user_id, previous_basis: open.routing_basis, why } : {}),
         }),
+        requestedAt, sla, due, escalated ? 'escalated' : open?.lifecycle_state ?? 'assigned', opts.reason,
+        open?.reminded_at ?? null, open?.due_soon_at ?? null, open?.overdue_at ?? null, escalated ? now : open?.escalated_at ?? null,
+        (open?.reroute_count ?? 0) + (open && !escalated ? 1 : 0), (open?.escalation_count ?? 0) + (escalated ? 1 : 0), now,
       ]
     )
   ).rows[0] as RouteRow;
   await writeAudit(db, actor, {
-    action: open ? 'approval.route.reroute' : 'approval.route.assign',
+    action: !open ? 'approval.route.assign' : escalated ? 'approval.route.escalate' : 'approval.route.reroute',
     entityType: 'approval_route',
     entityId: String(row.id),
     projectId: d.projectId,
-    before: open ? { assignee: open.assigned_user_id, basis: open.routing_basis, rule: open.authority_rule_code ?? null } : undefined,
-    after: { resource: `${kind}:${id}`, decision_type: d.decisionType, assignee: d.assignee.id, basis: d.basis, rule: d.ruleCode, sensitivity: d.sensitivity, owner_reason: d.ownerReasonCode },
-    details: open ? opts.why ?? 'authority changed' : undefined,
+    before: open ? { assignee: open.assigned_user_id, basis: open.routing_basis, rule: open.authority_rule_code ?? null, lifecycle: open.lifecycle_state } : undefined,
+    after: { resource: `${kind}:${id}`, decision_type: d.decisionType, assignee: d.assignee.id, basis: d.basis, rule: d.ruleCode, sensitivity: d.sensitivity, owner_reason: d.ownerReasonCode, reason: opts.reason, due_at: due?.toISOString() ?? null },
+    details: open ? why : undefined,
   });
+  const urgent = state.priority === 'Critical' || (d.basis === 'OWNER_FALLBACK' && d.sensitivity === 'Strategic') || escalated;
   await insertNotifications(
     db,
     [d.assignee.id],
     {
-      title: `To decide: ${state.title}`,
-      message: d.basis === 'OWNER_FALLBACK' ? `Needs the Owner: ${d.ownerReason ?? d.ownerReasonCode}` : `Routed to you (${d.basis}${d.ruleCode ? `, ${d.ruleCode}` : ''}).`,
-      type: 'approval',
-      priority: state.priority === 'Critical' ? 'urgent' : state.priority === 'High' ? 'high' : 'normal',
+      title: `${escalated ? 'Escalated to you' : 'To decide'}: ${state.title}`,
+      message: escalated
+        ? `Overdue (was due ${due ? due.toISOString().slice(0, 10) : '-'}); escalated from ${open?.data && typeof open.data === 'object' ? (open.data as Row).assignee_name ?? open.assigned_user_id : 'the approver'}.`
+        : d.basis === 'OWNER_FALLBACK'
+          ? `Needs the Owner: ${d.ownerReason ?? d.ownerReasonCode}`
+          : `Routed to you (${d.basis}${d.ruleCode ? `, ${d.ruleCode}` : ''})${due ? `; due ${due.toISOString().slice(0, 10)}` : ''}.`,
+      type: escalated ? 'escalation' : 'approval',
+      priority: urgent ? 'urgent' : state.priority === 'High' ? 'high' : 'normal',
       project_id: d.projectId,
       link_tab: 'approvals',
       entity_type: 'approval_route',
@@ -363,6 +471,25 @@ export async function syncRoute(db: PoolClient, actor: AuditActor, kind: RoutedK
     `approval-route:${row.id}`,
     'approval_routing'
   );
+  // The previous approver is told it moved, and why (e.g. their authority expired).
+  if (open && open.assigned_user_id !== d.assignee.id) {
+    await insertNotifications(
+      db,
+      [open.assigned_user_id],
+      {
+        title: `Moved: ${state.title}`,
+        message: `${escalated ? 'Escalated' : 'Re-routed'} to ${d.assignee.name}: ${why}.`,
+        type: 'information',
+        priority: 'normal',
+        project_id: d.projectId,
+        link_tab: 'approvals',
+        entity_type: 'approval_route',
+        entity_id: String(row.id),
+      },
+      `approval-route:${row.id}:moved`,
+      'approval_routing'
+    );
+  }
   return row;
 }
 
