@@ -27,6 +27,11 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   approval required" on Sensitive / Strategic, nothing with the baseline permission only,
   OUT_OF_SCOPE for another project's authority; Client and Major Purchase hardening; Issue PO),
   each checked against the API and the database. Recorded in `docs/phase6-ui-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-routing.cjs` — Phase 6 Batch 3: the Owner creates delegated
+  authority on the settings screen (server preview first), approvals are routed by the server to
+  the delegated PM and shown in their inbox, Sensitive / Strategic / expiry / deactivation route
+  them to the Owner, and no pending approval is left without a route. Recorded in
+  `docs/phase6-routing-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

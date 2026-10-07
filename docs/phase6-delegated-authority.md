@@ -286,3 +286,38 @@ Phase 6 security hardening".
   Accountant and the Owner still can).
 
 These are intentional Phase 6 changes, agreed in the Batch 2 review.
+
+## 6. Owner Authority Settings (Batch 3)
+
+Navigation: **Delegated Authority** (live system; the Owner manages, the Admin views — the
+Batch 1 `authority.manage` / `authority.view` permissions). Nothing on the screen decides
+authority: rule summaries, warnings, impact and validation all come from the server, and
+approvals are still decided by the resolver.
+
+- **Overview** (`GET /api/authority/overview`): active delegated rules, System Policies, Owner
+  rules, rules expiring in 30 days, inactive rules, rules overridden by project sensitivity,
+  Sensitive / Strategic projects, approvals waiting for the Owner (and why), delegated coverage
+  by routing basis, and the decision types only the Owner can approve today.
+- **Rules**: searchable, filterable table (decision type, status, System Policy / Owner, effect,
+  role, user, project, client, expiring soon, overridden by sensitivity) with name, code, target,
+  scope, value range, max risk, dates, priority, effect, kind (`SYSTEM POLICY`, `LOCKED`),
+  status, created by, last changed, reason. A rule's detail shows identity, who, scope,
+  conditions, governance (created / changed / deactivated, by whom, why), the server-written
+  summary and the audit history.
+- **New / edit rule** (Owner): guided form (decision type, target user or role — permission
+  targets remain System Policy only — scope, value, risk, dates, priority, reason). **Preview**
+  (`POST /api/authority/rules/preview`, `/rules/:id/preview`) runs the same server validation as
+  saving and returns the summary, affected users / projects / pending approvals, whether the rule
+  is immediately usable, higher-priority rules, and warnings: project Sensitive / Strategic,
+  overridden by sensitivity, overlaps an existing rule, may never apply (a higher-priority Owner
+  requirement), broadens System Policy, expires soon. Save is enabled only after a preview of
+  the exact values; a reason is required for create and edit (Batch 1).
+- **Deactivate / reactivate**: impact first (`GET /api/authority/rules/:id/impact`): users and
+  projects covered, pending approvals routed by the rule, what happens next; then a reason.
+  System Policy can be switched off / on where Batch 1 allows; definitions cannot be edited; the
+  Sensitive / Strategic rows stay locked.
+- **Project sensitivity**: Owner-only change with a reason; pending approvals are re-routed at
+  once and the screen shows how many, and which rules the new ceiling overrides.
+- **Re-run routing**: re-evaluates every pending approval against current authority.
+
+Approval routing — who receives each decision — is described in `phase6-routing.md`.
