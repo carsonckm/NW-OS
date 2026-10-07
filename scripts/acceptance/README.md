@@ -32,6 +32,13 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   the delegated PM and shown in their inbox, Sensitive / Strategic / expiry / deactivation route
   them to the Owner, and no pending approval is left without a route. Recorded in
   `docs/phase6-routing-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-monitoring.cjs` — Phase 6 Batch 4: a Major Purchase request
+  goes through reminder, overdue (inbox and Owner Exceptions), escalation to the Owner and the
+  Owner's approval from the exception card; an expired delegation is re-routed by the approval
+  monitor; a safety-critical request is a critical exception that cannot be snoozed; Owner-only
+  checks; SLA / Owner routing settings; the no-orphan invariant on the whole database. Time is
+  simulated by moving the test approval's `requested_at` back. Recorded in
+  `docs/phase6-monitoring-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

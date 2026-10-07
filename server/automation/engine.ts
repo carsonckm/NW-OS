@@ -179,7 +179,8 @@ export class AutomationEngine {
         try {
           const now = this.clock();
           const people = await People.load(this.pool);
-          const planned = await rule.evaluate({ pool: this.pool, now, today: now.toISOString().slice(0, 10), config: { ...rule.defaults, ...(cfgRow.config ?? {}) }, people });
+          const problems: string[] = [];
+          const planned = await rule.evaluate({ pool: this.pool, now, today: now.toISOString().slice(0, 10), config: { ...rule.defaults, ...(cfgRow.config ?? {}) }, people, problems });
           let firstError: unknown;
           for (const a of planned) {
             try {
@@ -189,6 +190,7 @@ export class AutomationEngine {
             }
           }
           if (firstError) throw firstError;
+          if (problems.length) throw new Error(problems.slice(0, 10).join('; '));
           // Escalations this rule raised whose condition no longer holds are resolved.
           const active = [...new Set(planned.filter((a) => a.kind === 'escalation').map((a) => (a as Extract<PlannedAction, { kind: 'escalation' }>).record.source_record_id))];
           const resolved = await this.pool.query(

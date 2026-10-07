@@ -42,6 +42,12 @@ export interface RuleContext {
   today: string;
   config: Record<string, unknown>;
   people: People;
+  /**
+   * Problems a rule hit on individual records while it kept going (e.g. one approval it could
+   * not re-route). The engine performs the planned actions, then records the run as failed with
+   * these messages, so it is retried with backoff and shows in the run log.
+   */
+  problems: string[];
 }
 
 export interface RuleDef {

@@ -21,6 +21,11 @@
  *
  *   GET  /api/authority/resolve?items=kind:id[:action],...   (any signed-in user)
  *
+ *   GET  /api/authority/owner-routing             who receives Owner fallbacks (authority.view)
+ *   PUT  /api/authority/owner-routing             { owners: [{ id, owner_priority, is_primary_owner }] } (Owner)
+ *   GET  /api/authority/sla                       SLA per decision type + business calendar (authority.view)
+ *   PUT  /api/authority/sla/:decision_type        { sla_business_days?, reminder_pct?, due_soon_pct?, escalate_pct?, escalate_to?, reason } (Owner)
+ *
  * The approval screens ask the server, for the signed-in user, what the authority resolver
  * decides for each record they show (approve / reject / request changes), and show the action,
  * "Owner approval required" or the reason accordingly. Informational only: every approval is
@@ -37,6 +42,7 @@ import { createRule, decisionTypes, getRule, listRules, ruleHistory, setProjectS
 import { authorityOverview, previewRule, ruleImpact } from './authoritySettings';
 import { authorityForScreen, clientConsentAllowed, resolveApprovalAuthority, type DecisionAction, type ResourceKind } from './authorityResolver';
 import { ValidationError } from '../core/repository';
+import { ownerRoutingPolicy, setOwnerRoutingPolicy, setSlaPolicy, slaSettings } from './approvalOps';
 
 const KINDS: ResourceKind[] = ['drawing_revision', 'drawing', 'variation', 'purchase_order', 'invoice', 'approval'];
 const ACTIONS: DecisionAction[] = ['approve', 'reject', 'request_changes'];
@@ -53,6 +59,29 @@ const q = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 export function createAuthorityRouter({ pool, store }: { pool: Pool; store: AuthStore }) {
   const router = express.Router();
   router.use(['/authority', '/projects/:id/sensitivity'], csrfGuard, attachUser(store), requireUser, loadAccess(pool));
+
+  router.get(
+    '/authority/owner-routing',
+    wrap(async (req, res) => {
+      needView(req.access!);
+      res.json(await ownerRoutingPolicy(pool));
+    })
+  );
+  router.put(
+    '/authority/owner-routing',
+    wrap(async (req, res) => res.json(await setOwnerRoutingPolicy(pool, req.access!, actorOf(req), req.body)))
+  );
+  router.get(
+    '/authority/sla',
+    wrap(async (req, res) => {
+      needView(req.access!);
+      res.json(await slaSettings(pool));
+    })
+  );
+  router.put(
+    '/authority/sla/:decisionType',
+    wrap(async (req, res) => res.json(await setSlaPolicy(pool, req.access!, actorOf(req), String(req.params.decisionType), req.body)))
+  );
 
   router.get(
     '/authority/resolve',
