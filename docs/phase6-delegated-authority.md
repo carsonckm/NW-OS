@@ -321,3 +321,10 @@ approvals are still decided by the resolver.
 - **Re-run routing**: re-evaluates every pending approval against current authority.
 
 Approval routing — who receives each decision — is described in `phase6-routing.md`.
+
+## 7. Proactive approval management (Batch 4)
+
+SLAs, the business calendar, the approval monitor (reminders, overdue, escalation, automatic
+re-routing), the Owner routing policy for several Owners, closed-project review and the Owner
+Exception Center are described in `phase6-approval-monitoring.md`. Batch 4 does not change the
+authority model or the resolver: every assignment, escalation and Owner action is checked by it.

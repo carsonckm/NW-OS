@@ -78,7 +78,8 @@ Owner's approval mandatory.
 
 ## Owner fallback and the no-orphan invariant
 
-If no candidate is allowed, the decision goes to the Owner (lowest-id active Owner) with
+If no candidate is allowed, the decision goes to the Owner (chosen by the Owner routing policy —
+primary Owner, then priority, then user id; Batch 4, `phase6-approval-monitoring.md`) with
 `owner_reason_code` — why delegation was not available, from the resolver:
 `SENSITIVITY_BLOCKED`, `OWNER_REQUIRED`, `AUTHORITY_EXPIRED`, `AUTHORITY_DEACTIVATED`,
 `VALUE_LIMIT_EXCEEDED`, `RISK_LIMIT_EXCEEDED`, `NO_MATCHING_AUTHORITY`, ... (the most telling
@@ -113,8 +114,12 @@ Authority can change while a decision is pending. Two layers:
    - the server starts (all — also routes records imported before routing existed).
 
    It can be run on demand: `POST /api/approval-routing/reevaluate` (or "Re-run routing" on the
-   settings screen) — for example after a rule's end date passed. A scheduled sweep is not part of
-   Batch 3.
+   settings screen).
+3. **Scheduled** (Batch 4): the `approval_monitor` automation rule re-checks every open route's
+   assignee with the resolver every 15 minutes and re-routes the ones who may no longer decide
+   (for example once a rule's end date has passed), besides reminders and escalation. See
+   `phase6-approval-monitoring.md`. Re-evaluation never undoes an escalation or an Owner
+   assignment while its assignee may still decide.
 
 ## Data
 

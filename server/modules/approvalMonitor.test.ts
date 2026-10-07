@@ -497,7 +497,17 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
       clock = new Date();
     });
 
-    it('the invariant holds at the end: every pending approval has an open route to an active person', async () => {
+    it('routes created before SLAs existed get their SLA and due date on the first check', async () => {
+    const r = (await db.pool.query(`SELECT * FROM approval_routes WHERE status = 'open' AND routing_basis <> 'CLIENT_CONSENT' ORDER BY id LIMIT 1`)).rows[0];
+    await db.pool.query(`UPDATE approval_routes SET sla_business_days = NULL, due_at = NULL, last_checked_at = NULL WHERE id = $1`, [r.id]);
+    await monitor(new Date());
+    const after = (await db.pool.query(`SELECT * FROM approval_routes WHERE id = $1`, [r.id])).rows[0];
+    const sla = Number((await db.pool.query(`SELECT sla_business_days FROM approval_sla_policies WHERE decision_type = $1`, [r.decision_type])).rows[0].sla_business_days);
+    expect(Number(after.sla_business_days)).toBe(sla);
+    expect(new Date(after.due_at).getTime()).toBe(addBusinessDays(cal, new Date(after.requested_at), sla).getTime());
+  });
+
+  it('the invariant holds at the end: every pending approval has an open route to an active person', async () => {
       await noOrphans();
       expect(await count(`SELECT count(*) AS n FROM approval_routes ar JOIN users u ON u.id = ar.assigned_user_id WHERE ar.status = 'open' AND NOT u.is_active`)).toBe(0);
     });

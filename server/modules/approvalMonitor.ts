@@ -37,7 +37,7 @@ import {
   type RouteRow,
   type RoutedKind,
 } from './approvalRouting';
-import { businessElapsedMs, DAY_MS, loadCalendar, type BusinessCalendar } from './businessCalendar';
+import { addBusinessDays, businessElapsedMs, DAY_MS, loadCalendar, type BusinessCalendar } from './businessCalendar';
 
 type Row = Record<string, any>;
 
@@ -97,6 +97,12 @@ async function checkRoute(db: PoolClient, routeId: number, now: Date, policies: 
   const valid = await assigneeMayDecide(db, route, cache, now);
   if (!valid.ok) {
     route = (await syncRoute(db, MONITOR_ACTOR, kind, id, { cache, now, reason: 'authority_changed', why: `${valid.code}: ${valid.reason}` })) ?? route;
+  }
+  // A route created before SLAs existed (migration 020) gets its SLA and due date now, from
+  // when it was requested.
+  if (route.routing_basis !== 'CLIENT_CONSENT' && route.sla_business_days == null) {
+    const sla = (policies.get(route.decision_type as string) ?? DEFAULT_POLICY).sla_business_days;
+    route = (await db.query('UPDATE approval_routes SET sla_business_days = $2, due_at = $3 WHERE id = $1 RETURNING *', [route.id, sla, addBusinessDays(cal, new Date(route.requested_at), sla)])).rows[0] as RouteRow;
   }
   if (route.routing_basis === 'CLIENT_CONSENT' || route.sla_business_days == null) {
     await db.query('UPDATE approval_routes SET last_checked_at = $2 WHERE id = $1', [route.id, now]);
