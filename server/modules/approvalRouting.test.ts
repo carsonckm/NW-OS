@@ -232,6 +232,46 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
       await noOrphans();
     });
 
+    it('Major Purchase / Major Cost: the Accountant while System Policy authorizes them; otherwise the Owner', async () => {
+      const mp = (type = 'Major Purchase', projectId = projA) => approvalRequest('Purchasing', { approval_type: type, project_id: projectId, assigned_approver_role: 'Owner / CEO' });
+      // Assigned to the Owner on the request, routed to the Accountant: the assignment is a preference, the policy decides.
+      for (const type of ['Major Purchase', 'Major Cost']) {
+        expect(await route('approval', await mp(type)), type).toMatchObject({ assigned_user_id: 'user-accountant', routing_basis: 'SYSTEM_POLICY', authority_rule_code: 'SYS-PURCHASE-ACCOUNTANT' });
+      }
+      // The Owner can still decide one directly.
+      const direct = await mp();
+      await as['Owner / CEO'].post(`/api/approvals/${direct}/decision`).send({ decision: 'Approved' }).expect(200);
+      // Sensitive / Strategic project: the Owner.
+      const p = await newProject();
+      for (const level of ['Sensitive', 'Strategic']) {
+        await setSensitivity(p, level);
+        expect(await route('approval', await mp('Major Purchase', p)), level).toMatchObject({ assigned_user_id: 'user-owner', owner_reason_code: 'SENSITIVITY_BLOCKED' });
+      }
+      await setSensitivity(p, 'Normal');
+      // The Accountant deactivated: pending ones move to the Owner, and back when reactivated.
+      const pending = await mp();
+      // (Directly in the test database, so the Accountant's session survives for later tests; the
+      // users API triggers the same re-routing, see scenario J.)
+      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-accountant'`);
+      await owner().post('/api/approval-routing/reevaluate').send({}).expect(200);
+      expect(await route('approval', pending)).toMatchObject({ assigned_user_id: 'user-owner', routing_basis: 'OWNER_FALLBACK' });
+      await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-accountant'`);
+      await owner().post('/api/approval-routing/reevaluate').send({}).expect(200);
+      expect((await route('approval', pending))!.assigned_user_id).toBe('user-accountant');
+      // The Accountant's System Policy switched off (Owner, reason): the Owner.
+      const res = (await owner().post('/api/authority/rules/sys-purchase-accountant/deactivate').send({ reason: 'Owner takes purchases this month' }).expect(200)).body;
+      expect(res.routing_changes.rerouted).toBeGreaterThanOrEqual(1);
+      expect(await route('approval', pending)).toMatchObject({ assigned_user_id: 'user-owner', routing_basis: 'OWNER_FALLBACK' });
+      await owner().post('/api/authority/rules/sys-purchase-accountant/reactivate').send({ reason: 'Back to policy' }).expect(200);
+      expect((await route('approval', pending))!.assigned_user_id).toBe('user-accountant');
+      // An explicit higher-priority Owner requirement: the Owner.
+      const need = (await owner().post('/api/authority/rules').send({ name: 'Owner signs Major Cost', description: 'Explicit Owner requirement', effect: 'require_owner', decision_type: 'purchase', conditions: { approval_types: ['Major Cost'] }, priority: 300 }).expect(201)).body;
+      expect(await route('approval', await mp('Major Cost'))).toMatchObject({ assigned_user_id: 'user-owner', owner_reason_code: 'OWNER_REQUIRED' });
+      expect((await route('approval', await mp('Major Purchase')))!.assigned_user_id).toBe('user-accountant');
+      await deactivate(need.id);
+      await noOrphans();
+    });
+
     it('drawing revision in review -> the Owner (drawings.approve); approving closes the route', async () => {
       const rev = next('rev-rt');
       await as['Project Manager'].post('/api/drawings/dwg-1/revisions').send({ id: rev, revision: rev, title: 'x', file_url: `/${rev}.pdf`, notes: '', drawing_type: 'Client / Designer Drawing' }).expect(201);

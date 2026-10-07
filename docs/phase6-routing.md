@@ -58,6 +58,24 @@ applicable allow rule that outranks every applicable Owner requirement):
 Ties: the higher rule priority, then user id. Never storage order. The route records the
 eligible candidates in order, so the explanation shows why the winner won.
 
+## Initial assignment is a preference; the Authority Policy decides
+
+The approver a request names (`assigned_approver_role` / `assigned_approver_id`, e.g. "Owner / CEO",
+the default on the request form) is a routing preference, not an Owner requirement. Routing sends
+the request to whoever the Authority Policy authorizes, in the order above:
+
+- **Major Purchase / Major Cost requests** go to the **Accountant** while System Policy
+  `SYS-PURCHASE-ACCOUNTANT` authorizes them (even when the request names the Owner).
+- They go to the **Owner** when the Accountant's authority does not apply: the project is
+  Sensitive / Strategic; a value, risk or scope condition requires the Owner; the Accountant is
+  deactivated or unavailable; the policy is deactivated (by the Owner, with a reason) or expired;
+  or another explicit Owner requirement applies (e.g. an Owner `require_owner` rule of higher
+  priority).
+- The Owner can always decide the request directly where the business rules allow.
+
+Only an explicit Owner requirement — the sensitivity ceiling or a `require_owner` rule — makes the
+Owner's approval mandatory.
+
 ## Owner fallback and the no-orphan invariant
 
 If no candidate is allowed, the decision goes to the Owner (lowest-id active Owner) with
