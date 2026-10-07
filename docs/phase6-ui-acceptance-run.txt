@@ -3,11 +3,11 @@ node scripts/acceptance/phase6-ui.cjs
 
 1 [Baseline only (PM, drawings.review, no rule)] PASS — screen Approve: false, note NO_MATCHING_AUTHORITY; API 403 NO_MATCHING_AUTHORITY
 1b [Baseline only (Production Manager)] PASS — screen Approve: false, note not visible
-2 [Normal + delegated PM (UI)] PASS — DA-0017; screen Approve: true; clicked -> revision Approved; audit DA-0017 ALLOWED
+2 [Normal + delegated PM (UI)] PASS — DA-0021; screen Approve: true; clicked -> revision Approved; audit DA-0021 ALLOWED
 3 [Sensitive + same PM (UI)] PASS — PM screen Approve: false, note "Owner approval required (Sensitive project)" SENSITIVITY_BLOCKED; PM API 403 SENSITIVITY_BLOCKED; Owner screen Approve: true -> revision Approved
 4 [Strategic + same PM (UI)] PASS — PM screen Approve: false, note "Owner approval required (Strategic project)" SENSITIVITY_BLOCKED; PM API 403 SENSITIVITY_BLOCKED; Owner screen Approve: true -> revision Approved
 5 [Back to Normal (UI)] PASS — PM screen Approve: true
-6 [Wrong project authority (UI/API)] PASS — DA-0018 on proj-p6o-muxg8ug8; screen Approve: false, note OUT_OF_SCOPE; API 403 OUT_OF_SCOPE
+6 [Wrong project authority (UI/API)] PASS — DA-0022 on proj-p6o-muxqnxb9; screen Approve: false, note OUT_OF_SCOPE; API 403 OUT_OF_SCOPE
 7 [Client, internal request assigned to Client] PASS — screen Approve: false (NO_APPROVALS_SCREEN); API 403 INSUFFICIENT_PERMISSION; decision Pending
 7b [Client consent unchanged (own project)] PASS — resolver for the client: true (client_consent); API 200; decision Approved
 8 [Major Purchase, Site Supervisor (no purchasing.view)] PASS — screen Approve: false, note INSUFFICIENT_PERMISSION; API 403 INSUFFICIENT_PERMISSION
