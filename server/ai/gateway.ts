@@ -353,9 +353,11 @@ export class AIGateway {
           warnings.push(`The AI suggested an action NW OS cannot offer${a.action ? ` (${String(a.action).slice(0, 40)})` : a.ref ? ` (${a.ref})` : ''}; it was ignored. Only validated proposals can be suggested, and approvals are never executed by the AI.`);
           continue;
         }
-        if (!picked.some((p) => p.ref === a.ref)) picked.push({ index: picked.length, ref: known.ref, action: known.action, label: known.label, summary: known.summary, params: known.params, why: a.why, state: 'suggested' });
+        if (!picked.some((p) => p.ref === a.ref)) picked.push({ index: 0, ref: known.ref, action: known.action, label: known.label, summary: known.summary, params: known.params, why: a.why, state: 'suggested' });
       }
-      suggested = picked;
+      // NW OS's own validated proposals are always offered; the model only orders and explains them.
+      const rest = suggested.filter((x) => !picked.some((p) => p.ref === x.ref));
+      suggested = [...picked, ...rest].map((x, i) => ({ ...x, index: i }));
       for (const u of out.unknowns) if (!unknowns.includes(u)) unknowns.push(u);
       requiresDecision = requiresDecision || out.requires_human_decision;
     }

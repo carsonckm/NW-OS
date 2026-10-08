@@ -74,18 +74,18 @@ const Suggested: React.FC<{ conversation: string; s: AIResult['suggested_actions
       ) : !state.approval ? (
         <div className="flex gap-1">
           <button type="button" disabled={state.busy} onClick={() => void run(async () => { const r = await api.post<{ approval: { id: string; title: string } }>(`/ai/ops/conversations/${conversation}/actions/${s.index}/propose`, {}); setState((x) => ({ ...x, approval: r.approval.id, title: r.approval.title })); })} className="rounded border border-amber-500 bg-white px-2 py-0.5 font-bold text-amber-900 disabled:opacity-50">
-            Review
+            Review — Propose: {s.label}
           </button>
           <button type="button" disabled={state.busy} onClick={() => void run(async () => { await api.post(`/ai/ops/conversations/${conversation}/actions/${s.index}/dismiss`, {}); setState((x) => ({ ...x, dismissed: true })); })} className="rounded border border-slate-300 bg-white px-2 py-0.5 font-bold text-slate-600 disabled:opacity-50">
             Dismiss
           </button>
         </div>
       ) : (
-        <div className="space-y-1" data-testid="ai-proposal-pending">
-          <p className="text-amber-900">AI Proposal {state.approval} created. Nothing has been done yet — a person with authority approves it in the normal approval flow.</p>
+        <div className="space-y-1" data-testid="assistant-proposal">
+          <p className="text-amber-900" data-testid="ai-proposal-pending">AI Proposal {state.approval} created. Nothing has been done yet — a person with authority approves it in the normal approval flow.</p>
           {decision?.allowed ? (
             <div className="flex gap-1">
-              <button type="button" disabled={state.busy} onClick={() => void run(async () => { await api.post(`/approvals/${encodeURIComponent(state.approval!)}/decision`, { decision: 'Approved' }); setState((x) => ({ ...x, done: 'Approved — the server executed it with your permissions' })); })} className="rounded bg-emerald-600 px-2 py-0.5 font-bold text-white disabled:opacity-50">
+              <button type="button" disabled={state.busy} onClick={() => void run(async () => { await api.post(`/approvals/${encodeURIComponent(state.approval!)}/decision`, { decision: 'Approved' }); setState((x) => ({ ...x, done: 'Approved and executed — the server ran it with your permissions' })); })} className="rounded bg-emerald-600 px-2 py-0.5 font-bold text-white disabled:opacity-50">
                 Approve &amp; run
               </button>
               <button type="button" disabled={state.busy} onClick={() => void run(async () => { await api.post(`/approvals/${encodeURIComponent(state.approval!)}/decision`, { decision: 'Rejected' }); setState((x) => ({ ...x, done: 'Rejected — nothing was done' })); })} className="rounded border border-slate-300 bg-white px-2 py-0.5 font-bold text-slate-700 disabled:opacity-50">
@@ -115,6 +115,8 @@ export const AIResponseView: React.FC<{ result: AIResult }> = ({ result: r }) =>
           : 'NW OS record-based answer (AI not used)';
   return (
     <div className="space-y-2" data-testid="ai-response">
+      {/* assistant-answer: the Phase 5 hook, kept for existing screens and scripts */}
+      <div className="space-y-2" data-testid="assistant-answer">
       <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
         <Pill tone={r.ai.status === 'ok' ? 'info' : r.ai.status === 'refused' ? 'bad' : 'neutral'}>{statusText}</Pill>
         <Pill tone={TONE[r.confidence]} title={r.answer_source === 'ai' ? 'Written by the AI from the facts below; check the facts' : 'Read from NW OS records'}>
@@ -211,6 +213,7 @@ export const AIResponseView: React.FC<{ result: AIResult }> = ({ result: r }) =>
         <p className="text-[10px] text-slate-500"><strong>Unknown / missing:</strong> {r.unknowns.slice(0, 5).join(' · ')}</p>
       )}
       <p className="text-[10px] text-slate-400">{r.principle}</p>
+      </div>
     </div>
   );
 };
