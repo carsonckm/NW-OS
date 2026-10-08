@@ -40,8 +40,15 @@ const EXTERNAL = new Set(['Client', 'Contractor', OWNER]);
 const RISK_RANK: Record<string, number> = { 'On Track': 0, Attention: 1, 'At Risk': 2, Critical: 3 };
 /** Conditions that are part of how a decision type normally works (the coverage is still full). */
 const ROUTINE_CONDITIONS = new Set(['no_self_approval', 'match_status', 'match_status_not', 'direct_only']);
-/** Temporary and absence authority outrank permanent Owner rules (default 100–200), never System sensitivity rows (900+). */
-export const TEMPORARY_PRIORITY = 300;
+/**
+ * Temporary and absence authority priority: above the default Owner rule (100) and the plain
+ * System Policy allow rules, below System Policy Owner requirements it must never outrank
+ * (e.g. SYS-INVOICE-MISMATCH at 200, sensitivity rows at 900+). Any System requirement it would
+ * outrank is checked by envelopeCheck instead.
+ */
+export const TEMPORARY_PRIORITY = 150;
+/** Owner requirements that still reserve their range (the condition only lets a prior Owner approval through). */
+const RESERVING_CONDITIONS = new Set(['unless_prior_approval']);
 export const MAX_TEMPORARY_DAYS = 90;
 export const MAX_ABSENCE_DAYS = 60;
 export const ABSENCE_TYPES = ['drawing', 'variation', 'purchase', 'invoice'];
@@ -119,7 +126,9 @@ export async function computeCoverage(db: Db, now = new Date()) {
     // Value bands from every limit in force.
     let bands: [number | null, number | null][] = [[null, null]];
     if (t.has_value) {
-      const points = [...new Set([...allows, ...owners].flatMap((r) => [num(r.min_value), num(r.max_value)]).filter((x): x is number => x !== null && x > 0))].sort((a, b) => a - b);
+      const raw0 = [...new Set([...allows, ...owners].flatMap((r) => [num(r.min_value), num(r.max_value)]).filter((x): x is number => x !== null && x > 0))].sort((a, b) => a - b);
+      // Limits a cent apart (RM 19,999.99 / RM 20,000) are one boundary.
+      const points = raw0.filter((p, i) => i === raw0.length - 1 || raw0[i + 1] - p > 0.011);
       bands = [];
       let lo = 0;
       for (const p of points) {
@@ -132,13 +141,15 @@ export async function computeCoverage(db: Db, now = new Date()) {
     for (const [lo, hi] of bands) {
       const probe = hi === null ? (lo ?? 0) + 1 : lo === null ? 0 : (lo + hi) / 2;
       const v = t.has_value ? probe : null;
-      const req = owners.filter((r) => valueIn(v, r) && conditionKeys(r).length === 0);
+      const req = owners.filter((r) => valueIn(v, r) && conditionKeys(r).every((k) => RESERVING_CONDITIONS.has(k)));
       const reqTop = Math.max(-Infinity, ...req.map((r) => r.priority));
-      const covering = allows.filter((r) => (t.has_value ? valueIn(v, r) : true) && r.priority > reqTop);
+      // A System Policy that only the Owner's own permissions satisfy is no delegation.
+      const covering = allows.filter((r) => (t.has_value ? valueIn(v, r) : true) && r.priority > reqTop && !(r.kind === 'system' && r.target_permission && !eligibleUsers(r, users, t.baseline_permission).length));
       const reasons: string[] = [];
       let status: CoverageStatus;
       let approvers: { role: string; users: number }[] = [];
       let expires: string | null = null;
+      let staffedCodes: string[] | null = null;
       if (!covering.length) {
         status = req.length ? 'Owner Only' : 'Uncovered';
         reasons.push(req.length ? `${req.map((r) => r.code).join(', ')} reserves it for the Owner` : 'No authority rule lets anyone but the Owner decide it');
@@ -160,6 +171,7 @@ export async function computeCoverage(db: Db, now = new Date()) {
           const counted = new Map<string, Set<string>>();
           for (const x of staffed) for (const u of x.people) counted.set(u.role, (counted.get(u.role) ?? new Set()).add(u.id));
           approvers = [...counted.entries()].map(([role, ids]) => ({ role, users: ids.size }));
+          staffedCodes = staffed.map(({ r }) => r.code);
           if (full.length) {
             const ends = full.map(({ r }) => (r.end_at ? new Date(r.end_at).getTime() : Infinity));
             const last = Math.max(...ends);
@@ -181,7 +193,7 @@ export async function computeCoverage(db: Db, now = new Date()) {
         value_label: '',
         status,
         approvers,
-        rules: covering.length ? covering.map((r) => r.code) : req.map((r) => r.code),
+        rules: staffedCodes ?? (covering.length ? covering.map((r) => r.code) : req.map((r) => r.code)),
         reasons,
         expires_at: expires,
         pending_with_owner: 0,
@@ -282,6 +294,8 @@ export async function authorityConflicts(db: Db, now = new Date()) {
 }
 
 // ------------------------------------------------------------------ temporary authority
+/** The confirmation covers the exact rule; a start of "now" is hashed as such (it moves with the clock). */
+const tempHash = (b: Row, r: Row) => hash({ kind: 'temporary', r: { ...r, start_at: b.start_at ? r.start_at : 'now' } });
 const TEMP_FIELDS = ['decision_type', 'target_user_id', 'target_role', 'project_id', 'client_id', 'min_value', 'max_value', 'max_risk', 'start_at', 'end_at', 'reason', 'confirmation'];
 function refuse(body: Row, allowed: string[]) {
   const extra = Object.keys(body).filter((k) => !allowed.includes(k));
@@ -297,8 +311,9 @@ const asObject = (b: unknown): Row => (b && typeof b === 'object' && !Array.isAr
 async function envelopeCheck(db: Db, r: Row, now: Date) {
   const type = (await db.query('SELECT label, has_value FROM authority_decision_types WHERE key = $1', [r.decision_type])).rows[0];
   if (type.has_value && r.max_value == null) throw new ValidationError(`Temporary authority for ${type.label.toLowerCase()} needs a value limit`);
-  const reserved = (await db.query(`SELECT * FROM delegated_authorities WHERE kind = 'system' AND effect = 'require_owner' AND decision_type = $1`, [r.decision_type])).rows.filter(
-    (x) => inForce(x, now) && Object.keys(x.conditions ?? {}).length === 0
+  // Every System Policy Owner requirement this rule would outrank (lower priority) must not overlap it.
+  const reserved = (await db.query(`SELECT * FROM delegated_authorities WHERE kind = 'system' AND effect = 'require_owner' AND decision_type = $1 AND priority < $2`, [r.decision_type, r.priority])).rows.filter(
+    (x) => inForce(x, now) && !isSensitivityRow(x)
   );
   for (const x of reserved) {
     const lo = Math.max(num(x.min_value) ?? 0, r.min_value ?? 0);
@@ -357,7 +372,7 @@ export async function previewTemporary(pool: Pool, ctx: AccessContext, body: unk
   const { rule, r } = await buildTemporaryRule(pool, b, now);
   const preview = await previewRule(pool, ctx, rule, undefined, now);
   const conflicts = (await authorityConflicts(pool, now)).filter((c) => c.decision_type === r.decision_type);
-  return { rule: r, preview, overlapping: preview.warnings.filter((w: Row) => w.code === 'OVERLAPS'), conflicts, confirmation: hash({ kind: 'temporary', r }) };
+  return { rule: r, preview, overlapping: preview.warnings.filter((w: Row) => w.code === 'OVERLAPS'), conflicts, confirmation: tempHash(b, r) };
 }
 
 export async function createTemporary(pool: Pool, ctx: AccessContext, actor: AuditActor, body: unknown, now = new Date()) {
@@ -365,7 +380,7 @@ export async function createTemporary(pool: Pool, ctx: AccessContext, actor: Aud
   const b = asObject(body);
   refuse(b, TEMP_FIELDS);
   const { r } = await buildTemporaryRule(pool, b, now);
-  if (b.confirmation !== hash({ kind: 'temporary', r })) throw new ValidationError('Preview this temporary authority first, then confirm it (the confirmation does not match)');
+  if (b.confirmation !== tempHash(b, r)) throw new ValidationError('Preview this temporary authority first, then confirm it (the confirmation does not match)');
   return withTransaction(pool, async (db) => {
     const stored = await insertOwnerRule(db, ctx, actor, r, true, { authorityType: 'temporary' });
     await writeAudit(db, actor, { action: 'authority.temporary.create', entityType: 'delegated_authority', entityId: stored.id, projectId: r.project_id, after: { code: stored.code, start_at: r.start_at, end_at: r.end_at }, details: r.description });
@@ -398,14 +413,14 @@ async function buildExtension(db: Db, id: string, body: Row, now: Date) {
 export async function previewExtension(pool: Pool, ctx: AccessContext, id: string, body: unknown, now = new Date()) {
   requireOwnerManage(ctx, 'temporary authority');
   const { old, rule, r } = await buildExtension(pool, id, asObject(body), now);
-  return { current: { code: old.code, end_at: old.end_at }, rule: r, preview: await previewRule(pool, ctx, rule, undefined, now), confirmation: hash({ kind: 'extend', id, r }) };
+  return { current: { code: old.code, end_at: old.end_at }, rule: r, preview: await previewRule(pool, ctx, rule, undefined, now), confirmation: hash({ kind: 'extend', id, r: { ...r, start_at: 'now' } }) };
 }
 
 export async function extendTemporary(pool: Pool, ctx: AccessContext, actor: AuditActor, id: string, body: unknown, now = new Date()) {
   requireOwnerManage(ctx, 'temporary authority');
   const b = asObject(body);
   const { old, r } = await buildExtension(pool, id, b, now);
-  if (b.confirmation !== hash({ kind: 'extend', id, r })) throw new ValidationError('Preview the extension first, then confirm it (the confirmation does not match)');
+  if (b.confirmation !== hash({ kind: 'extend', id, r: { ...r, start_at: 'now' } })) throw new ValidationError('Preview the extension first, then confirm it (the confirmation does not match)');
   return withTransaction(pool, async (db) => {
     const locked = (await db.query('SELECT active FROM delegated_authorities WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!locked?.active) throw new ValidationError(`${old.code} was changed meanwhile`);
@@ -482,7 +497,7 @@ async function buildAbsence(db: Db, ctx: AccessContext, body: Row, now: Date) {
     );
     rules.push({ type: t, ...built });
   }
-  return { backup, types, maxValue, maxRisk, reason, rules, start: rules[0].r.start_at as string, end: rules[0].r.end_at as string, project_id: body.project_id || null, client_id: body.client_id || null };
+  return { backup, types, maxValue, maxRisk, reason, rules, startGiven: body.start_at ? (rules[0].r.start_at as string) : 'now', start: rules[0].r.start_at as string, end: rules[0].r.end_at as string, project_id: body.project_id || null, client_id: body.client_id || null };
 }
 
 /** What the absence would cover and leave with the Owner (informational; the resolver decides each approval). */
@@ -541,7 +556,7 @@ export async function previewAbsence(pool: Pool, ctx: AccessContext, body: unkno
       stays_with_owner: stay.slice(0, 20),
       note: 'Estimated from current pending approvals and the last 60 days. The authority resolver decides each approval when it is routed and decided.',
     },
-    confirmation: hash({ kind: 'absence', a: { b: a.backup.id, t: a.types, v: a.maxValue, r: a.maxRisk, s: a.start, e: a.end, p: a.project_id, c: a.client_id, reason: a.reason } }),
+    confirmation: hash({ kind: 'absence', a: { b: a.backup.id, t: a.types, v: a.maxValue, r: a.maxRisk, s: a.startGiven, e: a.end, p: a.project_id, c: a.client_id, reason: a.reason } }),
   };
 }
 
@@ -549,7 +564,7 @@ export async function activateAbsence(pool: Pool, ctx: AccessContext, actor: Aud
   requireOwnerManage(ctx, 'Owner absence');
   const b = asObject(body);
   const a = await buildAbsence(pool, ctx, b, now);
-  const expected = hash({ kind: 'absence', a: { b: a.backup.id, t: a.types, v: a.maxValue, r: a.maxRisk, s: a.start, e: a.end, p: a.project_id, c: a.client_id, reason: a.reason } });
+  const expected = hash({ kind: 'absence', a: { b: a.backup.id, t: a.types, v: a.maxValue, r: a.maxRisk, s: a.startGiven, e: a.end, p: a.project_id, c: a.client_id, reason: a.reason } });
   if (b.confirmation !== expected) throw new ValidationError('Preview the absence first, then confirm it (the confirmation does not match)');
   return withTransaction(pool, async (db) => {
     await db.query(`SELECT pg_advisory_xact_lock(hashtext('owner_absences'))`);
