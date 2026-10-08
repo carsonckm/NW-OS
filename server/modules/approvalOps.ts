@@ -32,6 +32,7 @@ import {
 import { LIFECYCLE_RANK, loadPolicies, slaPercent, stageFor, type SlaPolicy } from './approvalMonitor';
 import { resolveApprovalAuthority, type ResourceKind } from './authorityResolver';
 import { businessElapsedMs, DAY_MS, loadCalendar, type BusinessCalendar } from './businessCalendar';
+import { coverageGaps, delegationEffectiveness, GAP_STATUSES, type CoverageStatus } from './delegationCoverage';
 
 type Db = Pool | PoolClient;
 type Row = Record<string, any>;
@@ -434,6 +435,21 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
   for (const d of expiring) {
     out.push(finish({ id: `delegation:${d.id}:expiring`, type: 'DELEGATION_EXPIRING', reasons: [{ code: 'DELEGATION_EXPIRING', label: `Ends ${localDay(new Date(d.end_at))}`, points: 10, level: 'attention' }], title: `Delegation ${d.code} (${d.name}) expires soon`, project_id: d.project_id, project_name: null, client_name: null, decision: null, status: 'Active', current_approver: null, value: null, risk: null, due_at: new Date(d.end_at).toISOString(), age_hours: null, why_owner: 'Approvals it covers will come to you once it ends.', recommended: 'Renew it, or let it end on purpose.', link: { tab: 'authority' }, resource: null, actions: ['open'] }));
   }
+  // ---------- delegation (Batch 6): coverage gaps, an unavailable backup, ineffective delegation
+  for (const g of await coverageGaps(pool, now)) {
+    if (g.status === 'Expiring Soon') continue; // the expiring rules are listed above
+    const gap = GAP_STATUSES.includes(g.status as CoverageStatus);
+    if (!gap && !g.pending_affected) continue; // partial coverage nobody is waiting on is not an exception
+    const level: ExceptionSeverity = gap ? (g.pending_affected ? 'urgent' : 'attention') : 'attention';
+    out.push(finish({ id: `coverage:${g.key}`, type: 'COVERAGE_GAP', reasons: [{ code: 'COVERAGE_GAP', label: `${g.status}: ${g.reason}`, points: gap ? 40 : 10, level }, ...(g.pending_affected ? [{ code: 'UNCOVERED_APPROVALS', label: `${g.pending_affected} pending approval(s) waiting for you`, points: Math.min(30, g.pending_affected * 5), level: null }] : [])], title: `Coverage gap: ${g.label} — ${g.scope}`, project_id: null, project_name: null, client_name: null, decision: g.decision_type, status: g.status, current_approver: null, value: null, risk: null, due_at: null, age_hours: null, why_owner: gap ? 'Approvals of this kind have no non-Owner approver, so they all come to you.' : 'Pending approvals fall outside the partial delegation.', recommended: g.recommended_action, link: { tab: 'authority' }, resource: null, actions: ['open'] }));
+  }
+  for (const a of (await pool.query(`SELECT a.id, a.end_at, a.status, u.name, u.is_active FROM owner_absences a JOIN users u ON u.id = a.backup_user_id WHERE a.status IN ('scheduled', 'active')`)).rows.filter((x) => !x.is_active)) {
+    out.push(finish({ id: `absence:${a.id}:backup`, type: 'BACKUP_UNAVAILABLE', reasons: [{ code: 'BACKUP_UNAVAILABLE', label: `${a.name} (the backup) is deactivated`, points: 100, level: 'critical' }], title: `Absence backup unavailable (${a.id})`, project_id: null, project_name: null, client_name: null, decision: null, status: a.status, current_approver: null, value: null, risk: null, due_at: new Date(a.end_at).toISOString(), age_hours: null, why_owner: 'Approvals meant for the backup come back to you.', recommended: 'End this absence and set up another backup, or reactivate the backup.', link: { tab: 'authority' }, resource: null, actions: ['open'] }));
+  }
+  for (const e of (await delegationEffectiveness(pool, now)).delegations.filter((x) => x.finding && x.in_force)) {
+    out.push(finish({ id: `delegation:${e.rule_id}:ineffective`, type: 'DELEGATION_INEFFECTIVE', reasons: [{ code: 'OWNER_FALLBACK_RATE', label: `${e.owner_fallback_rate}% of ${e.approvals} decisions in its scope returned to you`, points: 15, level: 'attention' }], title: `Delegation ${e.code} covers only part of the workload`, project_id: null, project_name: null, client_name: null, decision: e.decision_type, status: null, current_approver: null, value: null, risk: null, due_at: null, age_hours: null, why_owner: e.finding!, recommended: 'Look at the fallback reasons: widen the delegation, or keep those decisions on purpose.', link: { tab: 'authority' }, resource: null, actions: ['open'] }));
+  }
+
   const otherEsc = (await pool.query(`SELECT id, project_id, created_at, data->>'title' AS title, data->>'reason' AS reason FROM escalations WHERE status = 'Open' AND level = 2 AND coalesce(data->>'rule_key', '') <> 'approval_monitor' ORDER BY id`)).rows.filter((e) => !e.project_id || ctx.canSeeProject(e.project_id));
   for (const e of otherEsc) {
     out.push(finish({ id: `escalation:${e.id}`, type: 'ESCALATION', reasons: [{ code: 'ESCALATED', label: e.reason ?? 'Escalated to the Owner', points: 30, level: 'urgent' }], title: e.title ?? e.id, project_id: e.project_id, project_name: null, client_name: null, decision: null, status: 'Open', current_approver: null, value: null, risk: null, due_at: null, age_hours: Math.round((now.getTime() - new Date(e.created_at).getTime()) / HOUR), why_owner: 'Automation escalated this to the Owner.', recommended: 'Open it and acknowledge or act.', link: { tab: 'notifications' }, resource: null, actions: ['open'] }));
@@ -452,6 +468,10 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
   }
   for (const a of (await pool.query(`SELECT action, entity_id, actor_name, occurred_at, details FROM audit_logs WHERE entity_type = 'delegated_authority' AND occurred_at > $1::timestamptz - interval '7 days' ORDER BY id DESC LIMIT 10`, [now])).rows) {
     info.push(finish({ id: `delegation-change:${a.entity_id}:${new Date(a.occurred_at).getTime()}`, type: 'DELEGATION_CHANGE', reasons: [], title: `${a.action.replace('authority.rule.', 'Rule ')} by ${a.actor_name}`, project_id: null, project_name: null, client_name: null, decision: null, status: null, current_approver: null, value: null, risk: null, due_at: null, age_hours: Math.round((now.getTime() - new Date(a.occurred_at).getTime()) / HOUR), why_owner: a.details ?? 'Delegated authority changed.', recommended: 'Nothing to do.', link: { tab: 'authority' }, resource: null, actions: ['open'] }));
+  }
+
+  for (const r of (await pool.query(`SELECT id, code, name, authority_type, expiry_processed_at FROM delegated_authorities WHERE authority_type <> 'permanent' AND expiry_processed_at > $1::timestamptz - interval '24 hours' AND deactivation_reason = 'Expired' ORDER BY expiry_processed_at DESC LIMIT 10`, [now])).rows) {
+    info.push(finish({ id: `temporary-expired:${r.id}`, type: 'TEMPORARY_EXPIRED', reasons: [], title: `${r.authority_type === 'absence' ? 'Absence' : 'Temporary'} authority ${r.code} expired`, project_id: null, project_name: null, client_name: null, decision: null, status: 'Expired', current_approver: null, value: null, risk: null, due_at: null, age_hours: null, why_owner: `${r.name}. Pending approvals it covered were routed again.`, recommended: 'Nothing to do, unless it should continue (create new temporary authority).', link: { tab: 'authority' }, resource: null, actions: ['open'] }));
   }
 
   // Snoozes hide non-critical items until they expire; a critical item is never hidden.
