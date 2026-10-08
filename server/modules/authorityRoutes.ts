@@ -26,6 +26,20 @@
  *   GET  /api/authority/sla                       SLA per decision type + business calendar (authority.view)
  *   PUT  /api/authority/sla/:decision_type        { sla_business_days?, reminder_pct?, due_soon_pct?, escalate_pct?, escalate_to?, reason } (Owner)
  *
+ * Batch 6 (reading: authority.view; every change: the Owner, previewed then confirmed):
+ *   GET  /api/authority/coverage                  coverage matrix, health, gaps, overlapping rules
+ *   GET  /api/authority/effectiveness             what happened to the decisions each delegation covers
+ *   GET  /api/authority/temporary                 temporary and absence authority (active, scheduled, expiring, ended)
+ *   POST /api/authority/temporary/preview         { decision_type, target_user_id | target_role, project_id?, client_id?, min_value?, max_value, max_risk?, start_at?, end_at, reason }
+ *   POST /api/authority/temporary                 the same + confirmation
+ *   POST /api/authority/temporary/:id/extend/preview   { end_at, reason }
+ *   POST /api/authority/temporary/:id/extend      { end_at, reason, confirmation }
+ *   POST /api/authority/temporary/:id/end         { reason }
+ *   GET  /api/authority/absence                   Owner absences
+ *   POST /api/authority/absence/preview           { start_at?, end_at, backup_user_id, decision_types, max_value?, max_risk?, project_id?, client_id?, reason }
+ *   POST /api/authority/absence                   the same + confirmation
+ *   POST /api/authority/absence/:id/end           { reason }
+ *
  * The approval screens ask the server, for the signed-in user, what the authority resolver
  * decides for each record they show (approve / reject / request changes), and show the action,
  * "Owner approval required" or the reason accordingly. Informational only: every approval is
@@ -43,6 +57,22 @@ import { authorityOverview, previewRule, ruleImpact } from './authoritySettings'
 import { authorityForScreen, clientConsentAllowed, resolveApprovalAuthority, type DecisionAction, type ResourceKind } from './authorityResolver';
 import { ValidationError } from '../core/repository';
 import { ownerRoutingPolicy, setOwnerRoutingPolicy, setSlaPolicy, slaSettings } from './approvalOps';
+import {
+  activateAbsence,
+  authorityConflicts,
+  computeCoverage,
+  coverageGaps,
+  createTemporary,
+  delegationEffectiveness,
+  endAbsence,
+  extendTemporary,
+  listAbsences,
+  listTemporary,
+  previewAbsence,
+  previewExtension,
+  previewTemporary,
+  requireOwnerManage,
+} from './delegationCoverage';
 
 const KINDS: ResourceKind[] = ['drawing_revision', 'drawing', 'variation', 'purchase_order', 'invoice', 'approval'];
 const ACTIONS: DecisionAction[] = ['approve', 'reject', 'request_changes'];
@@ -82,6 +112,40 @@ export function createAuthorityRouter({ pool, store }: { pool: Pool; store: Auth
     '/authority/sla/:decisionType',
     wrap(async (req, res) => res.json(await setSlaPolicy(pool, req.access!, actorOf(req), String(req.params.decisionType), req.body)))
   );
+
+  router.get(
+    '/authority/coverage',
+    wrap(async (req, res) => {
+      needView(req.access!);
+      const coverage = await computeCoverage(pool);
+      res.json({ ...coverage, gaps: await coverageGaps(pool, new Date(), coverage), conflicts: await authorityConflicts(pool) });
+    })
+  );
+  router.get(
+    '/authority/effectiveness',
+    wrap(async (req, res) => {
+      needView(req.access!);
+      res.json(await delegationEffectiveness(pool));
+    })
+  );
+  router.get('/authority/temporary', wrap(async (req, res) => res.json(await listTemporary(pool, req.access!))));
+  router.post('/authority/temporary/preview', wrap(async (req, res) => res.json(await previewTemporary(pool, req.access!, req.body))));
+  router.post('/authority/temporary', wrap(async (req, res) => res.status(201).json(await createTemporary(pool, req.access!, actorOf(req), req.body))));
+  router.post('/authority/temporary/:id/extend/preview', wrap(async (req, res) => res.json(await previewExtension(pool, req.access!, String(req.params.id), req.body))));
+  router.post('/authority/temporary/:id/extend', wrap(async (req, res) => res.status(201).json(await extendTemporary(pool, req.access!, actorOf(req), String(req.params.id), req.body))));
+  router.post(
+    '/authority/temporary/:id/end',
+    wrap(async (req, res) => {
+      requireOwnerManage(req.access!, 'temporary authority');
+      const rule = (await pool.query('SELECT authority_type FROM delegated_authorities WHERE id = $1', [String(req.params.id)])).rows[0];
+      if (rule?.authority_type !== 'temporary') throw new ValidationError('Not temporary authority (absence authority ends with its absence)');
+      res.json(await setRuleActive(pool, req.access!, actorOf(req), String(req.params.id), false, req.body));
+    })
+  );
+  router.get('/authority/absence', wrap(async (req, res) => res.json(await listAbsences(pool, req.access!))));
+  router.post('/authority/absence/preview', wrap(async (req, res) => res.json(await previewAbsence(pool, req.access!, req.body))));
+  router.post('/authority/absence', wrap(async (req, res) => res.status(201).json(await activateAbsence(pool, req.access!, actorOf(req), req.body))));
+  router.post('/authority/absence/:id/end', wrap(async (req, res) => res.json(await endAbsence(pool, req.access!, actorOf(req), String(req.params.id), req.body))));
 
   router.get(
     '/authority/resolve',

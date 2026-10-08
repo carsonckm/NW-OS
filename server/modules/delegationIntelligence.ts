@@ -277,6 +277,37 @@ export async function ownerDependencyAnalytics(pool: Pool, ctx: AccessContext, o
   }
 
   const saved = round1((delegated.length * c.owner_minutes_per_decision) / 60);
+
+  // Batch 6: the estimated effect of the delegations in force now on the same history.
+  const inForceRules = (await pool.query(`SELECT * FROM delegated_authorities WHERE kind = 'owner' AND effect = 'allow' AND active`)).rows.filter(
+    (r) => (!r.start_at || new Date(r.start_at) <= now) && (!r.end_at || new Date(r.end_at) > now)
+  );
+  const coveredNow = (d: Decision) =>
+    inForceRules.some(
+      (r) =>
+        r.decision_type === d.decision_type &&
+        (!r.project_id || r.project_id === d.project_id) &&
+        (!r.client_id || r.client_id === d.client_id) &&
+        (r.min_value == null || (d.value !== null && d.value >= Number(r.min_value))) &&
+        (r.max_value == null || (d.value !== null && d.value <= Number(r.max_value))) &&
+        (!Array.isArray(r.conditions?.approval_types) || (d.approval_type !== null && r.conditions.approval_types.includes(d.approval_type)))
+    );
+  const routineDelegated = routine.length - routineOwner.length;
+  const nowCovered = routineOwner.filter(coveredNow);
+  const remaining = new Map<string, number>();
+  for (const d of routineOwner.filter((x) => !coveredNow(x))) remaining.set(d.decision_type, (remaining.get(d.decision_type) ?? 0) + 1);
+  const protectedOwner = owner.filter((d) => !isRoutine(d));
+  const impact = {
+    label: 'Estimated',
+    current_dependency_percent: pct(routineOwner.length, routine.length),
+    estimated_routine_coverage_percent: pct(routineDelegated + nowCovered.length, routine.length),
+    owner_routine_decisions_now_covered: nowCovered.length,
+    largest_remaining: [
+      ...[...remaining.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => ({ label: LABEL[t] ?? t, owner_decisions: n, why: 'no delegation in force covers them' })),
+      ...(protectedOwner.length ? [{ label: 'Sensitive / Strategic / safety decisions', owner_decisions: protectedOwner.length, why: 'stay with the Owner by design' }] : []),
+    ].slice(0, 5),
+    note: 'Estimated by replaying the period\'s routine decisions against the delegations in force now. Not a forecast: future workload and the resolver (risk, self-approval, availability) decide what is actually delegated.',
+  };
   return {
     question: 'How much of my time is still required for routine operational decisions?',
     window: { days, from: from.toISOString(), to: now.toISOString() },
@@ -312,6 +343,7 @@ export async function ownerDependencyAnalytics(pool: Pool, ctx: AccessContext, o
     by_project: byProject,
     by_value: byValue,
     by_reason: [...reasons.values()].sort((a, b) => b.count - a.count),
+    impact,
     repeated: repeatedOwnerDecisions(all.filter((d) => d.completed_at >= new Date(now.getTime() - 45 * DAY))),
     trend,
     data_note: 'From completed approval routes (approval routing began in Phase 6 Batch 3); earlier decisions are not counted.',
@@ -504,19 +536,21 @@ export async function evaluateOpportunities(db: Db, now: Date, c: Config) {
       continue;
     }
     // Already delegated: an active Owner rule for this role covers it.
-    const covering = rules.find(
-      (x) =>
+    const covers = (x: Row) =>
         x.decision_type === decisionType &&
         (x.target_role === role || users.some((u) => u.id === x.target_user_id && u.role === role)) &&
         (!x.project_id || x.project_id === projectId) &&
         (!x.client_id || x.client_id === clientId) &&
         (x.max_value == null || max === null || Number(x.max_value) >= max) &&
-        (!approvalType || !Array.isArray(x.conditions?.approval_types) || x.conditions.approval_types.includes(approvalType))
-    );
+        (!approvalType || !Array.isArray(x.conditions?.approval_types) || x.conditions.approval_types.includes(approvalType));
+    // Batch 6: only permanent authority counts as "already delegated"; temporary or absence
+    // authority ends, so the recommendation stays, saying what covers it for now.
+    const covering = rules.find((x) => covers(x) && (x.authority_type ?? 'permanent') === 'permanent');
     if (covering) {
       skip(key, label, `Already delegated by ${covering.code}`, base);
       continue;
     }
+    const temporaryCover = rules.filter((x) => covers(x) && x.authority_type && x.authority_type !== 'permanent');
 
     const why: string[] = [];
     let confidence: Opportunity['confidence'] = 'Low';
@@ -563,7 +597,9 @@ export async function evaluateOpportunities(db: Db, now: Date, c: Config) {
           `${role} holds ${type.baseline_permission} (the baseline permission); ${eligible} active user(s) can see this work`,
           max !== null ? `Suggested limit RM ${max.toLocaleString('en-US')}: the 90th percentile of approved amounts, rounded up, never above RM ${c.max_value_cap.toLocaleString('en-US')}` : 'This decision type has no amount',
           'Only Normal projects: Sensitive and Strategic projects stay with the Owner (sensitivity ceiling)',
+          ...temporaryCover.map((x) => `Currently covered only by ${x.authority_type} authority ${x.code} until ${new Date(x.end_at).toISOString().slice(0, 10)}; it returns to the Owner after that`),
         ],
+        coverage_now: temporaryCover.length ? `temporary (${temporaryCover.map((x) => x.code).join(', ')})` : 'Owner only',
         confidence_explanation: why,
         required_permission: type.baseline_permission,
         role_notes: roleNotes,
@@ -682,6 +718,7 @@ const present = (r: Row) => ({
   recommendation: r.data?.recommendation,
   reasons: r.data?.reasons ?? [],
   confidence_explanation: r.data?.confidence_explanation ?? [],
+  coverage_now: r.data?.coverage_now ?? null,
   required_permission: r.data?.required_permission ?? null,
   excluded: r.data?.excluded ?? null,
   decisions: r.data?.evidence ?? [],

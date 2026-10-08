@@ -12,6 +12,7 @@ import { api } from '../services/coreApi';
 import { actionErrorOf } from '../services/records';
 import { FormError } from '../components/ui/FormError';
 import { ApprovalSlaSettings } from '../components/ApprovalSlaSettings';
+import { AbsencePanel, CoveragePanel, TemporaryAuthorityPanel } from '../components/authority/CoverageAbsencePanels';
 import { Button, Field, Input, Modal, Pill, Section, Select, TextArea } from '../components/ui/forms';
 
 type Row = Record<string, any>;
@@ -27,7 +28,7 @@ const SENS_TONE: Record<string, 'neutral' | 'warn' | 'bad'> = { Normal: 'neutral
 export const AuthoritySettingsView: React.FC = () => {
   const { currentUser, coreDataSync, projects, clients } = useNW();
   const canManage = hasPermission(currentUser, 'authority.manage');
-  const [tab, setTab] = useState<'overview' | 'rules' | 'projects' | 'sla'>('overview');
+  const [tab, setTab] = useState<'overview' | 'rules' | 'projects' | 'sla' | 'coverage' | 'temporary' | 'absence'>('overview');
   const [overview, setOverview] = useState<Row | null>(null);
   const [rules, setRules] = useState<Row[]>([]);
   const [types, setTypes] = useState<Row[]>([]);
@@ -81,9 +82,9 @@ export const AuthoritySettingsView: React.FC = () => {
           <Button busy={rerun.busy} onClick={() => void rerunRouting()} data-testid="rerun-routing" title="Route every pending approval again against current authority (for example after a rule expired)">
             Re-run routing
           </Button>
-          {(['overview', 'rules', 'projects', 'sla'] as const).map((t) => (
+          {(['overview', 'rules', 'coverage', 'temporary', 'absence', 'projects', 'sla'] as const).map((t) => (
             <Button key={t} tone={tab === t ? 'primary' : 'secondary'} onClick={() => setTab(t)}>
-              {t === 'overview' ? 'Overview' : t === 'rules' ? `Rules (${rules.length})` : t === 'projects' ? 'Project sensitivity' : 'SLAs & Owner routing'}
+              {t === 'overview' ? 'Overview' : t === 'rules' ? `Rules (${rules.length})` : t === 'coverage' ? 'Coverage' : t === 'temporary' ? 'Temporary' : t === 'absence' ? 'Absence' : t === 'projects' ? 'Project sensitivity' : 'SLAs & Owner routing'}
             </Button>
           ))}
         </div>
@@ -97,6 +98,9 @@ export const AuthoritySettingsView: React.FC = () => {
       {tab === 'overview' && overview && <Overview o={overview} onOpenRule={(code) => setSelected(rules.find((r) => r.code === code) ?? null)} />}
       {tab === 'rules' && <RulesTable rules={rules} types={types} overview={overview} canManage={canManage} onOpen={setSelected} onNew={() => setEditing('new')} />}
       {tab === 'sla' && <ApprovalSlaSettings canManage={canManage} />}
+      {tab === 'coverage' && <CoveragePanel />}
+      {tab === 'temporary' && <TemporaryAuthorityPanel canManage={canManage && currentUser.role === 'Owner / CEO'} />}
+      {tab === 'absence' && <AbsencePanel canManage={canManage && currentUser.role === 'Owner / CEO'} />}
       {tab === 'projects' && overview && <ProjectsTable projects={overview.projects} canManage={canManage} onChange={setSensitivityFor} />}
       {selected && (
         <RuleDetail

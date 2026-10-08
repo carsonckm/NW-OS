@@ -269,22 +269,37 @@ export async function createRule(pool: Pool, ctx: AccessContext, actor: AuditAct
   const r = await validateOwnerRule(pool, body, now, { creating: true });
   const active = body.active === undefined ? true : body.active;
   if (typeof active !== 'boolean') throw new ValidationError('active must be true or false');
-  return withTransaction(pool, async (db) => {
-    const seq = (await db.query(`SELECT nextval('delegated_authority_seq') AS n`)).rows[0].n;
-    const id = `da-${randomUUID().slice(0, 8)}`;
-    const code = `DA-${String(seq).padStart(4, '0')}`;
-    await db.query(
-      `INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, active, target_role, target_user_id, project_id, client_id,
-         min_value, max_value, max_risk, conditions, start_at, end_at, priority, granted_by, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, 'owner', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19, $19)`,
-      [id, code, r.name, r.description, r.effect, r.decision_type, active, r.target_role, r.target_user_id, r.project_id, r.client_id, r.min_value, r.max_value, r.max_risk, JSON.stringify(r.conditions), r.start_at, r.end_at, r.priority, ctx.user.id]
-    );
-    const stored = await getRule(db, id);
-    await writeAudit(db, actor, { action: 'authority.rule.create', entityType: 'delegated_authority', entityId: id, projectId: r.project_id, after: { code, ...snapshot(stored), summary: stored.summary } });
-    // Pending approvals this rule could change are routed again now (same transaction).
-    const routing_changes = await reevaluateRoutes(db, actor, { decisionType: r.decision_type, projectId: r.project_id ?? undefined }, `rule ${code} created`);
-    return { ...stored, routing_changes };
-  });
+  return withTransaction(pool, (db) => insertOwnerRule(db, ctx, actor, r, active));
+}
+
+/**
+ * Writes a validated Owner rule (validateOwnerRule output), audits it and re-routes pending
+ * approvals, in the caller's transaction. Permanent rules come from createRule; temporary and
+ * absence authority (Batch 6) use the same path with their authority_type set by the server.
+ */
+export async function insertOwnerRule(
+  db: PoolClient,
+  ctx: AccessContext,
+  actor: AuditActor,
+  r: Row,
+  active = true,
+  internal: { authorityType?: 'permanent' | 'temporary' | 'absence'; absenceId?: string | null; extendedFrom?: string | null } = {}
+): Promise<Row> {
+  const seq = (await db.query(`SELECT nextval('delegated_authority_seq') AS n`)).rows[0].n;
+  const id = `da-${randomUUID().slice(0, 8)}`;
+  const code = `DA-${String(seq).padStart(4, '0')}`;
+  const type = internal.authorityType ?? 'permanent';
+  await db.query(
+    `INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, active, target_role, target_user_id, project_id, client_id,
+       min_value, max_value, max_risk, conditions, start_at, end_at, priority, granted_by, created_by, updated_by, authority_type, absence_id, extended_from)
+     VALUES ($1, $2, $3, $4, 'owner', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19, $19, $20, $21, $22)`,
+    [id, code, r.name, r.description, r.effect, r.decision_type, active, r.target_role, r.target_user_id, r.project_id, r.client_id, r.min_value, r.max_value, r.max_risk, JSON.stringify(r.conditions), r.start_at, r.end_at, r.priority, ctx.user.id, type, internal.absenceId ?? null, internal.extendedFrom ?? null]
+  );
+  const stored = await getRule(db, id);
+  await writeAudit(db, actor, { action: 'authority.rule.create', entityType: 'delegated_authority', entityId: id, projectId: r.project_id, after: { code, authority_type: type, absence_id: internal.absenceId ?? null, extended_from: internal.extendedFrom ?? null, ...snapshot(stored), summary: stored.summary } });
+  // Pending approvals this rule could change are routed again now (same transaction).
+  const routing_changes = await reevaluateRoutes(db, actor, { decisionType: r.decision_type, projectId: r.project_id ?? undefined }, `rule ${code} created`);
+  return { ...stored, routing_changes };
 }
 
 export async function updateRule(pool: Pool, ctx: AccessContext, actor: AuditActor, id: string, body: unknown, now = new Date()) {
@@ -298,6 +313,11 @@ export async function updateRule(pool: Pool, ctx: AccessContext, actor: AuditAct
     if (!existing) throw notFound(`Authority rule ${id}`);
     if (existing.kind === 'system') {
       throw new ForbiddenError('System Policy cannot be edited. Deactivate it, or create an Owner rule with a higher priority.');
+    }
+    // Temporary and absence authority is never edited in place (no silent extension): it is
+    // extended through the extension flow (preview, reason, a new rule) or ended.
+    if (existing.authority_type && existing.authority_type !== 'permanent') {
+      throw new ValidationError(`${existing.code} is ${existing.authority_type} authority: extend it or end it instead of editing it`);
     }
     const { change_reason: _ignored, ...change } = body;
     const merged = { ...existing, min_value: existing.min_value == null ? null : Number(existing.min_value), max_value: existing.max_value == null ? null : Number(existing.max_value), ...change };
@@ -334,6 +354,10 @@ export async function setRuleActive(pool: Pool, ctx: AccessContext, actor: Audit
     if (existing.active === active) throw new ValidationError(`Rule ${existing.code} is already ${active ? 'active' : 'inactive'}`);
     if (existing.locked) {
       throw new ForbiddenError(`${existing.code} is a locked System Policy and cannot be deactivated or reactivated. Project sensitivity is changed on the project itself.`);
+    }
+    // Absence authority belongs to its absence; temporary authority that was ended is replaced, not revived.
+    if (active && existing.authority_type && existing.authority_type !== 'permanent') {
+      throw new ValidationError(`${existing.code} is ${existing.authority_type} authority and cannot be reactivated; create or extend temporary authority instead`);
     }
     // Reactivating never extends an authority past its end date.
     if (active && existing.end_at && new Date(existing.end_at).getTime() <= now.getTime()) {

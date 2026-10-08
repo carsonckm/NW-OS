@@ -248,6 +248,13 @@ export const OwnerDependency: React.FC = () => {
             <Tile label="No eligible delegate" value={t.no_eligible_delegate} />
             <Tile label="Avg Owner approval time" value={t.average_owner_hours == null ? '—' : `${t.average_owner_hours} h`} />
           </div>
+          {a.impact && (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-2 text-[11px]" data-testid="owner-dependency-impact">
+              <span className="font-black">Current Owner dependency: {a.impact.current_dependency_percent ?? '—'}%</span> · With the delegations in force now — <Pill tone="info">{a.impact.label}</Pill> routine coverage {a.impact.estimated_routine_coverage_percent ?? '—'}%
+              <div>Largest remaining dependency: {a.impact.largest_remaining.map((x: Row) => `${x.label} (${x.owner_decisions}, ${x.why})`).join('; ') || 'none'}</div>
+              <div className="text-slate-500">{a.impact.note}</div>
+            </div>
+          )}
           <p className="text-[10px] text-slate-500" data-testid="owner-dependency-definitions">
             {a.dependency.definition} Time saved (estimate): {a.time_saved.formula}. {a.time_saved.note}
           </p>
