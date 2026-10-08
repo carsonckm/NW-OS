@@ -3,7 +3,9 @@
  * signed in as the real dev accounts. The server runs with AI_PROVIDER=mock (the deterministic
  * offline provider), so the run needs no paid model; every other part — the context engine, the
  * gateway, validation, permissions, proposals, the approval and the audit — is the real one. The
- * LLM-failure step uses the mock's "#mock-fail" hook (the provider fails like an outage).
+ * LLM-failure step uses the mock's "#mock-fail" hook (the provider fails like an outage). Steps 17–18
+ * check the legacy screens' AI routes (they go through the gateway) and that no provider code or
+ * key reaches the browser.
  *
  *   AI_PROVIDER=mock npm run dev   (fresh seeded database)
  *   PLAYWRIGHT_MODULE=… node scripts/acceptance/phase6-ai.cjs
@@ -156,6 +158,27 @@ const waitAnswer = async (page, before) => {
     // 16. Audit.
     const audit = q(`select string_agg(action || ':' || n, ', ') from (select action, count(*) n from audit_logs where action like 'ai.%' and occurred_at > now() - interval '1 hour' group by action order by action) x`);
     record(16, 'Audit records exist', audit, /ai\.request/.test(audit) && /ai\.suggestion\.accept/.test(audit) && /ai\.proposal\.execute/.test(audit) && /ai\.fallback/.test(audit));
+
+    // 17. The legacy screens' AI routes (copilot drawer, issue form, contractor chat) go through the
+    //     gateway from the user's own records; context the browser sends is ignored.
+    const forged = { projectContext: { profit: 'RM 999,999' }, context: { project: { name: 'Forged ZZZ' } }, workItems: [{ code: 'ZZZ-999' }], userRole: 'Owner / CEO' };
+    const before17 = Number(q(`select count(*) from ai_conversations`));
+    const l1 = await L.api(owner, 'POST', '/api/ai/assistant', { ...forged, question: 'What needs me today?' });
+    const l2 = await L.api(owner, 'POST', '/api/ai/classify-issue', { ...forged, rawText: `${item[1]} cannot fit, wall is 1999 mm` });
+    const l3 = await L.api(contractor, 'POST', '/api/ai/contractor-assistant', { ...forged, message_text: 'What is the profit margin?' });
+    const rows17 = q(`select string_agg(task || ':' || prompt_version || ':' || status, ', ' order by created_at) from (select * from ai_conversations order by created_at desc limit ${Number(q(`select count(*) from ai_conversations`)) - before17}) x`);
+    const leaked = q(`select count(*) from ai_conversations where created_at > now() - interval '5 minutes' and (result::text like '%Forged ZZZ%' or result::text like '%ZZZ-999%' or result::text like '%999,999%')`);
+    record(17, 'Legacy AI routes go through the gateway', `assistant ${l1.status} (${l1.body?.source}), classify ${l2.status} (${l2.body?.source}), contractor ${l3.status} (${l3.body?.source}, action ${l3.body?.action_type}); gateway rows: ${rows17}; forged context stored: ${leaked}`, [l1, l2, l3].every((x) => x.status === 200 && /^nw-os-ai-gateway:/.test(x.body.source)) && leaked === '0' && !RM.test(JSON.stringify(l3.body)) && ['answer_question', 'request_pm_review'].includes(l3.body.action_type));
+
+    // 18. No browser → provider path: the scripts this browser loaded carry no provider SDK, endpoint or key.
+    const scripts = await owner.evaluate(async () => {
+      const srcs = [...document.querySelectorAll('script[src]')].map((s) => s.src).concat(performance.getEntriesByType('resource').map((e) => e.name).filter((n) => /\.(js|ts|tsx|mjs)(\?|$)/.test(n)));
+      const bodies = [];
+      for (const u of [...new Set(srcs)].slice(0, 400)) bodies.push(await fetch(u).then((r) => r.text()).catch(() => ''));
+      return { count: bodies.length, hit: bodies.filter((b) => /generativelanguage\.googleapis\.com|GoogleGenAI|@google\/genai|GEMINI_API_KEY/.test(b)).length };
+    });
+    const health = (await L.api(owner, 'GET', '/api/health')).body;
+    record(18, 'No browser → provider path; no key exposed', `${scripts.count} loaded scripts checked, ${scripts.hit} with provider code; /api/health keys: ${Object.keys(health).join(', ')}`, scripts.count > 0 && scripts.hit === 0 && !/key/i.test(Object.keys(health).join(',')) && typeof health.ai_configured === 'boolean');
 
     const errors = Object.fromEntries(Object.entries(pages).map(([k, p]) => [k, p.errors.filter((e) => !/ 40[03]$/.test(e))]));
     console.log('Page errors (expected 400/403 refusals filtered):', JSON.stringify(errors));
