@@ -11,6 +11,7 @@ import { withTransaction } from './db/pool';
 import { reevaluateRoutes } from './modules/approvalRouting';
 import { createApprovalRoutingRouter } from './modules/approvalRoutingRoutes';
 import { createDelegationRouter } from './modules/delegationRoutes';
+import { createAIRouter } from './ai/routes';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -48,6 +49,8 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   if (pool && store) app.use('/api', createApprovalRoutingRouter({ pool, store }));
   // Phase 6 Batch 5: Owner dependency and delegation recommendations.
   if (pool && store) app.use('/api', createDelegationRouter({ pool, store }));
+  // Phase 6 Batch 7: the AI operating layer (gateway, context engine, versioned tasks).
+  if (pool && store) app.use('/api', createAIRouter({ pool, store }));
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));

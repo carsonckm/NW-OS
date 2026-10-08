@@ -79,6 +79,11 @@ const FORBIDDEN: { re: RegExp; what: string; where: string }[] = [
   { re: /\b(give|grant|add|elevate)\b.*\b(access|permission|role|admin)\b|\boverride\b.*\b(permission|access|lock)/i, what: 'Override permissions', where: 'Admin → Users (a person grants access)' },
 ];
 
+/** The forbidden request a question matches, if any (also used by the AI gateway, before any model). */
+export function forbiddenRequest(question: string) {
+  return FORBIDDEN.find((f) => f.re.test(question));
+}
+
 const INTENTS: { intent: string; re: RegExp }[] = [
   { intent: 'finance', re: /\b(profit|margin|cost|budget|cash ?flow|invoice|payment|revenue|untung|kos|bajet|利润|成本)\b/i },
   { intent: 'risk', re: /\b(risk|at risk|critical|health|why .*(late|behind|delay|red)|behind schedule|delayed|risiko|lewat|风险)\b/i },
