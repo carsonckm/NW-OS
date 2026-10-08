@@ -46,6 +46,13 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   idempotency and Owner-only access, and switches the rule off at the end. Run it on a freshly
   seeded database (a rejection holds that opportunity back for 90 days). Recorded in
   `docs/phase6-delegation-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-coverage.cjs` — Phase 6 Batch 6: the coverage matrix and
+  the variation coverage gap (with its Owner exception), temporary authority created and
+  extended on the Delegated Authority screen (preview → confirm, re-routing through the
+  resolver), unsafe temporary authority rejected, real expiry processed by the delegation watch,
+  an Owner absence previewed, confirmed and ended on the screen, Owner-only access, notification
+  idempotency and no approval left on ended authority. Run it on a freshly seeded database.
+  Recorded in `docs/phase6-coverage-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

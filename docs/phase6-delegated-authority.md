@@ -334,3 +334,11 @@ authority model or the resolver: every assignment, escalation and Owner action i
 Owner dependency analytics and delegation recommendations are described in
 `phase6-delegation-intelligence.md`. A recommendation is an observation, never authority: only
 the Owner's confirmed acceptance creates a rule, through the same authority API.
+
+## 9. Coverage, temporary authority and Owner absence (Batch 6)
+
+Delegation coverage, temporary authority, expiry, Owner absence and delegation effectiveness are
+described in `phase6-coverage-temporary-authority.md`. Temporary and absence authority are
+ordinary Owner rules (`authority_type` temporary / absence) with an end time: temporary
+authority is still subject to the same Authority Resolver and sensitivity ceilings as permanent
+authority.
