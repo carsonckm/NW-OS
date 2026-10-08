@@ -1,0 +1,23 @@
+Phase 6 Batch 7 browser acceptance: scripts/acceptance/phase6-ai.cjs
+Run against a freshly seeded dev database (nwos_b7rec: 23 migrations, db:import-demo, auth:seed-dev), dev accounts, 2026-10-08.
+Server: AI_PROVIDER=mock (the deterministic offline provider; no paid model). Context engine, gateway, validation, permissions, proposals, approvals and audit are the real ones. Step 15 uses the mock's #mock-fail hook to simulate a provider outage.
+Also passed 16/16 in the full browser regression on nwos_reg7b (roles, run, phase5, phase6 Batches 1-6, phase6-ai).
+
+1 [Owner opens the AI Assistant] PASS — "AI model: mock · nwos-mock-1. A language model is configured on the server. Answers are checked against NW OS records."; quick actions: Daily | Briefing | Project | Risks | My | Tasks | Pending | Decisions | Production | Problems | Project | Summary | Commercial | Risks
+2 [Daily briefing loads] PASS — aic-107cc35d-f60e-4431 daily_briefing ok 32 5; answer "Summary (daily_briefing): Decision waiting: Variation VO-002 needs your approval — Trimming Module B Plinth for Site Dimension Adjustment (100mm) · Project Auro"; decisions shown: 1
+3 [Owner asks a project question] PASS — question about NW-2026-088 (proj-1); conversation aic-550e67ae-c34f-44f0 proj-1 21
+4 [Answer with evidence] PASS — 7 clickable evidence links; evidence rows 21; all evidence in NW OS: t
+5 [Owner asks about project risk] PASS — risk engine: Critical (20 reasons)
+6 [Risk explained with real project data] PASS — facts shown: "Confirmed Answer · Issues (Critical): 1 open critical issue(s) — Site Dimension Discrepancy on Cashier Counter CAR-003 AI: Most relevant confirmed record Confirmed Answer · Schedule (At Risk): 1 overdue task — Submit As-Built Rectification "
+7 [Owner opens a suggested action] PASS — "Proposal — not done Create task "Verify site measurement of CAR-003 against the approved drawing" for Marcus Lee, due 2026-10-09 Why: Follow up the highlighted record Review — Propose: Create a follow"; decision required: DECISION REQUIRED — BY A PERSON, IN ITS OWN SCREEN Technical change review — A dimension change needs the formal drawing
+8 [Marked as a proposal; nothing done yet] PASS — label "Proposal — not done": true; approvals for it: 0
+9 [Owner accepts an allowed action] PASS — approval apr-ai-61a908bb Pending → Approved
+10 [Existing NW OS workflow executes it] PASS — task tsk-ai-apr-ai-61a908bb user-pm Open; audit ai.request, create, ai.proposal.create, ai.suggestion.accept, approval.approve, update, ai.proposal.execute
+11 [Protected action refused] PASS — "Refused — not something the AI may do Confirmed assistant_query_v1 Not allowed for the AI: Approve variations I can't do that. "Approve vari"; direct proposal of approve_variation 403; variation vo-2 Internal Approval → Internal Approval
+12 [Contractor gets contractor-authorised context only] PASS — no RM figures: true; evidence projects ⊆ own: true; commercial analysis 403
+13 [Client cannot access internal financial information] PASS — ask 403, commercial 403, briefing 403
+14 [Prompt injection does not bypass permissions] PASS — issue 201; analysis 200 (ok); RM figures in the answer: false; the injected text is listed only as reported content
+15 [LLM failure produces a safe fallback] PASS — fallback provider_error; shown: "NW OS record-based answer (AI not used) Confirmed assistant_query_v1 Today: 3 decision(s) waiting for you, 0 overdue task(s), 0 due today, 11 production blocker"; NW OS still answers /api/core/snapshot: 200
+16 [Audit records exist] PASS — ai.fallback:1, ai.proposal.create:1, ai.proposal.execute:1, ai.query:4, ai.request:8, ai.suggestion.accept:1
+Page errors (expected 400/403 refusals filtered): {"owner-ceo":[],"contractor":[],"client":[],"site-supervisor":[]}
+16/16 passed
