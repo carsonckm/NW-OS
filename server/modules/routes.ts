@@ -71,7 +71,6 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/calendar',
     '/recurring-problems',
     '/recurring-problems/*',
-    '/ai/assistant',
     ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
@@ -430,15 +429,6 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   // ---------------- AI operating assistant (answers from the user's own scope) ----------------
   const assistant = new Assistant(pool);
   router.post('/assistant/ask', wrap(async (req, res) => res.json(await assistant.ask(req.access!, actorOf(req), req.body ?? {}))));
-  // The legacy copilot drawer posts here with its own role and "context": both are ignored.
-  router.post(
-    '/ai/assistant',
-    wrap(async (req, res) => {
-      const a = await assistant.ask(req.access!, actorOf(req), { question: req.body?.question, project_id: req.body?.project_id });
-      const lines = a.facts.slice(0, 8).map((f) => `• [${f.confidence}] ${f.text}`);
-      res.json({ answer: [a.answer, ...lines].join('\n'), source: 'nw-os-records', result: a });
-    })
-  );
   // AI proposes → a human approves (an "AI Proposal" approval for the asker) → the system executes.
   router.post(
     '/assistant/proposals',

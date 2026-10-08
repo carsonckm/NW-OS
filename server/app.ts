@@ -12,6 +12,8 @@ import { reevaluateRoutes } from './modules/approvalRouting';
 import { createApprovalRoutingRouter } from './modules/approvalRoutingRoutes';
 import { createDelegationRouter } from './modules/delegationRoutes';
 import { createAIRouter } from './ai/routes';
+import { createLegacyAIRouter } from './ai/legacy';
+import { createLegacyRulesRouter } from './ai/legacyRules';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -51,6 +53,11 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   if (pool && store) app.use('/api', createDelegationRouter({ pool, store }));
   // Phase 6 Batch 7: the AI operating layer (gateway, context engine, versioned tasks).
   if (pool && store) app.use('/api', createAIRouter({ pool, store }));
+  // The pre-Phase 6 AI screens' routes: in database mode answered through the AI gateway from the
+  // user's own records (legacy.ts); otherwise (demo mode, the WhatsApp simulator) by deterministic
+  // rules that never call a model (legacyRules.ts). Nothing else talks to a model provider.
+  if (pool && store) app.use('/api', createLegacyAIRouter({ pool, store }));
+  app.use(createLegacyRulesRouter());
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));

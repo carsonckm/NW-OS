@@ -1901,6 +1901,10 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // Database mode: the server loads the drawing (and what you may see) from these IDs and
+          // ignores the rest; demo mode's rule-based answer uses the descriptive fields below.
+          drawingId,
+          revisionId,
           drawingNumber: drawing?.drawing_number || 'A-103',
           revision: revision?.revision || 'Rev 1',
           drawingTitle: revision?.title || drawing?.title,
@@ -2131,6 +2135,9 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          drawingId,
+          fromRevisionId: fromRevId,
+          toRevisionId: toRevId,
           drawingNumber: drawing?.drawing_number || 'A-103',
           oldRevision: {
             revision: fromRev?.revision || 'Rev 3',

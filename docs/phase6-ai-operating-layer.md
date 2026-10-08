@@ -11,6 +11,82 @@ NW OS data → AI context → reasoning → recommendation / draft → human con
 remains the only authority. A recommendation never becomes authority by itself, and an AI
 suggestion never executes by itself.
 
+## Production AI architecture
+
+There is exactly one way from the browser to a language model:
+
+```text
+Browser
+ ↓
+Authenticated NW OS API          (session cookie, CSRF, active user)
+ ↓
+Permission checks                (ai.assistant + each feature's own checks, AccessContext)
+ ↓
+Context Builder                  (server/ai/context.ts: only records this user may see)
+ ↓
+Central AI Gateway               (server/ai/gateway.ts: limits, timeout, retry, validation, audit, history)
+ ↓
+Configured LLM Provider          (server/ai/provider.ts: Gemini, offline mock, or none)
+```
+
+Nothing else in NW OS talks to a model:
+
+* **`server/ai/provider.ts`** is the only file that imports a provider SDK (`@google/genai`) or
+  calls a model API.
+* **`server/ai/gateway.ts`** is the only code that constructs a provider.
+* **`server/ai/service.ts`** is the only code that drives the gateway. Every AI route calls it,
+  including the new `/api/ai/ops/*` routes and the legacy screens' routes.
+* **`server.ts`** mounts the API and serves the app; it has no AI handlers and no provider code.
+
+`server/ai/architecture.test.ts` enforces this, so a future "route → provider SDK" fails the test
+suite. It checks the source tree and, when a build exists, the browser bundle.
+
+### Provider security
+
+* **Keys stay on the server.** API keys (`GEMINI_API_KEY`) are read only in `provider.ts`. The
+  Gemini client is held in a true private field, so it is never serialised, logged or returned.
+* **Nothing reaches the browser.**
+  * No route returns a key. `/api/ai/ops/status` and `/api/health` report only whether a model is
+    configured, plus the provider and model names.
+  * Browser code never imports a provider SDK or reads provider configuration.
+  * Vite exposes only `VITE_*` variables, and there are none; `vite.config.ts` defines nothing.
+  * The architecture test also checks the built bundle for the provider SDK, endpoint and key.
+* **Providers are abstracted.** The `LLMProvider` interface has three implementations: Gemini,
+  the deterministic offline mock (tests, CI, browser acceptance), and none, which falls back to
+  NW OS's record-based answers.
+
+### Legacy (Phase 4) AI endpoints: final state
+
+Before this remediation, `server.ts` had nine handlers that called Gemini directly with data
+supplied by the browser. All of them are gone from `server.ts`; each route is now one of the
+following:
+
+| Route | Screen | Final state |
+| --- | --- | --- |
+| `POST /api/ai/briefing` | Owner Dashboard | **Migrated.** Uses the `daily_briefing` task. |
+| `POST /api/ai/project-briefing` | Project command center | **Migrated.** Uses `project_summary` for `project.id`. |
+| `POST /api/ai/assistant` | Copilot drawer | **Migrated.** Uses `assistant_query`. It replaces the Phase 5 handler in `routes.ts`, and the response shape is unchanged. |
+| `POST /api/ai/classify-issue` | Issue form | **Migrated.** Category, priority and escalation come from NW OS rules (deterministic severity). The summary comes from `issue_analysis`, but only for a work item the user can see. |
+| `POST /api/ai/analyze-drawing` | Drawing viewer | **Migrated.** Uses `drawing_analysis` for `drawingId`. The drawing, revisions and work items are loaded on the server. |
+| `POST /api/ai/compare-drawings` | Drawing viewer | **Migrated.** Uses the recorded revision comparison and work items plus `drawing_analysis`. |
+| `POST /api/ai/contractor-assistant` | Contractor / web chat | **Migrated.** Uses `assistant_query` on the sender's own scope. It returns only non-executing action types (`answer_question`, `request_pm_review`, `escalate_to_person`), so the screen never auto-changes records from an AI reply. |
+| `POST /api/ai/parse-contractor-update` | Contractor quick update | **NW OS rules only (no model).** The contractor's own text is parsed by rules, and the item code must be one they can see. |
+| `POST /api/gateway/process-message` | WhatsApp gateway simulator | **Simulator only, rule-based (no model).** Real WhatsApp traffic uses `/api/whatsapp` (Phase 4/5), which never calls a model. |
+
+How the routes behave in each mode:
+
+* **Database mode.** `server/ai/legacy.ts` answers the migrated routes from the signed-in user's
+  `AccessContext`.
+  * Everything the browser sends about projects, items, drawings, issues, knowledge, the user or
+    the role is ignored.
+  * Only the user's own text (as untrusted input) and record IDs (checked against the user's
+    scope) are used.
+* **Demo mode (no database, no sign-in).** The routes are answered by the deterministic rules in
+  `server/ai/legacyRules.ts`, which never call a model. The same applies to the WhatsApp
+  simulator in both modes. Those rules work only on what the browser sent and reply only to that
+  browser. The demo build therefore has no AI model features: without a database there is no
+  authorised data to give a model.
+
 ## Code
 
 | Part | File |
@@ -21,9 +97,12 @@ suggestion never executes by itself.
 | Versioned task definitions (prompts) | `server/ai/tasks.ts` |
 | Features (ask, briefing, summaries, analyses, actions) | `server/ai/service.ts` |
 | API | `server/ai/routes.ts`, mounted at `/api/ai/ops` |
+| Legacy screens' routes (database mode, via AIService) | `server/ai/legacy.ts` |
+| Legacy rule-based routes (demo mode, WhatsApp simulator; never a model) | `server/ai/legacyRules.ts` |
+| Architecture guard | `server/ai/architecture.test.ts` |
 | Storage | `db/migrations/023_phase6_ai_operating_layer.sql` (`ai_conversations`) |
 | UI | `src/views/OperatingAssistantView.tsx`, `src/components/AIResponseView.tsx` |
-| Tests | `server/ai/ai.test.ts`; browser run `scripts/acceptance/phase6-ai.cjs` |
+| Tests | `server/ai/ai.test.ts`, `server/ai/legacy.test.ts`, `server/ai/architecture.test.ts`; browser run `scripts/acceptance/phase6-ai.cjs` |
 
 What the Batch 7 code reuses:
 
@@ -364,6 +443,10 @@ These properties are tested in `server/ai/ai.test.ts`:
 * **Finance leakage.** Non-financial roles never receive RM figures, in the context or in the
   response.
 
+* **No path around the gateway.** The legacy routes ignore browser-supplied context. They go
+  through the gateway in database mode, and in demo mode they never reach a provider
+  (`server/ai/legacy.test.ts`). The architecture guard keeps provider code inside `provider.ts`.
+
 ## Known limitations
 
 * **Streaming.** It is implemented by the providers, but the API returns complete, validated
@@ -377,11 +460,10 @@ These properties are tested in `server/ai/ai.test.ts`:
 * **The figure guard** works on RM, % and mm figures, and on record numbers such as `PO-2026-042`.
   Other numbers in AI text (counts, for example) are not checked. The facts shown beside the
   answer remain the source of truth.
-* **Legacy endpoints.** The Phase 4 demo-mode endpoints in `server.ts` (`/api/ai/briefing`,
-  `/api/ai/analyze-drawing` and so on) still call Gemini directly with browser-supplied data. They
-  serve demo mode and the legacy screens, and in database mode they sit behind sign-in. Batch 7
-  did not move them, to avoid changing unrelated modules. The database-mode assistant uses the
-  gateway.
+* **Demo mode has no AI model features.** Without a database there is no signed-in user and
+  no authorised data, so the legacy screens get NW OS's deterministic rule-based answers.
+* **Contractor update parsing is rule-based.** It replaced the old direct-Gemini parse; no
+  gateway structured-extraction task exists for it.
 * **Client portal.** Clients still have no AI assistant, because the role does not hold
   `ai.assistant`. A client-facing AI would need its own client-visible context pack and an
   explicit permission decision.
