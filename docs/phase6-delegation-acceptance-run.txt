@@ -1,0 +1,24 @@
+Phase 6 Batch 5 browser acceptance: scripts/acceptance/phase6-delegation.cjs
+Run against a freshly seeded dev database (nwos_b5acc: 21 migrations, auth:seed-dev, db:import-demo), dev accounts, 2026-10-07.
+Simulated time: the Owner's decisions (taken through the API) are moved back over 40 days in PostgreSQL; everything else goes through the API and the screens.
+
+1 [Owner decision history (through the API)] PASS — 14 Owner decisions on proj-p6d-muy9ykb0, spread over 40 days
+2 [Owner Dependency view] PASS — "OWNER DECISIONS 14 DELEGATED DECISIONS 0 DELEGATION RATE 0% ESTIMATED TIME SAVED 0 hrs OWNER DEPENDENCY 100% OWNER-REQUIRED 14 NO ELIGIBLE DELEGATE 8 AVG OWNER APPROVAL TIME 3 h"; definition shown: true; API owner 14, delegated 0, dependency 100%
+3 [Recommendations generated] PASS — active: Variations — Project Manager (Medium, 8 decisions, up to 8000); Purchases — Purchasing (Low, 6 decisions, up to 26000)
+4 [Evidence is explainable] PASS — "Why this was recommended 8 similar decisions in the last 60 days, all taken by the Owner because no delegation covered them Owner approved 8 of 8 Project Manager holds variations.review (the baseline permission); 1 active user(s) can see this work Suggested limit RM 8,000: the 90th percentile of approved amounts, round"
+5 [Modify → preview → confirm → authority rule] PASS — preview: "Authority preview — nothing has changed yet Project Manager may approve variation (internal approval) up to RM 5,000 on P6 Delegation muy9ykb0, while project ri"; rules during preview 24 (before 24); recommendation modified da-3e838f9e; rule owner allow variation Project Manager 5000.00 proj-p6d-muy9ykb0; audit authority.rule.create, delegation.recommendation.modify
+6 [The new authority works through the resolver] PASS — RM 4,000 → Project Manager da-3e838f9e; RM 6,000 → Owner / CEO
+7 [Reject] PASS — rejected | Major purchases stay with me this quarter; authority rules 25 → 25
+8 [Idempotent generation; rejection respected] PASS — duplicate active opportunities 0; purchase suggested again: 0
+9 [Owner only; evidence cannot be forged] PASS — Admin 403/403/403, PM 403/403/403, Accountant 403/403/403, Purchasing 403/403/403; Owner forging evidence: 400
+Page errors (expected 400/403 refusals filtered): {"owner-ceo":[],"project-manager":[],"purchasing":[],"accountant":[],"admin":[]}
+9/9 passed
+
+Regression runs on the dev server (nwos_dev, 21 migrations) for this branch:
+- roles.cjs (10 roles): tab clicks: 140, ERRORS: 0
+- run.cjs (Phase 4, 34 steps): exit 0
+- phase5.cjs (18 steps): exit 0
+- phase6.cjs (Batch 2, 11 steps): exit 0
+- phase6-ui.cjs: 12/12
+- phase6-routing.cjs: 8/8
+- phase6-monitoring.cjs (Batch 4): 10/10

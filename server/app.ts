@@ -10,6 +10,7 @@ import { AutomationEngine } from './automation/engine';
 import { withTransaction } from './db/pool';
 import { reevaluateRoutes } from './modules/approvalRouting';
 import { createApprovalRoutingRouter } from './modules/approvalRoutingRoutes';
+import { createDelegationRouter } from './modules/delegationRoutes';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 
@@ -45,6 +46,8 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   // Phase 6: delegated authority (mounted first so /projects/:id/sensitivity is its own route).
   if (pool && store) app.use('/api', createAuthorityRouter({ pool, store }));
   if (pool && store) app.use('/api', createApprovalRoutingRouter({ pool, store }));
+  // Phase 6 Batch 5: Owner dependency and delegation recommendations.
+  if (pool && store) app.use('/api', createDelegationRouter({ pool, store }));
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));

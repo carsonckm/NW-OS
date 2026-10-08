@@ -39,6 +39,13 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   checks; SLA / Owner routing settings; the no-orphan invariant on the whole database. Time is
   simulated by moving the test approval's `requested_at` back. Recorded in
   `docs/phase6-monitoring-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-delegation.cjs` — Phase 6 Batch 5: the Owner takes 14
+  decisions (moved back over 40 days), sees Owner Dependency on the dashboard, refreshes
+  recommendations, reviews the evidence, modifies one to RM 5,000 (authority preview, confirm,
+  rule created by the authority API and used by the resolver), rejects another, checks
+  idempotency and Owner-only access, and switches the rule off at the end. Run it on a freshly
+  seeded database (a rejection holds that opportunity back for 90 days). Recorded in
+  `docs/phase6-delegation-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

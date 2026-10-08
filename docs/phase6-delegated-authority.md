@@ -328,3 +328,9 @@ SLAs, the business calendar, the approval monitor (reminders, overdue, escalatio
 re-routing), the Owner routing policy for several Owners, closed-project review and the Owner
 Exception Center are described in `phase6-approval-monitoring.md`. Batch 4 does not change the
 authority model or the resolver: every assignment, escalation and Owner action is checked by it.
+
+## 8. Owner independence and delegation intelligence (Batch 5)
+
+Owner dependency analytics and delegation recommendations are described in
+`phase6-delegation-intelligence.md`. A recommendation is an observation, never authority: only
+the Owner's confirmed acceptance creates a rule, through the same authority API.
