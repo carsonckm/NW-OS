@@ -110,6 +110,10 @@ role's name. It flags any of these:
 | `production` with `NWOS_ALLOW_PRIVILEGED_DATABASE=true` | yes | Starts, logs a loud error, and writes `security.privileged_database_override` to the audit trail. This is an explicit operator choice. |
 | anything else | yes | Starts with a warning (development). |
 | any | no | Starts. |
+| `production` | the check cannot run (database unreachable) | **Refuses to start** rather than run unchecked. Development warns and starts, reporting the database as unreachable, as before. |
+
+The check runs before the API and its automation scheduler are mounted, so a refused server
+starts no background work.
 
 `npm run db:privileges` prints the same report for `DATABASE_URL` and exits 1 if the login is
 not restricted. Neither ever prints a connection string or password.
@@ -137,8 +141,14 @@ operation: the application never needs a privilege the runtime role lacks. So ea
 - **Admin credential:** never give `DATABASE_ADMIN_URL` to the server. Use it once for setup,
   then remove it from the environment.
 - **Runtime credential:** never reused for migrations.
-  - Once the roles exist, `db:migrate` refuses to run without `DATABASE_MIGRATION_URL`.
-  - `migrate()` refuses a migration login that is, or can act as, the runtime role.
+  - `db:migrate` treats a database as role-separated when its schema is owned by
+    `nwos_owner`, when the login is the runtime role, or when a migrator login is used.
+  - On such a database it refuses to run without `DATABASE_MIGRATION_URL`, and always migrates
+    as `nwos_owner`.
+  - Another database on the same PostgreSQL server that has not been bootstrapped keeps
+    migrating in single-credential mode, with a warning.
+  - `migrate()` refuses a migration login that is, or can act as, the runtime role (a superuser
+    is not treated as the runtime role).
   - It also refuses one that cannot act as the owner role.
 - **Not exposed:** none of these variables is `VITE_`-prefixed. None reaches the browser bundle
   (checked) or any API response.
@@ -239,6 +249,10 @@ Before production, check:
   silent or out-of-order state change, no hidden critical exception). Detecting a forged but
   well-formed record needs controls outside the database: credential rotation, network
   restrictions, database logs.
+- **Pre-existing startup race (not from this batch, seen on `main` too):** on a fresh database
+  the server-start routing pass and the first scheduled approval-monitor run can both route the
+  same approval. The unique index `approval_routes_one_open_idx` refuses the second, so that
+  monitor run is recorded as failed and the next run succeeds. No duplicate route is created.
 - **No row-level security:** the per-user scope checks stay in the server (`AccessContext`,
   `resolveApprovalAuthority`), as before.
 

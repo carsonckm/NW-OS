@@ -64,7 +64,7 @@ export async function migrate(pool: Pool, dirOrOptions?: string | MigrateOptions
     if (opts.roles) {
       const { owner, app } = opts.roles;
       if (!(await roleExists(client, owner)) || !(await roleExists(client, app))) throw new Error(`Database roles ${owner} / ${app} do not exist: run the role bootstrap first (npm run db:bootstrap-roles)`);
-      const me = (await client.query(`SELECT current_user AS u, pg_has_role(current_user, $1, 'MEMBER') AS can_own, pg_has_role(current_user, $2, 'MEMBER') AS is_app`, [owner, app])).rows[0];
+      const me = (await client.query(`SELECT current_user AS u, pg_has_role(current_user, $1, 'MEMBER') AS can_own, (pg_has_role(current_user, $2, 'MEMBER') AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)) AS is_app`, [owner, app])).rows[0];
       if (me.is_app) throw new Error(`Refusing to migrate as the runtime role ${app}: use the migrator credential (DATABASE_MIGRATION_URL)`);
       if (!me.can_own) throw new Error(`The migration user ${me.u} cannot act as ${owner}: migrate with the migrator credential (DATABASE_MIGRATION_URL)`);
       // Session-wide for this connection: everything below is created and owned by the owner role.

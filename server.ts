@@ -20,10 +20,8 @@ app.use(express.json({ limit: '20mb' }));
 // talks to a model provider (only server/ai/provider.ts does, behind the AI gateway).
 const dbSettings = readDatabaseSettings();
 const pool = dbSettings.pool ? createPool(dbSettings.pool) : undefined;
-mountSecureApi(app, {
-  pool,
-  dataSource: dbSettings.dataSource,
-});
+// Mounted in setupServer(), after the database privilege check: the API (and its automation
+// scheduler) never starts with a database user the server refuses.
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -54,6 +52,10 @@ async function setupServer() {
       console.warn(`[db] Could not verify the database user's privileges: ${(err as Error).message}`);
     }
   }
+  mountSecureApi(app, {
+    pool,
+    dataSource: dbSettings.dataSource,
+  });
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
