@@ -65,13 +65,23 @@ export async function createRestrictedRoles(schema: string): Promise<RestrictedR
 /** Drops a role-separated test schema and its roles. */
 export async function dropRestricted(schema: string, roles: RoleNames) {
   const admin = createPool({ connectionString: TEST_DATABASE_ADMIN_URL, max: 1 });
+  const client = await admin.connect();
   try {
-    await admin.query(`DROP SCHEMA IF EXISTS ${ident(schema)} CASCADE`);
+    // One transaction under the bootstrap's lock: concurrent test files dropping roles (or
+    // bootstrapping) update the same shared catalog rows (the database's privileges).
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(7334202)');
+    await client.query(`DROP SCHEMA IF EXISTS ${ident(schema)} CASCADE`);
     for (const r of [roles.app, roles.migrator, roles.owner]) {
-      await admin.query(`DROP OWNED BY ${ident(r)}`).catch(() => {});
-      await admin.query(`DROP ROLE IF EXISTS ${ident(r)}`);
+      if ((await client.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [r])).rowCount) await client.query(`DROP OWNED BY ${ident(r)}`);
+      await client.query(`DROP ROLE IF EXISTS ${ident(r)}`);
     }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
   } finally {
+    client.release();
     await admin.end();
   }
 }
