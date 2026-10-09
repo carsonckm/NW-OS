@@ -16,6 +16,8 @@
  *   GET    /api/owner/exceptions                  what needs the Owner now (severity, priority, reasons)
  *   POST   /api/owner/exceptions/snooze           { id, hours, reason } non-critical only
  *   DELETE /api/owner/exceptions/snooze/:id
+ *   POST   /api/owner/exceptions/:action          acknowledge | wait | resolve | dismiss | reopen { id, reason?, expected_state? } (Batch 9)
+ *   GET    /api/owner/exceptions/history?id=      one exception's lifecycle history
  *
  * Nothing here accepts an assignee, a rule, a basis or a user from the browser: routing is
  * computed on the server, and approving still goes through the authority resolver.
@@ -30,7 +32,8 @@ import { withTransaction, type Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import { reevaluateRoutes, ROUTED_KINDS, syncRoute, unroutedDecisions, decisionState, type RoutedKind } from './approvalRouting';
 import { decisionTrace } from './decisionTrace';
-import { approvalTimeline, lifecycleContext, lifecycleOf, ownerAssign, ownerExceptions, snoozeException, unsnoozeException } from './approvalOps';
+import { exceptionHistory, ownerExceptionCenter, transitionException } from './exceptionLifecycle';
+import { approvalTimeline, lifecycleContext, lifecycleOf, ownerAssign, snoozeException, unsnoozeException } from './approvalOps';
 import { clientConsentAllowed, resolveApprovalAuthority, type ResourceKind } from './authorityResolver';
 
 type Row = Record<string, any>;
@@ -232,11 +235,20 @@ export function createApprovalRoutingRouter({ pool, store }: { pool: Pool; store
 
   router.get(
     '/owner/exceptions',
-    wrap(async (req, res) => res.json(await ownerExceptions(pool, req.access!)))
+    wrap(async (req, res) => res.json(await ownerExceptionCenter(pool, req.access!, new Date(), { state: req.query.state })))
+  );
+  router.get(
+    '/owner/exceptions/history',
+    wrap(async (req, res) => res.json(await exceptionHistory(pool, req.access!, typeof req.query.id === 'string' ? req.query.id : '')))
   );
   router.post(
     '/owner/exceptions/snooze',
     wrap(async (req, res) => res.json(await snoozeException(pool, req.access!, actorOf(req), req.body)))
+  );
+  // Lifecycle actions (Batch 9): acknowledge, wait, resolve, dismiss, reopen. Body { id, reason?, expected_state? }.
+  router.post(
+    '/owner/exceptions/:action(acknowledge|wait|resolve|dismiss|reopen)',
+    wrap(async (req, res) => res.json(await transitionException(pool, req.access!, actorOf(req), String(req.params.action), req.body)))
   );
   router.delete(
     '/owner/exceptions/snooze/:id',

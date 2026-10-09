@@ -27,7 +27,9 @@ export function sendError(res: Response, err: unknown) {
     });
   }
   if (err instanceof ValidationError) {
-    return res.status(400).json({ error: 'validation_error', message: err.message, details: err.details });
+    // A ValidationError may carry 409 (the record changed since the client read it).
+    const status = (err as ValidationError & { status?: number }).status === 409 ? 409 : 400;
+    return res.status(status).json({ error: status === 409 ? 'conflict' : 'validation_error', message: err.message, details: err.details });
   }
   const pgErr = err as { code?: string; message?: string; detail?: string; constraint?: string };
   const mapped = pgErr.code && PG_ERRORS[pgErr.code];

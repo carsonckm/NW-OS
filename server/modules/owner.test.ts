@@ -37,11 +37,18 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 Owner Exception Center and owner de
     await as['Purchasing'].post('/api/approvals').send(approval('apr-oc', 'po-x')).expect(201);
     const c = await center();
     const ids = c.decisions.map((d: Row) => d.id);
-    expect(ids).toEqual(expect.arrayContaining(['drw-rev-oc', 'vo-vo-oc', 'apr-apr-oc']));
-    expect(ids).not.toContain('vo-vo-own'); // the owner can't approve their own variation
-    const vo = c.decisions.find((d: Row) => d.id === 'vo-vo-oc');
+    // Phase 6 Batch 9: built from the current routing. Nothing delegates drawings or variations here,
+    // so those are the Owner's; the Major Purchase request is routed to the Accountant (System
+    // Policy), so it is not — whatever assignee the request carried when it was created.
+    expect(ids).toEqual(expect.arrayContaining(['drawing_revision:rev-oc', 'variation:vo-oc']));
+    expect(ids).not.toContain('approval:apr-oc');
+    expect((await db.pool.query(`SELECT u.role FROM approval_routes ar JOIN users u ON u.id = ar.assigned_user_id WHERE ar.resource_id = 'apr-oc' AND ar.status = 'open'`)).rows[0].role).toBe('Accountant');
+    // The Owner's own variation is not one they can approve: it is listed as blocked (no valid approver), not as theirs to approve.
+    expect(c.decisions.find((d: Row) => d.id === 'variation:vo-own')).toMatchObject({ severity: 'critical' });
+    expect(c.decisions.find((d: Row) => d.id === 'variation:vo-own').detail).toMatch(/no valid approver/);
+    const vo = c.decisions.find((d: Row) => d.id === 'variation:vo-oc');
     expect(vo).toMatchObject({ tab: 'variations', entity_type: 'variation', entity_id: 'vo-oc', project_id: 'proj-1' });
-    expect(vo.detail).toMatch(/RM 1,500/);
+    expect(vo.detail).toMatch(/RM 1,500 — Owner required/);
     expect(c.question).toBe('What needs me today?');
   });
 
@@ -82,7 +89,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 Owner Exception Center and owner de
       await db.pool.query(`UPDATE approvals SET created_at = now() - interval '5 hours' WHERE id = $1`, [id]);
       await owner().post(`/api/approvals/${id}/decision`).send({ decision: 'Approved' }).expect(200);
     }
-    await db.pool.query(`UPDATE approvals SET created_at = now() - interval '3 days' WHERE id = 'apr-oc'`);
+    // One of the Owner's own pending decisions has been waiting three days (routing time).
+    await db.pool.query(`UPDATE approval_routes SET requested_at = now() - interval '3 days' WHERE resource_id = 'vo-oc' AND status = 'open'`);
     const d = (await owner().get('/api/owner/dependency').expect(200)).body;
     expect(d.week.owner_actions).toBeGreaterThanOrEqual(3);
     expect(d.week.by_category.find((c: Row) => c.category === 'Major Purchase approval')).toMatchObject({ count: 3, routine: 3 });

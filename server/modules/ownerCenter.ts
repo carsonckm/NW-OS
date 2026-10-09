@@ -12,6 +12,7 @@ import { ForbiddenError, type AccessContext } from '../auth/access';
 import type { Pool } from '../db/pool';
 import { computeProfitability } from './reports';
 import { portfolioRisk } from './risk';
+import { ownerDecisionSections } from './ownerDecisions';
 
 type Row = Record<string, any>;
 export interface CenterItem {
@@ -25,6 +26,8 @@ export interface CenterItem {
   entity_type?: string;
   entity_id?: string;
   waiting_hours?: number;
+  why?: string;
+  assignee?: { id: string; name: string | null; role: string | null } | null;
 }
 
 const RANK = { critical: 0, high: 1, medium: 2 } as const;
@@ -50,17 +53,14 @@ export async function ownerCenter(pool: Pool, ctx: AccessContext, now = new Date
   const client: CenterItem[] = [];
   let overdueInv: Row[] = [];
 
+  const sections = await ownerDecisionSections(pool, ctx, now);
   if (ids.length) {
     // ---------------- decisions required (only what the Owner must decide) ----------------
-    for (const r of (await pool.query(`SELECT r.id, r.revision, r.data, d.project_id, d.data->>'drawing_number' AS number FROM drawing_revisions r JOIN drawings d ON d.id = r.drawing_id WHERE r.kind = 'client' AND r.approval_status IN ('Internal Review', 'Pending Review', 'Review') AND d.project_id = ANY($1)`, [ids])).rows) {
-      decisions.push({ id: `drw-${r.id}`, title: `Approve drawing ${r.number} ${r.revision}`, detail: `Requested by ${r.data.review_requested_by ?? 'the team'}`, severity: 'high', project_id: r.project_id, project_name: pn(r.project_id), tab: 'drawings', entity_type: 'drawing_revision', entity_id: r.id, waiting_hours: hoursSince(now, r.data.review_requested_at) });
-    }
-    for (const v of (await pool.query(`SELECT id, project_id, updated_at, client_amount::float AS amount, data->>'variation_number' AS number, data->>'title' AS title, data->>'created_by_id' AS author FROM variations WHERE status = 'Internal Approval' AND project_id = ANY($1)`, [ids])).rows) {
-      if (ownerIds.includes(v.author)) continue; // the Owner can't approve their own variation
-      decisions.push({ id: `vo-${v.id}`, title: `Variation ${v.number}: ${v.title}`, detail: `${money(v.amount)} to the client · internal approval`, severity: 'high', project_id: v.project_id, project_name: pn(v.project_id), tab: 'variations', entity_type: 'variation', entity_id: v.id, waiting_hours: hoursSince(now, v.updated_at) });
-    }
-    for (const a of (await pool.query(`SELECT id, project_id, created_at, data->>'title' AS title, data->>'approval_type' AS type FROM approvals WHERE decision = 'Pending' AND project_id = ANY($1) AND coalesce(data->>'assigned_approver_role', 'Owner / CEO') = 'Owner / CEO'`, [ids])).rows) {
-      decisions.push({ id: `apr-${a.id}`, title: `${a.type ?? 'Approval'}: ${a.title}`, detail: 'Waiting for your approval', severity: a.type === 'Major Purchase' ? 'high' : 'medium', project_id: a.project_id, project_name: pn(a.project_id), tab: 'approvals', entity_type: 'approval', entity_id: a.id, waiting_hours: hoursSince(now, a.created_at) });
+    // Approvals: from the current routing (ownerDecisionSections), never from raw record states or
+    // the assignee captured when a request was created. Items with a delegate are not listed here.
+    for (const d of sections.requires) {
+      if (d.project_id && !ids.includes(d.project_id)) continue;
+      decisions.push({ id: d.id, title: d.title, detail: d.why, severity: d.severity, project_id: d.project_id, project_name: d.project_name ?? pn(d.project_id), tab: d.tab, entity_type: d.kind, entity_id: d.resource_id, waiting_hours: d.waiting_hours ?? undefined, why: d.why, assignee: d.assignee });
     }
     for (const i of (await pool.query(`SELECT id, project_id, priority, created_at, status, data->>'title' AS title, data->>'category' AS category FROM issues WHERE status NOT IN ('Resolved', 'Closed') AND (status = 'Decision Required' OR data->>'escalation_level' = 'Owner') AND project_id = ANY($1)`, [ids])).rows) {
       const toClient = /client/i.test(i.category ?? '');
@@ -151,6 +151,9 @@ export async function ownerCenter(pool: Pool, ctx: AccessContext, now = new Date
   return {
     question: 'What needs me today?',
     decisions: sortItems(decisions),
+    high_risk: sections.high_risk,
+    recently_delegated: sections.recently_delegated,
+    recently_delegated_days: sections.window_days,
     critical: sortItems(critical),
     financial: sortItems(financial),
     client: sortItems(client),

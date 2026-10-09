@@ -3,10 +3,11 @@
  * exceptions and company health from /api/owner/center, and how much still depends on the
  * Owner from /api/owner/dependency. Every item opens the record to act on. For the Owner,
  * Owner Exceptions (Phase 6 Batch 4) comes first: approvals, authority and project exceptions
- * ranked by the server.
+ * ranked by the server. Requires my decision, High-risk decisions and Recently delegated (Batch 9)
+ * come from the current approval routing, not from record states.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { AlertOctagon, Gavel, HeartPulse, RefreshCw, TrendingDown, Users } from 'lucide-react';
+import { AlertOctagon, Gavel, HeartPulse, RefreshCw, Share2, ShieldAlert, TrendingDown, Users } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
 import { api } from '../../services/coreApi';
 import { actionErrorOf } from '../../services/records';
@@ -29,8 +30,38 @@ interface Item {
   entity_id?: string;
   waiting_hours?: number;
 }
+/** A pending or recent decision from the current routing (Phase 6 Batch 9). */
+interface DecisionItem {
+  id: string;
+  kind: string;
+  resource_id: string;
+  title: string;
+  project_id: string | null;
+  project_name: string | null;
+  tab: string;
+  why: string;
+  reasons: string[];
+  waiting_hours: number | null;
+  assignee: { id: string; name: string | null; role: string | null } | null;
+  rule_code: string | null;
+  delegation?: 'active' | 'pending_reroute' | 'decided';
+  rule_status?: { state: 'in_force' | 'expired' | 'revoked' | 'changed'; text: string } | null;
+  decided_at?: string | null;
+  outcome?: string | null;
+}
+const asItem = (d: DecisionItem, severity: Item['severity']): Item => ({ id: d.id, title: d.title, detail: d.why, severity, project_id: d.project_id, project_name: d.project_name ?? '', tab: d.tab, entity_type: d.kind, entity_id: d.resource_id, waiting_hours: d.waiting_hours ?? undefined });
+const DELEGATION: Record<string, { label: string; tone: 'good' | 'warn' | 'info' }> = {
+  active: { label: 'With delegate now', tone: 'good' },
+  pending_reroute: { label: 'Delegation no longer valid — being re-routed', tone: 'warn' },
+  decided: { label: 'Decided by delegate', tone: 'info' },
+};
+const RULE_TONE = { in_force: 'good', changed: 'warn', expired: 'neutral', revoked: 'neutral' } as const;
+
 interface Center {
   decisions: Item[];
+  high_risk: DecisionItem[];
+  recently_delegated: DecisionItem[];
+  recently_delegated_days: number;
   critical: Item[];
   financial: Item[];
   client: Item[];
@@ -97,6 +128,38 @@ const List: React.FC<{ title: string; icon: React.ReactNode; items: Item[]; empt
   );
 };
 
+const RecentlyDelegated: React.FC<{ items: DecisionItem[]; days: number }> = ({ items, days }) => (
+  <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="owner-recently-delegated">
+    <div className="flex items-center gap-2">
+      <Share2 className="h-4 w-4 text-emerald-600" />
+      <h3 className="text-sm font-black text-slate-900">Recently delegated</h3>
+      <span className="rounded-full bg-slate-100 px-2 text-[11px] font-bold text-slate-600">{items.length}</span>
+    </div>
+    <p className="text-[11px] text-slate-500">Decisions routed away from you: with a delegate now, or decided by one in the last {days} days. Today's status of each delegation is shown beside it.</p>
+    {items.length === 0 ? (
+      <p className="text-xs text-slate-500">Nothing has been delegated recently.</p>
+    ) : (
+      <ul className="divide-y divide-slate-100">
+        {items.slice(0, 20).map((d) => (
+          <li key={d.id} data-testid="delegated-item" data-delegation={d.delegation}>
+            <button type="button" onClick={() => open(asItem(d, 'medium'))} className="w-full py-1.5 text-left hover:bg-slate-50">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Pill tone={DELEGATION[d.delegation ?? 'active'].tone}>{DELEGATION[d.delegation ?? 'active'].label}</Pill>
+                <span className="text-xs font-bold text-slate-900">{d.title}</span>
+                {d.rule_status && <Pill tone={RULE_TONE[d.rule_status.state]}>{d.rule_status.text}</Pill>}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {d.project_name ? `${d.project_name} · ` : ''}
+                {d.why}
+              </p>
+            </button>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+);
+
 export const OwnerCenter: React.FC = () => {
   const { coreDataSync, currentUser } = useNW();
   const [c, setC] = useState<Center | null>(null);
@@ -156,11 +219,18 @@ export const OwnerCenter: React.FC = () => {
           </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <List
-              title="Decisions required"
+              title="Requires my decision"
               icon={<Gavel className="h-4 w-4 text-amber-600" />}
               items={c.decisions}
-              empty="No decisions waiting for you."
+              empty="Nothing is waiting for your decision: everything pending is with a delegate who may decide it."
               testId="owner-decisions"
+            />
+            <List
+              title="High-risk decisions"
+              icon={<ShieldAlert className="h-4 w-4 text-rose-600" />}
+              items={(c.high_risk ?? []).map((d) => asItem(d, 'high'))}
+              empty="No pending decision carries a high-risk factor."
+              testId="owner-high-risk"
             />
             <List
               title="Critical exceptions"
@@ -184,6 +254,7 @@ export const OwnerCenter: React.FC = () => {
               testId="owner-client"
             />
           </div>
+          <RecentlyDelegated items={c.recently_delegated ?? []} days={c.recently_delegated_days ?? 7} />
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center gap-2">
               <HeartPulse className="h-4 w-4 text-slate-600" />

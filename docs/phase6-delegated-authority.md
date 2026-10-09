@@ -356,3 +356,10 @@ requests to approve, reject or grant authority are refused before any model is c
 decision (the resolver's own result and the rule terms it read, in the decision's transaction,
 in the append-only audit log), never from today's rules. Rejections notify the original
 requester once. See `phase6-decision-traceability.md`.
+
+## 12. Owner Center correctness and exception lifecycle (Batch 9)
+
+The Owner Center's "Requires my decision", "High-risk decisions" and "Recently delegated" come
+from the current approval routing, never from record states or an approval request's
+creation-time fields. The Owner Exception Center keeps a persistent, append-only lifecycle
+(acknowledged, waiting, resolved, stale, dismissed). See `phase6-owner-center-lifecycle.md`.

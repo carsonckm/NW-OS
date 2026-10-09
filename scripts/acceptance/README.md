@@ -67,6 +67,14 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   requester gets one rejection notice and a replay adds none; the explanation stays as recorded
   after the rule is edited, switched off, or a temporary authority expires. Recorded in
   `docs/phase6-trace-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-owner-center.cjs` — Phase 6 Batch 9: the Owner Center follows
+  the current routing (a variation routed to a delegated PM and a Major Purchase routed to the
+  Accountant are not in "Requires my decision"; the Owner's own decisions are, with the reason),
+  High-risk decisions and Recently delegated (pending → decided → the delegation revoked); the
+  exception lifecycle on screen (acknowledge, waiting with a reason, dismiss with a reason, the
+  closed list, history), critical exceptions never dismissed or snoozed (also through the API),
+  stale after 14 days and the state filter, Owner-only actions, and the screen at 1700 and 1280 px.
+  Recorded in `docs/phase6-owner-center-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 
