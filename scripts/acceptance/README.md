@@ -61,6 +61,12 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   attempt, an LLM outage with the record-based fallback, the audit trail, the legacy screens' AI routes
   going through the gateway, and no provider code or key in the browser. Recorded in
   `docs/phase6-ai-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-trace.cjs` — Phase 6 Batch 8: "Why can this person approve
+  this?" on screen for the Owner, the approver and the requester; internal roles without a part in
+  the decision, the client and the contractor are refused (the same 404 as a missing record); the
+  requester gets one rejection notice and a replay adds none; the explanation stays as recorded
+  after the rule is edited, switched off, or a temporary authority expires. Recorded in
+  `docs/phase6-trace-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 

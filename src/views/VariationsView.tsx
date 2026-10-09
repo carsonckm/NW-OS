@@ -18,6 +18,7 @@ import { actionErrorOf, useRecords } from '../services/records';
 import { FormError } from '../components/ui/FormError';
 import { AuthorityNote } from '../components/AuthorityNote';
 import { authorityItem, useAuthority } from '../services/authority';
+import { DecisionTrace } from '../components/DecisionTrace';
 import { Button, Field, Input, Modal, newId, Pill, rm, Section, Select, TextArea } from '../components/ui/forms';
 
 const FLOW = ['Identified', 'Costing', 'Internal Approval', 'Client Approval', 'Approved', 'Implemented', 'Closed'];
@@ -231,6 +232,7 @@ const VariationDetail: React.FC<{ v: Variation }> = ({ v }) => {
       </div>
 
       {stage === 'Internal Approval' && authority.live && <AuthorityNote authority={authority.get(approveItem)} />}
+      {authority.live && !isClient && currentUser.role !== 'Contractor' && !['Identified', 'Costing', 'Internal Approval'].includes(stage) && <DecisionTrace kind="variation" id={v.id} />}
       {actions.some((a) => a.show) && (
         <div className="space-y-2 rounded-xl border border-slate-200 p-3">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

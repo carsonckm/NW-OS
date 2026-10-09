@@ -22,6 +22,7 @@ import { portfolioRisk, projectRiskFor } from '../modules/risk';
 import { profitability } from '../modules/reports';
 import { decisionState } from '../modules/approvalRouting';
 import { resolveApprovalAuthority } from '../modules/authorityResolver';
+import { decisionTrace } from '../modules/decisionTrace';
 import { computeCoverage, coverageGaps, listAbsences, listTemporary } from '../modules/delegationCoverage';
 import { validateProposal, PROPOSAL_ACTIONS, type ProposalAction } from '../modules/assistantActions';
 import type { Confidence, Source } from '../modules/assistant';
@@ -427,4 +428,78 @@ export async function portfolioContext(pool: Pool, ctx: AccessContext, b: PackBu
   if (!STAFF(ctx)) return;
   const all = await portfolioRisk(pool, ctx, now);
   for (const r of all.slice(0, 15)) b.fact(r.level === 'Critical' ? 'Critical' : r.level === 'On Track' ? 'On track' : 'Attention', `${r.project_name}: ${r.level}${r.reasons.length ? ` — ${r.reasons.slice(0, 3).map((x) => x.signal).join('; ')}` : ''}`, 'Confirmed', { type: 'project', id: r.project_id, tab: 'projects', project_id: r.project_id });
+}
+
+// ------------------------------------------------------------------ decision traceability (Batch 8)
+
+const rmText = (n: unknown) => `RM ${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+const day = (v: unknown) => (v ? String(v).slice(0, 10) : null);
+
+/**
+ * "Why was VO-002 approved?" — answered only from the decision's persisted, decision-time record
+ * (the same server-side access check as the trace screen). Never from today's rules: when a
+ * decision has no snapshot, the reason is stated as not established from the available record.
+ */
+export async function traceContext(pool: Pool, ctx: AccessContext, b: PackBuilder, question: string) {
+  const refs = [...new Set(question.toUpperCase().match(/\b[A-Z]{1,6}-[A-Z0-9][A-Z0-9-]{1,30}\b/g) ?? [])].slice(0, 5);
+  const found: { kind: 'approval' | 'variation' | 'purchase_order' | 'invoice' | 'drawing_revision'; id: string }[] = [];
+  for (const ref of refs) {
+    const hits = (
+      await pool.query(
+        `SELECT 'approval' AS kind, id FROM approvals WHERE upper(data->>'approval_number') = $1 OR upper(id) = $1
+         UNION ALL SELECT 'variation', id FROM variations WHERE upper(data->>'variation_number') = $1 OR upper(id) = $1
+         UNION ALL SELECT 'purchase_order', id FROM purchase_orders WHERE upper(data->>'po_number') = $1 OR upper(id) = $1
+         UNION ALL SELECT 'invoice', id FROM commercial_invoices WHERE upper(data->>'invoice_number') = $1 OR upper(id) = $1
+         UNION ALL SELECT 'drawing_revision', r.id FROM drawing_revisions r JOIN drawings d ON d.id = r.drawing_id
+           WHERE upper(d.data->>'drawing_number') = $1 AND r.approval_status IN ('Approved', 'Rejected') AND (r.is_current OR r.kind = 'nw_production')
+         LIMIT 5`,
+        [ref]
+      )
+    ).rows;
+    for (const h of hits) found.push(h);
+  }
+  let any = false;
+  for (const f of found) {
+    const t = await decisionTrace(pool, ctx, f.kind, f.id);
+    if (!t) continue; // not visible = not found
+    any = true;
+    const src: Source = { type: f.kind, id: f.id, tab: f.kind === 'drawing_revision' ? 'drawings' : f.kind === 'variation' ? 'variations' : f.kind === 'approval' ? 'approvals' : 'purchasing', project_id: t.project_id };
+    b.fact('Decision record', `${t.title}: requested by ${t.requester?.name ?? 'unknown (not on the record)'}; ${t.pending ? 'still pending' : 'decided'}.`, 'Confirmed', src, 'The decision record');
+    if (!t.decisions.length) {
+      b.fact('Decision record', t.pending ? `No decision has been taken yet${t.current_route ? `; it is with ${t.current_route.assignee.name} (${t.current_route.assignee.role})` : ''}.` : 'No recorded decision with its authority exists for this record, so why it was decided cannot be established from the available record.', t.pending ? 'Confirmed' : 'Unknown', src);
+    }
+    for (const d of t.decisions) {
+      const who = `${d.decided_by.name ?? d.decided_by.id} (${d.decided_by.role ?? 'role not recorded'})`;
+      if (d.consent === 'client') {
+        b.fact('Decision record', `${d.outcome} by ${who} on ${day(d.at)} as the client's own decision (client consent${d.consent_recorded_by === 'staff' ? `, recorded by staff${d.reference ? ' with a reference' : ''}` : ''}), not an internal authority approval.`, 'Confirmed', src, 'Decision-time record (append-only audit)');
+        continue;
+      }
+      if (!d.terms_recorded || !d.trace) {
+        b.fact('Decision record', `${d.outcome} by ${who} on ${day(d.at)}${d.matched_rule_code ? ` under ${d.matched_rule_code}` : ''}. The authority terms that applied were not recorded with this decision (it predates decision traceability), so the reason cannot be established from the available record.`, 'Unknown', src);
+        continue;
+      }
+      const tr = d.trace as Record<string, any>;
+      const r = tr.rule as Record<string, any> | null;
+      const terms = r
+        ? [
+            r.project_name ? `project ${r.project_name}` : r.client_name ? `client ${r.client_name}` : 'all projects in scope',
+            r.min_value !== null || r.max_value !== null ? `value ${r.min_value !== null ? rmText(r.min_value) : 'RM 0'}–${r.max_value !== null ? rmText(r.max_value) : 'no upper limit'}` : 'no value limit',
+            r.max_risk ? `risk up to ${r.max_risk}` : 'no risk limit',
+            r.start_at || r.end_at ? `effective ${day(r.start_at) ?? 'from the start'} to ${day(r.end_at) ?? 'no end date'}` : 'no end date',
+          ].join('; ')
+        : null;
+      b.fact(
+        'Decision record',
+        `${d.outcome} by ${who} on ${day(d.at)}. Authority: ${tr.authority_type}${r ? ` — rule ${r.code}${r.name ? ` "${r.name}"` : ''} (${terms})` : ''}. Permission: ${tr.permission ?? 'not recorded'}. Project sensitivity: ${tr.decision?.sensitivity ?? 'not recorded'}.${tr.value ? ` Decision value: ${rmText(tr.value.amount)}.` : ''} Why it was allowed (resolver): ${tr.reason}.`,
+        'Confirmed',
+        src,
+        'Decision-time record (append-only audit), not the current rules'
+      );
+      if (d.comments) b.untrusted(`Comment on ${t.title}`, d.comments);
+    }
+    for (const c of t.current_rule_status) {
+      if (!c.in_force_now || c.changed_since) b.fact('Current rule status', `Today, rule ${c.code} is ${c.in_force_now ? 'in force but has been edited since this decision' : `no longer in force${c.deactivation_reason ? ` (${c.deactivation_reason})` : ''}`}. This does not change the past decision, which was made under the terms recorded at the time.`, 'Confirmed', { type: 'delegated_authority', id: c.id, tab: 'authority', project_id: null });
+    }
+  }
+  if (!any) b.fact('Decision record', 'No decision record you can see matches this question, so the reason cannot be established from the available record.', 'Unknown');
 }

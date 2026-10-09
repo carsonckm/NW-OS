@@ -41,6 +41,7 @@ import {
 import { NWProductionReviewModal } from './NWProductionReviewModal';
 import { AuthorityNote } from './AuthorityNote';
 import { authorityItem, useAuthority } from '../services/authority';
+import { DecisionTrace } from './DecisionTrace';
 import { NWProductionDrawingModal } from './NWProductionDrawingModal';
 
 interface DrawingViewerProps {
@@ -288,6 +289,9 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
             </button>
           )}
           {inReview && authority.live && <AuthorityNote dark authority={authority.get(authorityItem('drawing_revision', currentRev.id))} />}
+          {authority.live && currentRev && ['Approved', 'Rejected'].includes(currentRev.approved_status) && !['Client', 'Contractor'].includes(currentUser.role) && (
+            <DecisionTrace className="max-w-xl rounded-xl bg-white p-1" kind="drawing_revision" id={currentRev.id} />
+          )}
 
           {/* Interactive Markup Toggle */}
           <button

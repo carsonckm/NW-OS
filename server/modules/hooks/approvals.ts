@@ -1,7 +1,8 @@
 import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { AI_PROPOSAL_TYPE, executeProposal } from '../assistantActions';
-import { authorityAudit, clientConsentAllowed, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { clientConsentAllowed, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { decisionAudit, notifyRejection } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
 import type { HookContext, ModuleHooks, Row } from '../types';
 
@@ -56,8 +57,11 @@ export async function applyDecision(h: HookContext, existing: Row, values: Row) 
     entityId: existing.id as string,
     projectId: existing.project_id as string,
     before: { decision: existing.decision },
-    after: { decision, comments: values.comments, override: verdict.isOverride, ...(verdict.authority ? { authority: authorityAudit(verdict.authority) } : { consent: 'client' }) },
+    after: { decision, comments: values.comments, override: verdict.isOverride, ...(verdict.authority ? { authority: await decisionAudit(h.db, verdict.authority) } : { consent: 'client' }) },
   });
+  if (decision === 'Rejected') {
+    await notifyRejection(h.db, { kind: 'approval', id: String(existing.id), requesterId: (existing.requested_by_id as string) ?? null, deciderId: u.id, deciderName: u.name, title: `${String(existing.approval_number ?? existing.id)}: ${String(existing.title ?? existing.approval_type ?? '')}`, projectId: (existing.project_id as string) ?? null, comment: values.comments, linkTab: 'approvals' });
+  }
   return decided;
 }
 

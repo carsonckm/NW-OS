@@ -4,6 +4,7 @@ import { ValidationError } from '../../core/repository';
 import type { PoolClient } from '../../db/pool';
 import type { ModuleHooks, Row } from '../types';
 import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { decisionAudit } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
 
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
@@ -73,7 +74,7 @@ export const purchaseOrderHooks: ModuleHooks = {
         entityId: String(next.id),
         projectId: (next.project_id as string) ?? null,
         before: from ? { status: from } : undefined,
-        after: { status: to, total_amount: next.total_amount, ...(authority ? { authority: authorityAudit(authority) } : {}) },
+        after: { status: to, total_amount: next.total_amount, ...(authority ? { authority: await decisionAudit(h.db, authority) } : {}) },
       });
     }
     return next;
@@ -232,6 +233,8 @@ export const invoiceHooks: ModuleHooks = {
               : r.reason
       );
       next.approval_authority = authorityAudit(authority);
+      // The decision's own audit row (append-only) carries the decision-time snapshot.
+      await writeAudit(h.db, h.actor, { action: 'invoice.approve', entityType: 'invoice', entityId: String(existing!.id), projectId: String(next.project_id), before: { status: existing!.status }, after: { status: 'Approved', amount_before_tax: next.amount_before_tax, match_status: matchStatus, authority: await decisionAudit(h.db, authority) } });
       next.approved_by_id = h.ctx.user.id;
       next.approved_by_name = h.ctx.user.name;
       next.approved_at = new Date().toISOString();

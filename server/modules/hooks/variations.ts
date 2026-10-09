@@ -3,7 +3,8 @@ import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { HookContext, ModuleHooks, Row } from '../types';
-import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { decisionAudit, notifyRejection } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
 
 /**
@@ -130,6 +131,7 @@ export const variationHooks: ModuleHooks = {
     if (from === to) return values;
     checkApprovers(h, existing, to, incoming);
     const authority = await variationDecision(h, existing, incoming, from, to);
+    const clientStep = from === 'Client Approval' && (to === 'Approved' || clientDeclines(h, from, to));
     const note = typeof incoming.transition_note === 'string' ? incoming.transition_note : undefined;
     const reference = typeof incoming.client_approval_reference === 'string' ? incoming.client_approval_reference : undefined;
     delete values.transition_note;
@@ -143,8 +145,20 @@ export const variationHooks: ModuleHooks = {
       entityId: existing.id as string,
       projectId: existing.project_id as string,
       before: { status: from },
-      after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}), ...(authority ? { authority: authorityAudit(authority) } : {}) },
+      after: {
+        status: to,
+        client_amount: incoming.client_amount,
+        ...(note ? { note } : {}),
+        ...(reference ? { reference } : {}),
+        ...(authority ? { authority: await decisionAudit(h.db, authority) } : {}),
+        // The client's acceptance / decline is their consent, not internal authority: marked from
+        // the server's own identity (a Client user, or staff recording it with a reference).
+        ...(!authority && clientStep ? { consent: 'client', consent_recorded_by: me.role === 'Client' ? 'client' : 'staff' } : {}),
+      },
     });
+    if (to === 'Rejected') {
+      await notifyRejection(h.db, { kind: 'variation', id: String(existing.id), requesterId: (existing.created_by_id as string) ?? null, deciderId: me.id, deciderName: me.name, title: `Variation ${String(existing.variation_number ?? existing.id)}: ${String(existing.title ?? '')}`.trim(), projectId: (existing.project_id as string) ?? null, comment: values.rejection_reason, linkTab: 'variations' });
+    }
     return values;
   },
 

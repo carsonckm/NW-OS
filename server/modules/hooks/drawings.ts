@@ -5,7 +5,8 @@ import { ValidationError } from '../../core/repository';
 import type { Pool, PoolClient } from '../../db/pool';
 import type { PermissionKey } from '../../../src/types';
 import type { HookContext, ModuleHooks, Row } from '../types';
-import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { decisionAudit, notifyRejection } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
 
 type Db = Pool | PoolClient;
@@ -67,6 +68,7 @@ interface RevisionRow {
   content_hash: string;
   superseded_at: string | null;
   data: Row;
+  created_by: string | null;
   created_at: string;
 }
 
@@ -253,8 +255,12 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
       entityType: kind === 'client' ? 'drawing_revision' : 'nw_production_drawing',
       entityId: rev.id,
       before: { status: existing.approval_status, approved_for_production: existing.approved_for_production },
-      after: { status, approved_for_production: approvedForProduction, ...(authority ? { authority: authorityAudit(authority) } : {}) },
+      after: { status, approved_for_production: approvedForProduction, ...(authority ? { authority: await decisionAudit(h.db, authority) } : {}) },
     });
+    if (status === 'Rejected' && !importing) {
+      const d = (await h.db.query(`SELECT project_id, data->>'drawing_number' AS number FROM drawings WHERE id = $1`, [drawingId])).rows[0];
+      await notifyRejection(h.db, { kind: 'drawing_revision', id: rev.id, requesterId: (existing.data?.uploaded_by_id as string) ?? existing.created_by ?? null, deciderId: h.ctx.user.id, deciderName: h.ctx.user.name, title: `${isClient ? 'Drawing' : 'NW production drawing'} ${d?.number ?? drawingId} ${String(existing.revision ?? '')}`.trim(), projectId: d?.project_id ?? null, comment: (data as Row).review_comment ?? (data as Row).rejection_reason, linkTab: 'drawings' });
+    }
     if (!importing) await syncRoute(h.db, h.actor, 'drawing_revision', rev.id);
   }
   return isClient && approving ? rev.id : undefined;
