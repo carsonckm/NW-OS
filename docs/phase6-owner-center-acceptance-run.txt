@@ -1,0 +1,20 @@
+Phase 6 Batch 9 acceptance (Owner Center correctness + exception lifecycle) — 2026-10-09T15:35Z
+Fresh seeded dev database (migrate: 24 migrations, import-demo, auth:seed-dev), dev server, Chromium, as part of the full browser regression.
+  PLAYWRIGHT_MODULE=… node scripts/acceptance/phase6-owner-center.cjs
+Shortcuts: project risk levels and one exception's last activity set in PostgreSQL; everything else through the API and the screens.
+Passed on the first run (also 13/13 on its first standalone run):
+
+1 [Requires my decision = current routing] PASS — routes: delegated VO → Project Manager, Major Purchase → Accountant, own VO → Owner / CEO; list shows own VO: true, delegated VO: false, Major Purchase: false
+2 [High-risk decisions] PASS — High-risk decisions 6 high APR-2026-001: Cashier Counter (CAR-003) Production Drawing Sign-off Project Aurora — Pavilion Bukit Bintang Flagship Luxury Boutique · High risk: Project risk: Critical — with you. high APR-202
+3 [Recently delegated (pending with delegates)] PASS — Recently delegated 5 Decisions routed away from you: with a delegate now, or decided by one in the last 7 days. Today's status of each delegation is shown beside it. With delegate now APR-2026-004: PO-2026-042: White Oak Solid Timber & Acoustic Slats SYS-PURCH
+4 [Recently delegated (decided; delegation since revoked)] PASS — decided: Decided by delegate Variation VO-P6O-MV14MKX5-CMSB: Joinery change cmsb DA-0001 is no longer in force (Owner acceptance: switch off) P6 Owner deleg mv14mkx5 · Decided (approved) by Marcus Lee (Project Manager) under DA-0
+5 [Decided item no longer in Requires my decision] PASS — own VO listed: true; decided VO listed: false
+6 [Acknowledge → Waiting on screen] PASS — acknowledged → waiting; "Waiting for: Waiting for the PM recovery plan"
+7 [Critical exception: never dismissed or snoozed] PASS — buttons: no Dismiss/Snooze; forged dismiss 400, with severity field 400, snooze 400; after Acknowledge + Resolve: resolved (still listed)
+8 [Dismiss with a reason; kept, not deleted] PASS — API without reason 400; button disabled until a reason: true; closed list: dismissed; rows kept 1
+9 [History intact] PASS — observed → acknowledge → wait → dismiss
+10 [Stale: marked, still listed, filterable, not resolved] PASS — filter "stale" shows 1 card(s) [stale], ours: 1; stale events 1; state stale
+11 [Only the Owner acts on the lifecycle] PASS — Admin 403/403/200, PM 403/403/403, Purchasing 403/403/403, Client 403/403/403
+12 [Owner Center at supported desktop sizes] PASS — 1700x1000: sections visible, horizontal overflow 0px; 1280x800: sections visible, horizontal overflow 0px
+13 [No page or API errors] PASS — unexpected errors: {"owner-ceo":[],"project-manager":[],"purchasing":[],"admin":[],"client":[]} (expected 400/403/404 refusals filtered)
+13/13 passed
