@@ -65,13 +65,28 @@ const Decision: React.FC<{ d: Row }> = ({ d }) => {
   const who = `${d.decided_by?.name ?? "Someone"}${d.decided_by?.role ? ` (${d.decided_by.role})` : ""}`;
   const verb = VERB[d.outcome] ?? `set it to ${d.outcome}`;
   if (d.consent === "client") {
+    const act = d.outcome === "Rejected" ? "declined" : "accepted";
     return (
       <li
-        className="rounded-lg border border-slate-200 bg-white p-2 text-[11px]"
+        className="rounded-lg border border-sky-200 bg-sky-50 p-2 text-[11px] text-sky-950"
         data-testid="trace-decision"
+        data-consent="client"
       >
-        <b>{who}</b> {verb} this on {when(d.at)} as the client, on their own
-        project (client consent, not internal authority).
+        {d.consent_recorded_by === "staff" ? (
+          <>
+            <b>{who}</b> recorded that the client {act} this on {when(d.at)}
+            {d.reference ? ` (reference ${d.reference})` : ""}.
+          </>
+        ) : (
+          <>
+            <b>{who}</b> {act} this on {when(d.at)} as the client, on their own
+            project.
+          </>
+        )}{" "}
+        <span className="font-bold">
+          Client consent — not an internal authority approval.
+        </span>
+        {d.comments && <span className="block">Comment: {d.comments}</span>}
       </li>
     );
   }

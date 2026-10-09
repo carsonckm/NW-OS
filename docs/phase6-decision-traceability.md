@@ -41,6 +41,35 @@ as the reason for the past decision. An expired or revoked rule is shown as "no 
 The decision above was valid under the terms in force at the time". It is never shown as an
 unauthorised decision.
 
+**Only server-written decision events count.** The same record has other audit rows (generic module
+create / update rows, revision uploads) that copy fields the browser sent, so an `authority` or
+`consent` key in a payload proves nothing. `decisionTrace()` reads a row as a decision only when
+`isDecisionRow()` accepts it:
+
+- **Allowlisted event.** Its entity type and action are on the server-controlled allowlist
+  (`DECISION_EVENTS`):
+
+  | Kind | Entity type | Actions |
+  |---|---|---|
+  | approval | `approval` | `approval.approve` / `reject` / `request_changes` |
+  | variation | `variation` | `variation.transition` |
+  | purchase order | `purchaseOrders` | `purchase_order.<status>` |
+  | invoice | `invoice` | `invoice.approve` |
+  | drawing revision | `drawing_revision` / `nw_production_drawing` | `drawing.revision.approve` / `reject` / `status` |
+
+  These actions are written only by the decision hooks, with payloads built on the server.
+- **Matching authority result.** The resolver result is `allowed` and was issued to the same
+  user who wrote the row (`authority.actor_id`, and the snapshot's approver, equal the row's
+  server-set `actor_id`). Alternatively, the row is the client-consent marker, which only the
+  approval and variation hooks write.
+
+A forged row therefore never appears as a decision, never makes its writer a "decider" for access,
+and never reaches the AI. Two attacks that used to work are regression-tested in
+`decisionTraceSecurity.test.ts`:
+
+- a Purchasing user's PO create / edit carrying a fake snapshot;
+- a drawing revision uploaded with a fake snapshot.
+
 Decisions recorded before Batch 8 have no snapshot. They are shown as "terms not recorded…
 the reason cannot be established from the record", with only the rule code that was logged then.
 
@@ -60,7 +89,8 @@ Who may read it, checked on the server:
 |---|---|
 | Owner, and Admin (via `authority.view`) | any decision in their project scope |
 | The requester | their own request |
-| An approver who decided it, or a current / past route assignee | that decision |
+| An approver who decided it | that decision |
+| The **current** assignee (the open route at request time) | that decision; a former assignee loses access when it is reassigned |
 | Anyone else internal | 404 |
 | Client, Contractor | always 404; internal authority details are never shown to them (a client's consent on their own project is not internal authority) |
 
@@ -116,8 +146,14 @@ to the record's screen and carries no rule codes or authority details.
 - **Preferences:** NW OS has no per-user notification preference settings yet. The notice goes
   through the existing notification centre and follows its rules (active users only).
 - **Client declines** (a variation at the client stage, or an approval request decided by the
-  client on their own project) notify the requester the same way. The client's decision is
-  consent, not internal authority, so its trace shows "client consent".
+  client on their own project) notify the requester the same way.
+- **Client consent in the trace.** A client's accept or decline is consent, not internal
+  authority. The approval and variation hooks mark it on the server (`consent: 'client'`, and for
+  variations `consent_recorded_by: client | staff`), using the signed-in user's identity, never
+  fields from the request. The trace shows it as **"Client consent — not an internal authority
+  approval"**, without any authority terms. When staff record the client's signed approval on the
+  client's behalf, it shows who recorded it and the reference. Clients and contractors still
+  cannot read traces.
 - **Not covered:** purchase orders and supplier invoices have no "Rejected" state, so there is no
   rejection to notify.
 - **Unchanged:** the existing notices for routing, escalation and reassignment are not affected.
@@ -135,6 +171,13 @@ to the record's screen and carries no rule codes or authority details.
   - append-only records and forged fields;
   - the AI using the stored record, saying when the reason cannot be established, and being unable to decide;
   - rejection notices (once, only the requester, replay-safe), existing routing notices intact, and drawing revisions.
+- `server/modules/decisionTraceSecurity.test.ts` (5 tests) covers:
+  - the two forgery attacks (PO generic create / update; drawing revision upload), including no
+    decider access for the forger and nothing forged reaching the AI;
+  - negative cases for non-decision events and mismatched or refused snapshots;
+  - client consent (client accept, client decline, staff-recorded with a reference: trace,
+    notice, access, AI);
+  - current-assignee-only access before and after a reassignment, for both the endpoint and the AI.
 - `scripts/acceptance/phase6-trace.cjs` checks the same behaviour in the browser, recorded in
   `docs/phase6-trace-acceptance-run.txt`.
 
@@ -145,3 +188,8 @@ to the record's screen and carries no rule codes or authority details.
 - The value / risk shown is what the resolver evaluated. A record type with no server-side amount
   shows "not recorded".
 - NW OS has no per-user notification preferences yet (see §5).
+- **Residual risk — database owner.** The append-only triggers stop the application and anyone
+  using it, but the application's database login owns `audit_logs`. Whoever holds that database
+  credential could disable or drop the triggers, so audit immutability does not protect against a
+  database owner. Closing this needs a separate database-role design (a non-owner application role,
+  with the table owned by a different role), which is out of scope for Batch 8.

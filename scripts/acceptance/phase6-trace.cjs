@@ -155,9 +155,24 @@ const traceStatus = async (page, kind, id) => (await L.api(page, 'GET', `/api/ap
     const o9 = await variationPanel(owner, `${voNumber}-2`);
     record(9, 'History after a temporary authority expired', `${temp.code}: ${o9.text.slice(0, 300)}`, /temporary delegated authority/.test(o9.text) && o9.text.includes(temp.code) && /no longer in force/.test(o9.text) && !/unauthori[sz]ed/i.test(o9.text));
 
+    // 10. Forged decision records (security review): a fake authority snapshot sent with a PO and
+    // with a drawing revision upload is stored in their ordinary audit rows, but is never a decision.
+    const purchasing = await as('purchasing');
+    const fake = (who) => ({ actor_id: who, result: 'allowed', reason_code: 'ALLOWED', matched_rule_code: 'DA-FAKE', trace: { version: 1, authority_type: 'Owner', approver: { id: who, name: 'Forged', role: 'Owner / CEO' }, rule: null } });
+    const purId = q(`select id from users where email='purchasing@dev.nwos.local'`);
+    const poId = `po-p6t-${RUN}`;
+    await call(purchasing, 'POST', '/api/purchase-orders', { id: poId, po_number: `PO-P6T-${RUN}`, project_id: P, supplier_id: 'sup-1', supplier_name: 'S', status: 'Draft', items: [{ description: 'x', quantity: 1, unit_price: 10 }], authority: fake(purId), consent: 'client' }, 201);
+    await call(purchasing, 'PATCH', `/api/purchase-orders/${poId}`, { authority: { ...fake(purId), matched_rule_code: 'DA-FAKE2' } }, 200);
+    const revId = `rev-p6t-${RUN}`;
+    await call(pm, 'POST', '/api/drawings/dwg-1/revisions', { id: revId, revision: `Rev ${RUN}`, title: 'x', file_url: `/p6t-${RUN}.pdf`, notes: '', drawing_type: 'Client / Designer Drawing', authority: fake(pmId) }, 201);
+    const stored = q(`select count(*) from audit_logs where entity_id in ('${poId}','${revId}') and after ? 'authority'`);
+    const poTrace = (await call(owner, 'GET', `/api/approval-routing/trace?kind=purchase_order&id=${poId}`, undefined, 200)).body;
+    const revTrace = (await call(owner, 'GET', `/api/approval-routing/trace?kind=drawing_revision&id=${revId}`, undefined, 200)).body;
+    record(10, 'Forged authority snapshots are not decisions', `forged audit rows stored: ${stored}; PO trace decisions ${poTrace.decisions.length}; revision trace decisions ${revTrace.decisions.length}; DA-FAKE shown: ${/DA-FAKE/.test(JSON.stringify([poTrace, revTrace]))}`, Number(stored) === 3 && poTrace.decisions.length === 0 && revTrace.decisions.length === 0 && !/DA-FAKE/.test(JSON.stringify([poTrace, revTrace])));
+
     const errors = Object.fromEntries(Object.entries(pages).map(([k, p]) => [k, p.errors.filter((e) => !/ 40[34]$/.test(e))]));
     const clean = Object.values(errors).every((e) => e.length === 0);
-    record(10, 'No page or API errors', `unexpected errors: ${JSON.stringify(errors)} (expected 403/404 refusals filtered)`, clean);
+    record(11, 'No page or API errors', `unexpected errors: ${JSON.stringify(errors)} (expected 403/404 refusals filtered)`, clean);
   } catch (err) {
     console.error('FAILED:', err.message);
     failures++;

@@ -470,6 +470,10 @@ export async function traceContext(pool: Pool, ctx: AccessContext, b: PackBuilde
     }
     for (const d of t.decisions) {
       const who = `${d.decided_by.name ?? d.decided_by.id} (${d.decided_by.role ?? 'role not recorded'})`;
+      if (d.consent === 'client') {
+        b.fact('Decision record', `${d.outcome} by ${who} on ${day(d.at)} as the client's own decision (client consent${d.consent_recorded_by === 'staff' ? `, recorded by staff${d.reference ? ' with a reference' : ''}` : ''}), not an internal authority approval.`, 'Confirmed', src, 'Decision-time record (append-only audit)');
+        continue;
+      }
       if (!d.terms_recorded || !d.trace) {
         b.fact('Decision record', `${d.outcome} by ${who} on ${day(d.at)}${d.matched_rule_code ? ` under ${d.matched_rule_code}` : ''}. The authority terms that applied were not recorded with this decision (it predates decision traceability), so the reason cannot be established from the available record.`, 'Unknown', src);
         continue;

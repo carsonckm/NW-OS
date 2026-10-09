@@ -102,20 +102,45 @@ export async function decisionAudit(db: Db, r: AuthorityResolution) {
 
 // ------------------------------------------------------------------ reading a decision back
 
-/** The audit entity types each routed kind is decided under. */
-const ENTITY: Record<RoutedKind, string[]> = {
-  approval: ['approval'],
-  variation: ['variation'],
-  purchase_order: ['purchaseOrders'],
-  invoice: ['invoice'],
-  drawing_revision: ['drawing_revision', 'nw_production_drawing'],
+/**
+ * The decision events each routed kind is decided under: an explicit, server-controlled allowlist
+ * of (audit entity type, audit action) written only by the decision hooks, with server-built
+ * payloads. Anything else on the same record (generic module create / update rows, revision
+ * uploads, ...) can carry browser-supplied fields and is never read as a decision.
+ */
+const DECISION_EVENTS: Record<RoutedKind, { entity: string[]; action: RegExp }> = {
+  approval: { entity: ['approval'], action: /^approval\.(approve|reject|request_changes)$/ },
+  variation: { entity: ['variation'], action: /^variation\.transition$/ },
+  purchase_order: { entity: ['purchaseOrders'], action: /^purchase_order\.[a-z_]+$/ },
+  invoice: { entity: ['invoice'], action: /^invoice\.approve$/ },
+  drawing_revision: { entity: ['drawing_revision', 'nw_production_drawing'], action: /^drawing\.revision\.(approve|reject|status)$/ },
 };
+const ENTITY: Record<RoutedKind, string[]> = Object.fromEntries(Object.entries(DECISION_EVENTS).map(([k, v]) => [k, v.entity])) as Record<RoutedKind, string[]>;
+
+/**
+ * A decision row as the decision hooks write it: an allowlisted action, and either the resolver's
+ * allowed result issued to the same user who wrote the row, or the client-consent marker (which
+ * the hooks write only for a client's own decision, never with authority).
+ */
+export function isDecisionRow(kind: RoutedKind, a: Row): boolean {
+  if (!DECISION_EVENTS[kind].entity.includes(a.entity_type) || !DECISION_EVENTS[kind].action.test(String(a.action))) return false;
+  const after = (a.after ?? {}) as Row;
+  const auth = after.authority as Row | undefined;
+  if (auth && typeof auth === 'object' && !Array.isArray(auth)) {
+    if (auth.result !== 'allowed' || !a.actor_id || auth.actor_id !== a.actor_id) return false;
+    const trace = auth.trace as Row | undefined;
+    if (trace !== undefined && (typeof trace !== 'object' || trace === null || trace.version !== TRACE_VERSION || trace.approver?.id !== a.actor_id)) return false;
+    return true;
+  }
+  return after.consent === 'client' && (kind === 'approval' || kind === 'variation');
+}
+
 const KINDS = Object.keys(ENTITY) as RoutedKind[];
 export const isTraceKind = (k: unknown): k is RoutedKind => typeof k === 'string' && (KINDS as string[]).includes(k);
 
 /**
  * Who may read a decision's trace: the Owner and holders of authority.view (Admin) within their
- * project scope; otherwise the requester, an approver who decided it, or a current / past assignee
+ * project scope; otherwise the requester, an approver who decided it, or the current assignee
  * — internal staff only. Clients and contractors never see internal authority details.
  * Returns false for "not found" (the caller answers 404 either way).
  */
@@ -124,7 +149,8 @@ async function mayRead(db: Db, ctx: AccessContext, kind: RoutedKind, id: string,
   if (['Client', 'Contractor'].includes(ctx.user.role)) return false;
   if (ctx.can('authority.view')) return true;
   if (deciders.includes(ctx.user.id) || requesters.includes(ctx.user.id)) return true;
-  const assigned = (await db.query('SELECT 1 FROM approval_routes WHERE resource_kind = $1 AND resource_id = $2 AND assigned_user_id = $3 LIMIT 1', [kind, id, ctx.user.id])).rowCount;
+  // Only the current assignee (the open route at request time); a former assignee has no access.
+  const assigned = (await db.query(`SELECT 1 FROM approval_routes WHERE resource_kind = $1 AND resource_id = $2 AND assigned_user_id = $3 AND status = 'open' LIMIT 1`, [kind, id, ctx.user.id])).rowCount;
   return Boolean(assigned);
 }
 
@@ -155,11 +181,11 @@ export async function decisionTrace(db: Db, ctx: AccessContext, kind: RoutedKind
   if (!state) return undefined;
   const audits = (
     await db.query(
-      `SELECT id, occurred_at, actor_id, actor_name, actor_role, action, before, after FROM audit_logs
+      `SELECT id, occurred_at, actor_id, actor_name, actor_role, action, entity_type, before, after FROM audit_logs
        WHERE entity_type = ANY($1) AND entity_id = $2 AND (after ? 'authority' OR after ? 'consent') ORDER BY id`,
       [ENTITY[kind], id]
     )
-  ).rows;
+  ).rows.filter((a) => isDecisionRow(kind, a));
   const requesterNow = await currentRequester(db, kind, id);
   const deciders = audits.map((a) => a.actor_id).filter(Boolean);
   const requesters = [requesterNow, ...audits.map((a) => a.after?.authority?.trace?.requester?.id)].filter(Boolean) as string[];
@@ -178,6 +204,8 @@ export async function decisionTrace(db: Db, ctx: AccessContext, kind: RoutedKind
       decided_by: { id: a.actor_id, name: a.actor_name, role: a.actor_role },
       // A client deciding on their own project acts on consent, not internal authority.
       consent: a.after?.consent ?? null,
+      consent_recorded_by: a.after?.consent === 'client' ? (a.after?.consent_recorded_by ?? (a.actor_role === 'Client' ? 'client' : 'staff')) : null,
+      reference: a.after?.reference ?? null,
       allowed: auth.result === 'allowed' || a.after?.consent === 'client',
       reason_code: auth.reason_code ?? null,
       matched_rule_code: auth.matched_rule_code ?? null,

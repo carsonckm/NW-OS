@@ -235,9 +235,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 8: approval traceability and 
     expect(fact.text).toContain('RM 20,000'); // the decision-time limit, not today's RM 5,000
     expect(fact.text).not.toContain('RM 5,000');
     expect(a.facts.some((f: Row) => f.section === 'Current rule status' && /no longer in force/.test(f.text))).toBe(true);
-    // A decision recorded before traceability: no snapshot → not established.
+    // A decision recorded before traceability (authorityAudit's shape, no trace) → not established.
     const legacy = await variation(P.temp, 700);
-    await db.pool.query(`INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, project_id, after) VALUES ('user-pm', 'PM', 'Project Manager', 'variation.transition', 'variation', $1, $2, $3)`, [legacy, P.temp, JSON.stringify({ status: 'Client Approval', authority: { matched_rule_code: 'DA-OLD', result: 'allowed' } })]);
+    await db.pool.query(`INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, project_id, after) VALUES ('user-pm', 'PM', 'Project Manager', 'variation.transition', 'variation', $1, $2, $3)`, [legacy, P.temp, JSON.stringify({ status: 'Client Approval', authority: { decision_type: 'variation', action: 'approve', actor_id: 'user-pm', actor_role: 'Project Manager', basis: 'rule', matched_rule_code: 'DA-OLD', reason_code: 'ALLOWED', result: 'allowed' } })]);
     const legacyNum = (await q(`SELECT data->>'variation_number' AS n FROM variations WHERE id = $1`, [legacy]))[0].n;
     const l = (await owner().post('/api/ai/ops/ask').send({ question: `Why was ${legacyNum} approved?` }).expect(200)).body;
     expect(l.facts.find((f: Row) => /cannot be established from the available record/.test(f.text))).toMatchObject({ confidence: 'Unknown' });
