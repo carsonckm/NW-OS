@@ -17,7 +17,9 @@ Demo mode is for evaluation only and protects nothing.
 
 Nothing the browser sends about identity is trusted: role or name fields in bodies, query
 strings, headers or localStorage are ignored, and on `/api/ai` and `/api/gateway` they are
-overwritten with the signed-in user.
+overwritten with the signed-in user. AI routes also ignore any project or record data the browser
+sends: the AI context is built on the server from what the user may see, and the only way to a
+model is the AI gateway (`docs/phase6-ai-operating-layer.md`, "Production AI architecture").
 
 ## Who sees what (core chain)
 

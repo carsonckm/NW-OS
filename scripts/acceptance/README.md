@@ -53,6 +53,14 @@ Playwright available (`PLAYWRIGHT_MODULE=/path/to/playwright` if it is installed
   an Owner absence previewed, confirmed and ended on the screen, Owner-only access, notification
   idempotency and no approval left on ended authority. Run it on a freshly seeded database.
   Recorded in `docs/phase6-coverage-acceptance-run.txt`.
+- `node scripts/acceptance/phase6-ai.cjs` — Phase 6 Batch 7: the AI Operating Assistant with the
+  server on `AI_PROVIDER=mock` (deterministic, offline): daily briefing, a project question with
+  evidence, project risk from the risk engine, a problem analysis with a suggested action
+  (proposal → Review → AI Proposal approval → Approve & run → task created by the existing
+  workflow), a refused protected action, contractor and client boundaries, a prompt-injection
+  attempt, an LLM outage with the record-based fallback, the audit trail, the legacy screens' AI routes
+  going through the gateway, and no provider code or key in the browser. Recorded in
+  `docs/phase6-ai-acceptance-run.txt`.
 - `node scripts/acceptance/roles.cjs` — signs in as each of the 10 roles and opens every tab,
   reporting page errors and failed API calls.
 
