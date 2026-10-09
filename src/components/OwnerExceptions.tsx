@@ -2,7 +2,9 @@
  * Owner Exceptions (Phase 6 Batch 4): "What requires my attention right now?" Everything
  * shown comes from /api/owner/exceptions: severity, priority score and its reasons are
  * decided on the server. Actions call the normal endpoints, where the authority resolver
- * checks again; nothing here changes a record directly.
+ * checks again; nothing here changes a record directly. Batch 9 adds the lifecycle: acknowledge,
+ * waiting, resolve, dismiss (with a reason, never critical) and reopen, a state filter, the
+ * resolved / dismissed list and each exception's append-only history.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { BellOff, ShieldAlert } from 'lucide-react';
@@ -21,11 +23,55 @@ const SEV: Record<Severity, { label: string; tone: 'bad' | 'warn' | 'info' | 'go
   attention: { label: 'Attention', tone: 'info', dot: '🟡' },
   info: { label: 'Informational', tone: 'good', dot: '🟢' },
 };
+// Lifecycle (Phase 6 Batch 9): what the Owner did about an exception. States and transitions are
+// enforced by the server; the buttons only offer what it would accept.
+const STATE: Record<string, { label: string; tone: 'bad' | 'warn' | 'info' | 'good' | 'neutral' }> = {
+  active: { label: 'Active', tone: 'info' },
+  acknowledged: { label: 'Acknowledged', tone: 'neutral' },
+  waiting: { label: 'Waiting', tone: 'warn' },
+  stale: { label: 'Stale — no activity', tone: 'bad' },
+  resolved: { label: 'Resolved', tone: 'good' },
+  dismissed: { label: 'Dismissed', tone: 'neutral' },
+};
+const STATE_FILTERS = ['', 'active', 'acknowledged', 'waiting', 'stale', 'resolved', 'dismissed'];
+const when = (iso: string) => new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/** The append-only lifecycle history of one exception. */
+const LifecycleHistory: React.FC<{ id: string }> = ({ id }) => {
+  const [h, setH] = useState<Row | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .get<Row>(`/owner/exceptions/history?id=${encodeURIComponent(id)}`)
+      .then(setH)
+      .catch((err) => setError(actionErrorOf(err).message));
+  }, [id]);
+  if (error) return <p className="text-[11px] text-slate-500">No lifecycle history yet.</p>;
+  if (!h) return <p className="text-[11px] text-slate-500">Loading history…</p>;
+  return (
+    <ol className="space-y-1 border-l-2 border-slate-200 pl-3" data-testid="exception-history">
+      {(h.events as Row[]).map((ev) => (
+        <li key={ev.id} className="text-[11px] text-slate-700" data-action={ev.action}>
+          <span className="font-mono text-slate-400">{when(ev.occurred_at)}</span> <span className="font-bold text-slate-900">{ev.action.replace('_', ' ')}</span>
+          {ev.from_state !== ev.to_state && ev.to_state && (
+            <span className="text-slate-500">
+              {' '}
+              · {ev.from_state ?? '—'} → {ev.to_state}
+            </span>
+          )}
+          <span className="text-slate-500"> · {ev.actor.name}</span>
+          {ev.reason && <span className="block text-slate-500">“{ev.reason}”</span>}
+        </li>
+      ))}
+    </ol>
+  );
+};
+
 const age = (h: number | null) => (h == null ? null : h >= 48 ? `${Math.floor(h / 24)} days` : `${h}h`);
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : null);
 
 const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
-  const [panel, setPanel] = useState<'none' | 'history' | 'assign' | 'snooze'>('none');
+  const [panel, setPanel] = useState<'none' | 'history' | 'assign' | 'snooze' | 'lifecycle' | 'wait' | 'dismiss' | 'reopen'>('none');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [eligible, setEligible] = useState<Row[]>([]);
@@ -54,6 +100,14 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
       setEligible([]);
     }
   };
+  const life = e.lifecycle as Row | undefined;
+  const state: string = life?.state ?? 'active';
+  const transition = (action: string, withReason?: string) => act(() => api.post(`/owner/exceptions/${action}`, { id: e.id, expected_state: state, ...(withReason !== undefined ? { reason: withReason } : {}) }));
+  const isPendingApproval = String(e.id).startsWith('approval:');
+  const reasonPanel = (p: 'wait' | 'dismiss' | 'reopen') => {
+    setReason('');
+    setPanel(p);
+  };
   const decide = (decision: string) => act(() => api.post(`/approvals/${encodeURIComponent(e.resource.id)}/decision`, { decision }));
   const facts = [
     e.project_name && `Project: ${e.project_name}`,
@@ -72,6 +126,11 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
         </Pill>
         <span className="text-xs font-black text-slate-900">{e.title}</span>
         {e.status && <Pill tone="neutral">{e.status}</Pill>}
+        {life && (
+          <span data-testid="exception-state" data-state={state}>
+            <Pill tone={STATE[state].tone}>{STATE[state].label}</Pill>
+          </span>
+        )}
         <span className="ml-auto text-[10px] font-bold text-slate-500" title="Priority score: the sum of the reasons below">
           Priority {e.priority_score}
         </span>
@@ -93,6 +152,12 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
           ))}
         </ul>
       )}
+      {life?.waiting_for && (
+        <p className="text-[11px] text-amber-900">
+          <span className="font-bold">Waiting for:</span> {life.waiting_for}
+        </p>
+      )}
+      {state === 'resolved' && e.severity === 'critical' && <p className="text-[11px] font-bold text-rose-800">You marked this resolved, but its condition is still present; critical exceptions stay listed.</p>}
       <p className="text-[11px] font-bold text-amber-800">Recommended: {e.recommended}</p>
       {error && <p className="text-[11px] font-bold text-rose-700" role="alert">{error}</p>}
       <div className="flex flex-wrap gap-1">
@@ -121,6 +186,20 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
         )}
         {e.actions.includes('assign') && <Button onClick={() => void openAssign()}>Assign</Button>}
         {(e.actions.includes('history') || e.resource) && <Button onClick={() => setPanel(panel === 'history' ? 'none' : 'history')}>{panel === 'history' ? 'Hide history' : 'History & authority'}</Button>}
+        {life && ['active', 'waiting', 'stale'].includes(state) && (
+          <Button busy={busy} onClick={() => void transition('acknowledge')}>
+            Acknowledge
+          </Button>
+        )}
+        {life && ['active', 'acknowledged', 'stale'].includes(state) && <Button onClick={() => reasonPanel('wait')}>Waiting…</Button>}
+        {life && !isPendingApproval && ['active', 'acknowledged', 'waiting', 'stale'].includes(state) && (
+          <Button busy={busy} onClick={() => void transition('resolve', '')}>
+            Resolve
+          </Button>
+        )}
+        {life && e.severity !== 'critical' && ['active', 'acknowledged', 'waiting', 'stale'].includes(state) && <Button onClick={() => reasonPanel('dismiss')}>Dismiss…</Button>}
+        {life && ['resolved', 'dismissed'].includes(state) && <Button onClick={() => reasonPanel('reopen')}>Reopen…</Button>}
+        {life && <Button onClick={() => setPanel(panel === 'lifecycle' ? 'none' : 'lifecycle')}>{panel === 'lifecycle' ? 'Hide lifecycle' : 'Lifecycle history'}</Button>}
         {e.severity !== 'critical' && !e.snoozed_until && (
           <Button onClick={() => setPanel('snooze')}>
             <BellOff className="h-3 w-3" /> Snooze
@@ -131,6 +210,16 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
         )}
       </div>
       {panel === 'history' && e.resource && <ApprovalHistory kind={e.resource.kind} id={e.resource.id} />}
+      {panel === 'lifecycle' && <LifecycleHistory id={e.id} />}
+      {(panel === 'wait' || panel === 'dismiss' || panel === 'reopen') && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-2" data-testid={`exception-${panel}-form`}>
+          <Input placeholder={panel === 'wait' ? 'What or whom are you waiting for? (required)' : 'Reason (required)'} aria-label={`${panel} reason`} value={reason} onChange={(ev) => setReason(ev.target.value)} className="max-w-sm" />
+          <Button tone={panel === 'dismiss' ? 'danger' : 'primary'} busy={busy} disabled={!reason.trim()} onClick={() => void transition(panel, reason)}>
+            {panel === 'wait' ? 'Mark waiting' : panel === 'dismiss' ? 'Dismiss' : 'Reopen'}
+          </Button>
+          {panel === 'dismiss' && <span className="text-[10px] text-slate-500">Dismissed exceptions are kept, with your reason, under “Resolved and dismissed”.</span>}
+        </div>
+      )}
       {panel === 'assign' && (
         <div className="flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-2">
           <Select value={assignee} onChange={(ev) => setAssignee(ev.target.value)} className="max-w-xs">
@@ -168,19 +257,65 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
   );
 };
 
+/** A resolved / dismissed exception: kept, with its history; reopening needs a reason. */
+const ClosedRow: React.FC<{ c: Row; onDone: () => void }> = ({ c, onDone }) => {
+  const [panel, setPanel] = useState<'none' | 'history' | 'reopen'>('none');
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const reopen = async () => {
+    try {
+      await api.post('/owner/exceptions/reopen', { id: c.id, reason, expected_state: c.state });
+      onDone();
+    } catch (err) {
+      setError(actionErrorOf(err).message);
+    }
+  };
+  return (
+    <li className="space-y-1 rounded-lg border border-slate-200 p-2 text-[11px]" data-testid={`closed-exception-${c.id}`}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span data-testid="exception-state" data-state={c.state}>
+          <Pill tone={STATE[c.state].tone}>{STATE[c.state].label}</Pill>
+        </span>
+        <span className="font-bold text-slate-900">{c.title}</span>
+        <span className="text-slate-500">{c.present ? '· condition still present' : '· condition cleared'}</span>
+        <span className="ml-auto flex gap-1">
+          {c.present && <Button onClick={() => setPanel(panel === 'reopen' ? 'none' : 'reopen')}>Reopen…</Button>}
+          <Button onClick={() => setPanel(panel === 'history' ? 'none' : 'history')}>{panel === 'history' ? 'Hide history' : 'History'}</Button>
+        </span>
+      </div>
+      {error && (
+        <p className="font-bold text-rose-700" role="alert">
+          {error}
+        </p>
+      )}
+      {panel === 'history' && <LifecycleHistory id={c.id} />}
+      {panel === 'reopen' && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-2">
+          <Input placeholder="Reason (required)" aria-label="reopen reason" value={reason} onChange={(ev) => setReason(ev.target.value)} className="max-w-sm" />
+          <Button tone="primary" disabled={!reason.trim()} onClick={() => void reopen()}>
+            Reopen
+          </Button>
+        </div>
+      )}
+    </li>
+  );
+};
+
 export const OwnerExceptions: React.FC = () => {
   const { coreDataSync } = useNW();
   const [data, setData] = useState<Row | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [stateFilter, setStateFilter] = useState('');
+  const [showClosed, setShowClosed] = useState(false);
   const load = useCallback(async () => {
     try {
-      setData(await api.get<Row>('/owner/exceptions'));
+      setData(await api.get<Row>(`/owner/exceptions${stateFilter ? `?state=${stateFilter}` : ''}`));
       setError(null);
     } catch (err) {
       setError(actionErrorOf(err).message);
     }
-  }, []);
+  }, [stateFilter]);
   useEffect(() => {
     if (coreDataSync.mode === 'database') void load();
   }, [coreDataSync.mode, coreDataSync.lastSyncedAt, load]);
@@ -197,7 +332,16 @@ export const OwnerExceptions: React.FC = () => {
             <p className="text-[11px] text-slate-500">What requires your attention right now. Severity and priority are set by the server, with the reasons shown.</p>
           </div>
         </div>
-        <Button onClick={() => void load()}>Refresh</Button>
+        <div className="flex items-center gap-2">
+          <Select value={stateFilter} onChange={(ev) => setStateFilter(ev.target.value)} aria-label="Filter by lifecycle state" className="max-w-[12rem]">
+            {STATE_FILTERS.map((f) => (
+              <option key={f} value={f}>
+                {f ? `State: ${STATE[f].label}` : 'All open states'}
+              </option>
+            ))}
+          </Select>
+          <Button onClick={() => void load()}>Refresh</Button>
+        </div>
       </div>
       {error && <p className="text-xs font-bold text-rose-700" role="alert">{error}</p>}
       {s && (
@@ -242,7 +386,21 @@ export const OwnerExceptions: React.FC = () => {
             </div>
           );
         })}
-      {data && (data.exceptions as Row[]).length === 0 && <p className="text-xs text-emerald-700">Nothing needs you right now.</p>}
+      {data && (data.exceptions as Row[]).length === 0 && <p className="text-xs text-emerald-700">{stateFilter ? `No open exception is ${STATE[stateFilter].label.toLowerCase()}.` : 'Nothing needs you right now.'}</p>}
+      {data && (data.closed?.length ?? 0) > 0 && (
+        <div className="space-y-2" data-testid="owner-exceptions-closed">
+          <Button onClick={() => setShowClosed(!showClosed)}>
+            {showClosed ? 'Hide' : 'Show'} resolved and dismissed ({data.closed.length})
+          </Button>
+          {showClosed && (
+            <ul className="space-y-1">
+              {(data.closed as Row[]).map((c) => (
+                <ClosedRow key={c.id} c={c} onDone={() => void load()} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {data && (data.informational.length > 0 || data.snoozed.length > 0) && (
         <div className="space-y-2">
           <Button onClick={() => setShowInfo(!showInfo)}>

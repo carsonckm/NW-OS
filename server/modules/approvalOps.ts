@@ -31,6 +31,7 @@ import {
 } from './approvalRouting';
 import { LIFECYCLE_RANK, loadPolicies, slaPercent, stageFor, type SlaPolicy } from './approvalMonitor';
 import { resolveApprovalAuthority, type ResourceKind } from './authorityResolver';
+import { recordSnoozeEvent } from './exceptionLifecycle';
 import { businessElapsedMs, DAY_MS, loadCalendar, type BusinessCalendar } from './businessCalendar';
 import { coverageGaps, delegationEffectiveness, GAP_STATUSES, type CoverageStatus } from './delegationCoverage';
 
@@ -296,17 +297,31 @@ function finish(e: Omit<OwnerException, 'severity' | 'priority_score'>, floor: E
   return { ...e, severity, priority_score: e.reasons.reduce((s, f) => s + f.points, 0) };
 }
 
-/** Everything that needs the Owner now. Severity and priority come from server rules, with their reasons. */
-export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new Date()) {
-  requireOwner(ctx);
-  const { cal, policies } = await lifecycleContext(pool);
-  const cache: ContextCache = new Map();
-  const out: OwnerException[] = [];
-  const snoozes = new Map((await pool.query('SELECT * FROM owner_exception_snoozes WHERE snoozed_until > $1', [now])).rows.map((s) => [s.exception_key as string, s]));
+/**
+ * Every open approval route the user can see, classified once by the server: its lifecycle, whether
+ * the assignee may still decide it, the risk / blocking factors, and whether it needs the Owner.
+ * Shared by the Owner Exception Center and the Owner Center decision sections, so both apply the
+ * same routing and the same rules (no second resolver: validity comes from assigneeMayDecide).
+ */
+export interface ClassifiedRoute {
+  r: any;
+  life: ReturnType<typeof lifecycleOf>;
+  valid: Awaited<ReturnType<typeof assigneeMayDecide>>;
+  toOwner: boolean;
+  f: Factor[];
+  type: string;
+  why: string;
+  recommended: string;
+  title: string;
+  value: number | null;
+  needsOwner: boolean;
+}
+export const HIGH_RISK_FACTORS = ['STRATEGIC', 'SENSITIVE', 'SAFETY', 'PRODUCTION_BLOCKED', 'SITE_BLOCKED', 'PAYMENT_BLOCKED', 'PROJECT_CRITICAL', 'PROJECT_AT_RISK'];
+export async function classifyOpenRoutes(pool: Pool, ctx: AccessContext, now = new Date(), env?: { cal: BusinessCalendar; policies: Map<string, SlaPolicy>; cache?: ContextCache }) {
+  const { cal, policies } = env ?? (await lifecycleContext(pool));
+  const cache: ContextCache = env?.cache ?? new Map();
   const today = new Date(now.getTime() + cal.offsetMs).toISOString().slice(0, 10);
   const localDay = (d: Date) => new Date(d.getTime() + cal.offsetMs).toISOString().slice(0, 10);
-
-  // ---------- approvals
   const routes = (
     await pool.query(
       `SELECT ar.*, p.project_name, p.risk_status, p.project_status, p.sensitivity AS live_sensitivity, c.company_name AS client_name, u.name AS assignee_name, u.role AS assignee_role, u.is_active AS assignee_active,
@@ -321,6 +336,7 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
     )
   ).rows;
   const blockedProduction = new Set((await pool.query(`SELECT DISTINCT project_id FROM production_orders WHERE status NOT IN ('Completed', 'Cancelled') AND (status = 'Blocked' OR drawing_check = 'invalid')`)).rows.map((r) => r.project_id as string));
+  const out: ClassifiedRoute[] = [];
   for (const r of routes) {
     if (r.project_id && !ctx.canSeeProject(r.project_id)) continue;
     const life = lifecycleOf(r, cal, policies, now);
@@ -377,8 +393,29 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
     const days = Math.floor(life.age_hours / 24);
     if (days > 0) f.push({ code: 'AGE', label: `Waiting ${days} day(s)`, points: Math.min(20, days * 2), level: null });
 
-    // Only what needs the Owner: routed to an Owner, or a delegated one that is late, escalated or invalid.
     const needsOwner = toOwner || f.some((x) => ['NO_VALID_APPROVER', 'AUTHORITY_CONFLICT', 'ESCALATED', 'OVERDUE', 'PROJECT_CLOSED'].includes(x.code));
+    out.push({ r, life, valid, toOwner, f, type, why, recommended, title, value, needsOwner });
+  }
+  return { routes, classified: out };
+}
+
+/** Everything that needs the Owner now. Severity and priority come from server rules, with their reasons. */
+export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new Date()) {
+  requireOwner(ctx);
+  const { cal, policies } = await lifecycleContext(pool);
+  const cache: ContextCache = new Map();
+  const out: OwnerException[] = [];
+  const snoozes = new Map((await pool.query('SELECT * FROM owner_exception_snoozes WHERE snoozed_until > $1', [now])).rows.map((s) => [s.exception_key as string, s]));
+  const today = new Date(now.getTime() + cal.offsetMs).toISOString().slice(0, 10);
+  const localDay = (d: Date) => new Date(d.getTime() + cal.offsetMs).toISOString().slice(0, 10);
+
+  // ---------- approvals
+  const { routes, classified } = await classifyOpenRoutes(pool, ctx, now, { cal, policies, cache });
+  for (const c of classified) {
+    const { r, life, valid, toOwner, f, title, value, needsOwner } = c;
+    const { type } = c;
+    let { why } = c;
+    const { recommended } = c;
     if (!needsOwner) continue;
     if (toOwner && type === 'OWNER_DECISION') {
       why = r.owner_reason_code === 'OWNER_ASSIGNED' ? 'You took this approval.' : `Routed to you: ${r.data?.owner_reason ?? r.owner_reason_code ?? 'no delegate may decide it'}.`;
@@ -525,15 +562,21 @@ export async function snoozeException(pool: Pool, ctx: AccessContext, actor: Aud
       [e.id, until, reason, ctx.user.id]
     );
     await writeAudit(db, actor, { action: 'owner_exception.snooze', entityType: 'owner_exception', entityId: e.id, projectId: e.project_id, after: { severity: e.severity, snoozed_until: until.toISOString(), hours: b.hours }, details: reason });
+    await recordSnoozeEvent(db, e, e.id, 'snooze', ctx, reason, now, { snoozed_until: until.toISOString(), hours: b.hours });
     return { id: e.id, snoozed_until: until.toISOString(), next_reminder: until.toISOString() };
   });
 }
 
 export async function unsnoozeException(pool: Pool, ctx: AccessContext, actor: AuditActor, id: string) {
   requireOwner(ctx, 'snooze');
+  const now = new Date();
   return withTransaction(pool, async (db) => {
-    const gone = await db.query('DELETE FROM owner_exception_snoozes WHERE exception_key = $1', [id]);
-    if (gone.rowCount) await writeAudit(db, actor, { action: 'owner_exception.unsnooze', entityType: 'owner_exception', entityId: id });
-    return { id, removed: Boolean(gone.rowCount) };
+    // Ends the snooze; the row (and its reason) is kept.
+    const ended = await db.query('UPDATE owner_exception_snoozes SET snoozed_until = $2 WHERE exception_key = $1 AND snoozed_until > $2', [id, now]);
+    if (ended.rowCount) {
+      await writeAudit(db, actor, { action: 'owner_exception.unsnooze', entityType: 'owner_exception', entityId: id });
+      await recordSnoozeEvent(db, undefined, id, 'unsnooze', ctx, null, now);
+    }
+    return { id, removed: Boolean(ended.rowCount) };
   });
 }

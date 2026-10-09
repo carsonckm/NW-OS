@@ -12,6 +12,7 @@ import { writeAudit } from '../audit';
 import { approvalMonitorRule } from '../modules/approvalMonitor';
 import { delegationRecommendationRule } from '../modules/delegationIntelligence';
 import { delegationWatchRule } from '../modules/delegationCoverage';
+import { exceptionLifecycleRule } from '../modules/exceptionLifecycle';
 
 type Row = Record<string, any>;
 
@@ -519,5 +520,5 @@ const recurringProblems: RuleDef = {
   },
 };
 
-export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue, recurringProblems, approvalMonitorRule, delegationRecommendationRule, delegationWatchRule];
+export const RULES: RuleDef[] = [projectRisk, drawingReview, productionBlocked, materialRequest, siteQcFailed, deliveryProblem, taskOverdue, variationInternal, invoiceOverdue, recurringProblems, approvalMonitorRule, delegationRecommendationRule, delegationWatchRule, exceptionLifecycleRule];
 export const RULE_BY_KEY = new Map(RULES.map((r) => [r.key, r]));

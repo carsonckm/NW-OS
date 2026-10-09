@@ -84,7 +84,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 users, notifications, automation, k
 
     it('exposes the rules with their human-in-loop limits, and only managers can force a run', async () => {
       const rules = (await as['Site Supervisor'].get('/api/automation/rules').expect(200)).body;
-      expect(rules.rules.length).toBe(13); // Phase 6 added the approval monitor (Batch 4), delegation recommendations (Batch 5) and the delegation watch (Batch 6)
+      expect(rules.rules.length).toBe(14); // Phase 6 added the approval monitor (Batch 4), delegation recommendations (Batch 5), the delegation watch (Batch 6) and the exception lifecycle (Batch 9)
       expect(rules.ai_forbidden_actions).toContain('Approve or reject drawings');
       expect((await as['Site Supervisor'].post('/api/automation/run')).status).toBe(403);
       await admin().post('/api/automation/run').expect(200);
