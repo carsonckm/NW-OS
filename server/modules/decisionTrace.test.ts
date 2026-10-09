@@ -214,8 +214,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 8: approval traceability and 
 
   // 13. Forgery.
   it('13. traceability cannot be forged: decision records are append-only and browser fields are ignored', async () => {
-    await expect(db.pool.query(`UPDATE audit_logs SET after = '{}' WHERE entity_id = $1`, [voPerm])).rejects.toThrow(/append-only/);
-    await expect(db.pool.query(`DELETE FROM audit_logs WHERE entity_id = $1`, [voPerm])).rejects.toThrow(/append-only/);
+    await expect(db.pool.query(`UPDATE audit_logs SET after = '{}' WHERE entity_id = $1`, [voPerm])).rejects.toThrow(/append-only|permission denied/);
+    await expect(db.pool.query(`DELETE FROM audit_logs WHERE entity_id = $1`, [voPerm])).rejects.toThrow(/append-only|permission denied/);
     const vo = await variation(P.temp, 900);
     await as['Project Manager'].post(`/api/variations/${vo}/transition`).send({ status: 'Client Approval', authority: { authority_type: 'Owner' }, trace: { rule: { max_value: 1e9 } }, approval_authority: 'forged' }).expect(200);
     const d = lastDecision(await traceOk('variation', vo));

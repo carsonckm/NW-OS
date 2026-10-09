@@ -45,7 +45,40 @@ export function sendError(res: Response, err: unknown) {
   return res.status(500).json({ error: 'internal_error', message: 'Unexpected error' });
 }
 
+/**
+ * A request the database refused for lack of privilege (SQLSTATE 42501). The application's
+ * own requests never need a privilege the runtime role lacks (docs/database-privileges.md), so
+ * every one is a security event: it is recorded through the audit trail (who, which endpoint,
+ * the database's refusal message; never the request body, parameters or credentials).
+ */
+export interface PrivilegeDenial {
+  method: string;
+  path: string;
+  message: string;
+  user?: { id?: string; name?: string; role?: string } | null;
+  ip?: string | null;
+}
+export type PrivilegeDenialMonitor = (denial: PrivilegeDenial) => Promise<void> | void;
+/** Registers the app's monitor (kept on app.locals, so each app records to its own database). */
+export function setPrivilegeDenialMonitor(app: { locals: Record<string, unknown> }, fn: PrivilegeDenialMonitor) {
+  app.locals.privilegeDenialMonitor = fn;
+}
+
 /** Express error middleware for API routers. */
-export function apiErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function apiErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  const privilegeMonitor = req.app?.locals?.privilegeDenialMonitor as PrivilegeDenialMonitor | undefined;
+  if ((err as { code?: string })?.code === '42501' && privilegeMonitor) {
+    const user = (req as Request & { auth?: { user?: PrivilegeDenial['user'] } }).auth?.user ?? null;
+    const denial: PrivilegeDenial = {
+      method: req.method,
+      path: `${req.baseUrl}${req.path}`.slice(0, 300),
+      message: String((err as Error).message ?? '').slice(0, 300),
+      user: user ? { id: user.id, name: user.name, role: user.role } : null,
+      ip: req.ip ?? null,
+    };
+    Promise.resolve()
+      .then(() => privilegeMonitor(denial))
+      .catch((e) => console.error('[security] could not record a database privilege denial:', (e as Error).message));
+  }
   sendError(res, err);
 }

@@ -28,7 +28,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
   // ------------------------------------------------------------------ database
   describe('database', () => {
     it('applies every migration once (re-running is a no-op)', async () => {
-      expect(await migrate(db.pool)).toEqual([]);
+      expect(await db.migrate()).toEqual([]);
       const applied = (await db.pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map((r) => r.name);
       expect(applied).toEqual(readdirSync('db/migrations').filter((f) => f.endsWith('.sql')).sort());
     });
@@ -53,10 +53,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
 
     it('protects drawing revisions and the audit log at the database level', async () => {
       await expect(db.pool.query(`UPDATE drawing_revisions SET file_url = '/other.pdf' WHERE id = 'rev-3'`)).rejects.toThrow(/immutable/);
-      await expect(db.pool.query(`DELETE FROM drawing_revisions WHERE id = 'rev-1'`)).rejects.toThrow(/cannot be deleted/);
+      await expect(db.pool.query(`DELETE FROM drawing_revisions WHERE id = 'rev-1'`)).rejects.toThrow(/cannot be deleted|permission denied/);
       await expect(db.pool.query(`UPDATE drawing_revisions SET approval_status = 'Approved' WHERE id = 'rev-1'`)).rejects.toThrow(/cannot be reinstated/);
-      await expect(db.pool.query(`UPDATE audit_logs SET action = 'x'`)).rejects.toThrow(/append-only/);
-      await expect(db.pool.query(`DELETE FROM audit_logs`)).rejects.toThrow(/append-only/);
+      await expect(db.pool.query(`UPDATE audit_logs SET action = 'x'`)).rejects.toThrow(/append-only|permission denied/);
+      await expect(db.pool.query(`DELETE FROM audit_logs`)).rejects.toThrow(/append-only|permission denied/);
     });
   });
 
@@ -647,8 +647,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
     });
 
     it('roll back together when the audit write fails', async () => {
-      // A test-only trigger makes the audit insert fail for one entity.
-      await db.pool.query(`
+      // A test-only trigger makes the audit insert fail for one entity (DDL: the owner's fixture).
+      await db.owner.query(`
         CREATE FUNCTION fail_audit_for_test() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
           IF NEW.entity_id = 'client-audit-boom' THEN RAISE EXCEPTION 'audit unavailable'; END IF;
@@ -658,7 +658,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       try {
         expect((await owner().post('/api/clients').send(newClient('client-audit-boom'))).status).toBe(500);
       } finally {
-        await db.pool.query('DROP TRIGGER fail_audit_for_test ON audit_logs; DROP FUNCTION fail_audit_for_test();');
+        await db.owner.query('DROP TRIGGER fail_audit_for_test ON audit_logs; DROP FUNCTION fail_audit_for_test();');
       }
       expect((await db.pool.query(`SELECT 1 FROM clients WHERE id = 'client-audit-boom'`)).rowCount).toBe(0);
       expect(await auditFor('client-audit-boom')).toEqual([]);
@@ -679,16 +679,15 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
     });
 
     it('keeps the audit log append-only', async () => {
-      await expect(db.pool.query(`UPDATE audit_logs SET action = 'x' WHERE entity_id = 'client-audit-ok'`)).rejects.toThrow(/append-only/);
-      await expect(db.pool.query(`DELETE FROM audit_logs WHERE entity_id = 'client-audit-ok'`)).rejects.toThrow(/append-only/);
+      await expect(db.pool.query(`UPDATE audit_logs SET action = 'x' WHERE entity_id = 'client-audit-ok'`)).rejects.toThrow(/append-only|permission denied/);
+      await expect(db.pool.query(`DELETE FROM audit_logs WHERE entity_id = 'client-audit-ok'`)).rejects.toThrow(/append-only|permission denied/);
     });
   });
 
   // -------------------------------------------------------- persistence check
   describe('persistence', () => {
     it('survives a new connection pool (server restart) with every collection intact', async () => {
-      const { createPool } = await import('../db/pool');
-      const fresh = createPool({ connectionString: TEST_DATABASE_URL, options: `-c search_path=${db.schema}` });
+      const fresh = db.connect();
       try {
         const agent = await signIn(buildApp(fresh), 'owner@test.local');
         const snap = (await agent.get('/api/data/snapshot').expect(200)).body;

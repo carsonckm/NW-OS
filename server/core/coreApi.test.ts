@@ -150,7 +150,7 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
     expect(updated.updated_at > item.updated_at).toBe(true);
 
     // A brand-new pool (like a server restart) sees the persisted change.
-    const fresh = createPool({ connectionString: TEST_DATABASE_URL, options: `-c search_path=${db.schema}` });
+    const fresh = db.connect();
     try {
       const freshApp = await signIn(buildApp(fresh), OWNER.email);
       const reread = (await freshApp.get(`/api/work-items/${item.id}`).expect(200)).body as WorkItem;

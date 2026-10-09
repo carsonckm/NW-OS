@@ -173,5 +173,7 @@ The Owner Exceptions panel shows:
   "active" (untracked) and is recorded on its first action or the next rule run.
 - **Exception keys:** a project exception's key includes its risk level, so Attention → At Risk is
   a new exception and the old one auto-resolves.
-- **Database owner:** the application's database login owns these tables, so a holder of that
-  credential could disable the triggers. This is the same residual risk as `audit_logs`.
+- **Database owner:** resolved in Batch 10. With role separation the server's login owns
+  nothing and cannot disable these triggers. Migration 025 also makes the database enforce the
+  state machine, recorded transitions and the critical-exception rules
+  (docs/database-privileges.md).

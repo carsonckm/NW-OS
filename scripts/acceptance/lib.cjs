@@ -2,7 +2,12 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { execSync } = require('child_process');
 const BASE = 'http://localhost:3000/';
 const SHOTS = __dirname + '/out/';
-const psql = (sql) => execSync(`PGPASSWORD=nwos psql -h localhost -U nwos -d ${process.env.PGDATABASE || 'nwos_dev'} -tAc ${JSON.stringify(sql)}`).toString().trim();
+// Fixture SQL (row reads / writes only). ACCEPTANCE_DATABASE_URL points it at another login, e.g.
+// the restricted runtime role of a role-separated database (docs/database-privileges.md).
+const psql = (sql) =>
+  process.env.ACCEPTANCE_DATABASE_URL
+    ? execSync(`psql "$ACCEPTANCE_DATABASE_URL" -tAc ${JSON.stringify(sql)}`).toString().trim()
+    : execSync(`PGPASSWORD=nwos psql -h localhost -U nwos -d ${process.env.PGDATABASE || 'nwos_dev'} -tAc ${JSON.stringify(sql)}`).toString().trim();
 async function open(account, browser) {
   const ctx = await browser.newContext({ viewport: { width: 1700, height: 1000 } });
   const page = await ctx.newPage();

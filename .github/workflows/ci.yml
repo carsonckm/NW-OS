@@ -12,7 +12,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -29,6 +29,9 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgres://nwos:nwos@localhost:5432/nwos_test
+      # The CI service user is a superuser: the privilege tests use it to create throwaway
+      # owner / migrator / app roles. The application under test never connects with it.
+      TEST_DATABASE_ADMIN_URL: postgres://nwos:nwos@localhost:5432/nwos_test
     steps:
       - uses: actions/checkout@v4
 
@@ -43,13 +46,33 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Migrate (checks migrations apply to a clean database)
-        run: npm run db:migrate
-        env:
-          DATABASE_URL: postgres://nwos:nwos@localhost:5432/nwos_test
+      # The production deployment order (docs/database-privileges.md), on a database of its own:
+      # bootstrap the roles as an administrator, migrate as the migrator, then verify the runtime
+      # credential is restricted and cannot migrate.
+      - name: Database roles, migrations and runtime privileges (clean database)
+        run: |
+          MIGRATOR_PW="$(openssl rand -hex 24)"; APP_PW="$(openssl rand -hex 24)"
+          echo "::add-mask::$MIGRATOR_PW"; echo "::add-mask::$APP_PW"
+          psql postgres://nwos:nwos@localhost:5432/nwos_test -c 'CREATE DATABASE nwos_deploy'
+          DATABASE_ADMIN_URL=postgres://nwos:nwos@localhost:5432/nwos_deploy NWOS_MIGRATOR_PASSWORD="$MIGRATOR_PW" NWOS_APP_PASSWORD="$APP_PW" npm run db:bootstrap-roles -- --transfer-database
+          DATABASE_MIGRATION_URL="postgres://nwos_migrator:$MIGRATOR_PW@localhost:5432/nwos_deploy" npm run db:migrate
+          # Repeatable: a second bootstrap and migration change nothing and keep it restricted.
+          DATABASE_ADMIN_URL=postgres://nwos:nwos@localhost:5432/nwos_deploy npm run db:bootstrap-roles
+          DATABASE_MIGRATION_URL="postgres://nwos_migrator:$MIGRATOR_PW@localhost:5432/nwos_deploy" npm run db:migrate
+          DATABASE_URL="postgres://nwos_app:$APP_PW@localhost:5432/nwos_deploy" npm run db:privileges
+          if DATABASE_URL="postgres://nwos_app:$APP_PW@localhost:5432/nwos_deploy" npm run db:migrate; then
+            echo "The runtime credential must not be able to run migrations"; exit 1
+          fi
 
       - name: Test
         run: npm test
+
+      # The whole suite again, as a real restricted runtime role: per test file, owner /
+      # migrator / app roles are created, the migrator migrates and the server connects as app.
+      - name: Test (restricted runtime role)
+        run: npm test
+        env:
+          TEST_DB_ROLE_MODE: restricted
 
       - name: Build
         run: npm run build

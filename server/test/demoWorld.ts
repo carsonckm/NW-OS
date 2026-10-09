@@ -54,8 +54,8 @@ export interface DemoWorld {
   as: Record<string, request.Agent>;
 }
 
-export async function setupDemoWorld(): Promise<DemoWorld> {
-  const db = await createTestDb();
+export async function setupDemoWorld(opts: { restricted?: boolean } = {}): Promise<DemoWorld> {
+  const db = await createTestDb(opts);
   const service = new DataService(db.pool);
   const ctx = await AccessContext.load(db.pool, SYSTEM);
   const demo = demoData();

@@ -331,13 +331,13 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
       await grant(Q);
       const id = await variation(Q);
       const r = await route('variation', id);
-      await db.pool.query(`CREATE FUNCTION b4_fail_note() RETURNS trigger AS $$ BEGIN IF NEW.rule_key LIKE 'approval_monitor:variation:${id}:%' THEN RAISE EXCEPTION 'simulated notification failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
-      await db.pool.query(`CREATE TRIGGER b4_fail_note BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION b4_fail_note()`);
+      await db.owner.query(`CREATE FUNCTION b4_fail_note() RETURNS trigger AS $$ BEGIN IF NEW.rule_key LIKE 'approval_monitor:variation:${id}:%' THEN RAISE EXCEPTION 'simulated notification failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
+      await db.owner.query(`CREATE TRIGGER b4_fail_note BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION b4_fail_note()`);
       let run;
       try {
         run = await monitor(at(r, 55));
       } finally {
-        await db.pool.query(`DROP TRIGGER b4_fail_note ON notifications; DROP FUNCTION b4_fail_note()`);
+        await db.owner.query(`DROP TRIGGER b4_fail_note ON notifications; DROP FUNCTION b4_fail_note()`);
       }
       expect(run.status).toBe('failed');
       expect(run.error).toMatch(/simulated notification failure/);

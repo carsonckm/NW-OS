@@ -357,6 +357,21 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       await decide('Owner / CEO', own).expect(200);
     });
 
+    it('current System Policy SYS-REQUEST-ASSIGNEE-* (Batch 2; open for the Owner\'s review): the named approver decides at any value, within the baseline permission, scope, sensitivity and self-approval limits', async () => {
+      // Pins today's behaviour so any change to this policy is a visible, reviewed decision
+      // (docs/database-privileges.md §8). It is not an endorsement of the policy.
+      const po = await purchaseOrder(projA, 500_000);
+      const big = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', assigned_approver_role: 'Project Manager', related_entity_type: 'purchase', related_entity_id: po });
+      expect(await resolve('user-pm', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: true, matchedRuleCode: 'SYS-REQUEST-ASSIGNEE-PURCHASE', resourceValue: 500_000, matchedRule: { min_value: null, max_value: null, locked: false } });
+      // The limits that do hold.
+      expect(await resolve('user-purchasing', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: false, reasonCode: 'SELF_APPROVAL_BLOCKED' });
+      const toSite = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', assigned_approver_role: 'Site Supervisor', related_entity_type: 'purchase', related_entity_id: po });
+      expect(await resolve('user-site', { resource: { kind: 'approval', id: toSite } })).toMatchObject({ allowed: false, reasonCode: 'INSUFFICIENT_PERMISSION' });
+      await setSensitivity(projA, 'Sensitive');
+      expect(await resolve('user-pm', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: false, reasonCode: 'SENSITIVITY_BLOCKED' });
+      await setSensitivity(projA, 'Normal');
+    });
+
     it('AI proposals: decided by the person they were put to, or the Owner', async () => {
       const p = await as['Site Supervisor'].post('/api/assistant/proposals').send({ action: 'create_task', params: { project_id: projA, title: 'Order more hinges', assigned_user_id: 'user-purchasing' } }).expect(201);
       expect(await resolve('user-pm', { resource: { kind: 'approval', id: p.body.id } })).toMatchObject({ allowed: false, decisionType: 'ai_proposal' });
