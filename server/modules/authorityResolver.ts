@@ -144,8 +144,71 @@ export interface AuthorityResolution {
   evaluatedDates: { start_at: string | null; end_at: string | null; now: string; passed: boolean } | null;
   /** Every rule considered for this decision type and what happened to it (for explanations). */
   rules: RuleOutcome[];
+  /**
+   * The terms of the rule that allowed the decision, exactly as the resolver read them in this
+   * transaction (Batch 8 decision traceability). Null unless basis = 'rule'.
+   */
+  matchedRule: RuleTerms | null;
+  /** Who raised / recorded the record, when the server knows it from the record. */
+  raisedById: string | null;
   resolvedAt: string;
 }
+
+/** A rule's terms as they were when a decision used it (never re-read later). */
+export interface RuleTerms {
+  id: string;
+  code: string;
+  name: string | null;
+  description: string | null;
+  kind: 'system' | 'owner';
+  effect: string;
+  authority_type: string | null;
+  target_role: string | null;
+  target_user_id: string | null;
+  target_permission: string | null;
+  project_id: string | null;
+  client_id: string | null;
+  min_value: number | null;
+  max_value: number | null;
+  max_risk: string | null;
+  conditions: Record<string, unknown>;
+  start_at: string | null;
+  end_at: string | null;
+  priority: number;
+  active: boolean;
+  locked: boolean;
+  granted_by: string | null;
+  absence_id: string | null;
+  extended_from: string | null;
+  updated_at: string | null;
+}
+const ruleTerms = (r: Row): RuleTerms => ({
+  id: r.id,
+  code: r.code,
+  name: r.name ?? null,
+  description: r.description ?? null,
+  kind: r.kind,
+  effect: r.effect,
+  authority_type: r.authority_type ?? null,
+  target_role: r.target_role ?? null,
+  target_user_id: r.target_user_id ?? null,
+  target_permission: r.target_permission ?? null,
+  project_id: r.project_id ?? null,
+  client_id: r.client_id ?? null,
+  min_value: r.min_value === null || r.min_value === undefined ? null : Number(r.min_value),
+  max_value: r.max_value === null || r.max_value === undefined ? null : Number(r.max_value),
+  max_risk: r.max_risk ?? null,
+  conditions: r.conditions ?? {},
+  start_at: r.start_at ? new Date(r.start_at).toISOString() : null,
+  end_at: r.end_at ? new Date(r.end_at).toISOString() : null,
+  priority: Number(r.priority),
+  active: Boolean(r.active),
+  locked: Boolean(r.locked),
+  granted_by: r.granted_by ?? null,
+  absence_id: r.absence_id ?? null,
+  extended_from: r.extended_from ?? null,
+  updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : null,
+});
 
 const OWNER_ROLE = 'Owner / CEO';
 const RISK_RANK: Record<string, number> = { 'On Track': 0, Attention: 1, 'At Risk': 2, Critical: 3 };
@@ -277,6 +340,8 @@ function result(ctx: AccessContext, facts: Partial<Facts> & { decisionType: stri
     baselinePermission: null,
     matchedRuleId: null,
     matchedRuleCode: null,
+    matchedRule: null,
+    raisedById: facts.raisedById ?? null,
     requiresOwner: false,
     evaluatedConditions: {},
     evaluatedScope: null,
@@ -481,7 +546,7 @@ async function resolveOne(db: Db, ctx: AccessContext, facts: Facts, action: Deci
 
   // Priority decides; on a tie the Owner requirement wins (never downgrade authority on ambiguity).
   if (allow && (!requireOwner || allow.outcome.priority > requireOwner.outcome.priority)) {
-    return out({ ...common, ...detail(allow), rules: outcomes, allowed: true, reasonCode: 'ALLOWED', basis: 'rule', matchedRuleId: allow.outcome.rule_id, matchedRuleCode: allow.outcome.rule_code, reason: `Allowed by ${allow.outcome.rule_code}` });
+    return out({ ...common, ...detail(allow), rules: outcomes, allowed: true, reasonCode: 'ALLOWED', basis: 'rule', matchedRuleId: allow.outcome.rule_id, matchedRuleCode: allow.outcome.rule_code, matchedRule: ruleTerms(rules.find((x) => x.id === allow.outcome.rule_id)!), reason: `Allowed by ${allow.outcome.rule_code}` });
   }
   // Not allowed. Only rules that would have decided it count: rules written for this person,
   // about this kind of decision, that would outrank every applicable require_owner rule had

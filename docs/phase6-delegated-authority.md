@@ -349,3 +349,10 @@ The LLM-assisted Operating Assistant is described in `phase6-ai-operating-layer.
 never an authority source: questions about who may approve are answered from approval routing
 and the authority resolver, AI suggestions run only through the AI Proposal approval, and
 requests to approve, reject or grant authority are refused before any model is called.
+
+## 11. Decision traceability and rejection notices (Batch 8)
+
+"Why was this person allowed to approve this?" is answered from a snapshot stored with each
+decision (the resolver's own result and the rule terms it read, in the decision's transaction,
+in the append-only audit log), never from today's rules. Rejections notify the original
+requester once. See `phase6-decision-traceability.md`.

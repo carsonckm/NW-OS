@@ -1,0 +1,16 @@
+Phase 6 Batch 8 acceptance (approval traceability + rejection notices) — 2026-10-09T10:30Z
+Fresh seeded dev database (migrate: 23 migrations, import-demo, auth:seed-dev), dev server, Chromium.
+  PLAYWRIGHT_MODULE=… node scripts/acceptance/phase6-trace.cjs
+First attempt stopped at step 9 (script bug: the temporary-authority confirm body recomputed end_at so it no longer matched the preview); fixed and re-run on a new fresh database:
+
+1 [Owner inspects a decision (Variations screen)] PASS — Marcus Lee (Project Manager) approved (internal approval) this on 09 Oct 2026, 10:28 under a permanent delegated authority: DA-0001 PM variations mv0tnkcj. Why it matched: Allowed by DA-0001 RECORDED WHEN THE DECISION WAS MADE Requested by Dato’ Nicholas Wong 
+2 [Approver inspects their own decision] PASS — Marcus Lee (Project Manager) approved (internal approval) this on 09 Oct 2026, 10:28 under a permanent delegated authority: DA-0001 PM variations mv0tnkcj. Why 
+3 [Requester sees their own decision; rejection notice] PASS — notice: 1 | Dato’ Nicholas Wong rejected your request. Comment: Use the certified system scaffold; panel: Dato’ Nicholas Wong (Owner / CEO) rejected this on 09 Oct 2026, 10:28 under the Owner, who may decide anything. Why it matched: The Owner may decide RECORDED WH
+4 [Requester has exactly one rejection notice] PASS — 1 notice(s): Rejected: APR-P6T-mv0tnkcj: Temporary scaffold; site notifications 7 → 8
+5 [Reprocessing the rejection: no duplicate] PASS — rejection notices for APR-P6T-mv0tnkcj: 1
+6 [Internal roles: only what is permitted] PASS — Admin 200, Production Manager 404, Accountant 404, Site Supervisor 404; PM on the approval (no part in it) 404; Production Manager panel: not offered
+7 [Client and Contractor denied (same as nonexistent)] PASS — Client 404 identical, Contractor 404 identical; client panel offered: false
+8 [History after the rule changed and was switched off] PASS — Marcus Lee (Project Manager) approved (internal approval) this on 09 Oct 2026, 10:28 under a permanent delegated authority: DA-0001 PM variations mv0tnkcj. Why it matched: Allowed by DA-0001 RECORDED WHEN THE DECISION WAS MADE Requested by Dato’ Nicholas Wong Decided by Marcus Lee (Project Manager) Permission variations.review Project P6 Trace mv0tnkcj · client Pavilion Retail Holdings Sdn Bhd Sen
+9 [History after a temporary authority expired] PASS — DA-0002: Marcus Lee (Project Manager) approved (internal approval) this on 09 Oct 2026, 10:29 under a temporary delegated authority: DA-0002 Temporary: Variation (internal approval) — Marcus Lee. Why it matched: Allowed by DA-0002 RECORDED WHEN THE DECISION WAS MADE Requested by Dato’ Nicholas Wong Decided b
+10 [No page or API errors] PASS — unexpected errors: {"owner-ceo":[],"project-manager":[],"site-supervisor":[],"production-manager":[],"accountant":[],"admin":[],"client":[],"contractor":[]} (expected 403/404 refusals filtered)
+10/10 passed

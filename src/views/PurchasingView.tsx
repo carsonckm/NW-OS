@@ -11,6 +11,7 @@ import { PurchaseOrder, MaterialRequest, Supplier, POStatus } from '../types';
 import { hasPermission } from '../utils/permissions';
 import { AuthorityNote } from '../components/AuthorityNote';
 import { authorityItem, useAuthority } from '../services/authority';
+import { DecisionTrace } from '../components/DecisionTrace';
 import { actionErrorOf, useRecords } from '../services/records';
 import {
   ShoppingBag,
@@ -379,6 +380,7 @@ export const PurchasingView: React.FC = () => {
                         <AuthorityNote className="max-w-xs text-left" authority={authority.get(authorityItem('purchase_order', po.id))} />
                       )
                     )}
+                    {authority.live && !awaitingIssue.includes(po) && po.status !== 'Draft' && <DecisionTrace className="max-w-md" kind="purchase_order" id={po.id} />}
                     {issueError?.id === po.id && <p role="alert" className="max-w-xs text-right text-[11px] font-bold text-rose-700">{issueError.message}</p>}
                     {/* Goods are received line by line; the server updates the PO status. */}
                     <GoodsReceivedButton po={po} />

@@ -8,6 +8,8 @@
  *   POST /api/approval-routing/reevaluate         { project_id? } route again against current authority (authority.view)
  *   POST /api/approval-routing/route              { kind, id } route one decision again (authority.view)
  *   GET  /api/approval-routing/history?kind=&id=  the decision's history (assignee, or authority.view)
+ *   GET  /api/approval-routing/trace?kind=&id=    why each decision was allowed, from its decision-time record
+ *                                                 (requester, decider, assignee, or authority.view; internal staff only)
  *   POST /api/approval-routing/assign             { kind, id, user_id, reason } the Owner assigns it to someone the resolver allows
  *
  * Owner Exception Center (Batch 4, Owner only):
@@ -27,6 +29,7 @@ import { NotFoundError, ValidationError } from '../core/repository';
 import { withTransaction, type Pool } from '../db/pool';
 import { apiErrorHandler } from '../http/errors';
 import { reevaluateRoutes, ROUTED_KINDS, syncRoute, unroutedDecisions, decisionState, type RoutedKind } from './approvalRouting';
+import { decisionTrace } from './decisionTrace';
 import { approvalTimeline, lifecycleContext, lifecycleOf, ownerAssign, ownerExceptions, snoozeException, unsnoozeException } from './approvalOps';
 import { clientConsentAllowed, resolveApprovalAuthority, type ResourceKind } from './authorityResolver';
 
@@ -202,6 +205,19 @@ export function createApprovalRoutingRouter({ pool, store }: { pool: Pool; store
       const assignees = (await pool.query(`SELECT DISTINCT assigned_user_id FROM approval_routes WHERE resource_kind = $1 AND resource_id = $2`, [kind, id])).rows.map((r) => r.assigned_user_id);
       if (!ctx.can('authority.view') && !assignees.includes(ctx.user.id)) throw new ForbiddenError('Only an assignee, the Owner or Admin can see this approval history');
       res.json({ kind, id, title: state.title, pending: state.pending, timeline: await approvalTimeline(pool, kind, id) });
+    })
+  );
+
+  // "Why can this person approve this?" — from each decision's append-only, decision-time record.
+  // A record the user may not read answers exactly like a missing one.
+  router.get(
+    '/approval-routing/trace',
+    wrap(async (req, res) => {
+      const kind = kindOf(req.query.kind);
+      const id = typeof req.query.id === 'string' ? req.query.id : '';
+      const trace = id ? await decisionTrace(pool, req.access!, kind, id) : undefined;
+      if (!trace) throw notFound(`Approval ${id}`);
+      res.json(trace);
     })
   );
 

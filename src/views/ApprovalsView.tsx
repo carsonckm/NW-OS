@@ -19,6 +19,7 @@ import {
 import { AuthorityNote } from '../components/AuthorityNote';
 import { ApprovalInbox } from '../components/ApprovalInbox';
 import { authorityItem, useAuthority } from '../services/authority';
+import { DecisionTrace } from '../components/DecisionTrace';
 import {
   CheckCircle2,
   XCircle,
@@ -511,6 +512,7 @@ export const ApprovalsView: React.FC = () => {
                       <div className="text-right">
                         <span className="text-[11px] text-slate-400 block">Status Closed</span>
                         <span className="text-xs font-bold text-slate-700">No Action Required</span>
+                        {authority.live && !['Client', 'Contractor'].includes(currentUser.role) && <DecisionTrace className="mt-2" kind="approval" id={item.id} />}
                       </div>
                     )}
                   </div>

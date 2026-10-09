@@ -12,6 +12,7 @@ import { actionErrorOf, useRecords } from '../../services/records';
 import { FormError } from '../../components/ui/FormError';
 import { AuthorityNote } from '../../components/AuthorityNote';
 import { authorityItem, useAuthority } from '../../services/authority';
+import { DecisionTrace } from '../../components/DecisionTrace';
 import { addDays, Button, Field, Input, Modal, newId, Pill, rm, Section, Select, TextArea, today } from '../../components/ui/forms';
 
 type GrnLine = { po_item_id: string; received_qty: number; damaged_qty: number; wrong_item: boolean; notes: string };
@@ -283,6 +284,7 @@ export const InvoicesPanel: React.FC<{ projectId: string }> = ({ projectId }) =>
                 <td className="px-3 py-3">
                   <Pill tone={inv.status === 'Approved' || inv.status === 'Paid' ? 'good' : inv.status === 'Overdue' ? 'bad' : 'warn'}>{inv.status}</Pill>
                   {inv.approved_by_name && <div className="text-[10px] text-slate-500">by {inv.approved_by_name}</div>}
+                  {authority.live && (inv.status === 'Approved' || inv.status === 'Paid') && <DecisionTrace className="mt-1" kind="invoice" id={inv.id} label="Why could they approve this?" />}
                 </td>
                 <td className="px-3 py-3 text-right">
                   {awaiting.includes(inv) &&

@@ -3,7 +3,8 @@ import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { HookContext, ModuleHooks, Row } from '../types';
-import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { requireAuthority, type AuthorityResolution } from '../authorityResolver';
+import { decisionAudit, notifyRejection } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
 
 /**
@@ -143,8 +144,11 @@ export const variationHooks: ModuleHooks = {
       entityId: existing.id as string,
       projectId: existing.project_id as string,
       before: { status: from },
-      after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}), ...(authority ? { authority: authorityAudit(authority) } : {}) },
+      after: { status: to, client_amount: incoming.client_amount, ...(note ? { note } : {}), ...(reference ? { reference } : {}), ...(authority ? { authority: await decisionAudit(h.db, authority) } : {}) },
     });
+    if (to === 'Rejected') {
+      await notifyRejection(h.db, { kind: 'variation', id: String(existing.id), requesterId: (existing.created_by_id as string) ?? null, deciderId: me.id, deciderName: me.name, title: `Variation ${String(existing.variation_number ?? existing.id)}: ${String(existing.title ?? '')}`.trim(), projectId: (existing.project_id as string) ?? null, comment: values.rejection_reason, linkTab: 'variations' });
+    }
     return values;
   },
 

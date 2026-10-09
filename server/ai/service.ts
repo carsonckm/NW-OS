@@ -15,7 +15,7 @@ import { Assistant, forbiddenRequest } from '../modules/assistant';
 import { raiseProposal, validateProposal, type ProposalAction } from '../modules/assistantActions';
 import { AI_FORBIDDEN_ACTIONS } from '../modules/automation';
 import { DataService } from '../modules/service';
-import { authorityContext, commercialContext, drawingContext, issueContext, overviewContext, PackBuilder, portfolioContext, projectContext, visibleProject } from './context';
+import { traceContext, authorityContext, commercialContext, drawingContext, issueContext, overviewContext, PackBuilder, portfolioContext, projectContext, visibleProject } from './context';
 import { AIGateway, type AIResponse } from './gateway';
 
 type Row = Record<string, any>;
@@ -34,7 +34,7 @@ const AUTHORITY_FORBIDDEN: { re: RegExp; what: string; where: string }[] = [
   { re: /\b(tell|promise|commit|confirm|send|email|whatsapp|message)\b.*\b(supplier|contractor|vendor)\b.*\b(order|price|date|payment|commit)/i, what: 'Make commitments to suppliers or contractors', where: 'Purchasing / the Project Manager' },
 ];
 /** A question about who may decide ("Who can approve this variation?") asks for information, not an action. */
-const ASKS_ABOUT_AUTHORITY = /^\s*(who|whom|which|what|why|how|when|is|are|does|do|show|list|explain|tell me|(can|could|may)\s+(i|we|anyone|someone|my|the|he|she|they)\b).*\b(can|may|should|could|will|allowed to|approves?|decides?|authority|eligible)\b/i;
+const ASKS_ABOUT_AUTHORITY = /^\s*(who|whom|which|what|why|how|when|is|are|does|do|show|list|explain|tell me|(can|could|may)\s+(i|we|anyone|someone|my|the|he|she|they)\b).*\b(can|may|should|could|will|allowed to|approves?|approved|rejected|decided|decides?|authority|eligible)\b/i;
 const ASKS_AI_TO_ACT = /\b(you|the ai|assistant|nw os)\s+(please\s+)?(approve|reject|grant|delegate|sign)\b|^\s*(please\s+)?(approve|reject|grant|delegate)\b/i;
 function refusal(question: string) {
   // Information about authority is answered from the resolver; a request for the AI to act is refused.
@@ -42,6 +42,8 @@ function refusal(question: string) {
   return AUTHORITY_FORBIDDEN.find((f) => f.re.test(question)) ?? forbiddenRequest(question);
 }
 
+/** About a past decision: answered from its decision-time record (Batch 8 traceability). */
+const TRACE_Q = /\b(why (was|were|did|has)\b.*\b(approv\w*|reject\w*|decided|allowed|sign\w* off)|who (approved|rejected|decided|signed)|on what authority|under (which|what) (rule|authority)|how was\b.*\b(approved|allowed))\b/i;
 const AUTHORITY_Q = /\b(who (can|may|should|will) (approve|decide|sign)|who approves|authority|delegat\w*|absen\w*|away|backup|my team (can )?handle|coverage|temporary|resolver|can .* approve)\b/i;
 const OVERVIEW_Q = /\b(today|briefing|attention|important|blocking|blocked|overdue|deliver\w*|qc|quality|issues?|problems?|risks?|changed|this week|tomorrow|waiting|pending|decisions?|need to know|what's happening|status)\b/i;
 const DRAWING_Q = /\b(drawing|revision|rev\.? ?\d+|rev [a-z0-9]+)\b/i;
@@ -74,7 +76,11 @@ export class AIService {
       return this.gateway.run(ctx, actor, { task: 'assistant_query', question, pack: b.pack, refused: forbidden.what, now });
     }
     let base: { text: string }[] = [];
-    if (AUTHORITY_Q.test(question)) {
+    if (TRACE_Q.test(question)) {
+      await traceContext(this.pool, ctx, b, question);
+      const known = b.pack.facts.filter((f) => f.section === 'Decision record' && f.confidence === 'Confirmed');
+      b.pack.fallback = known.length ? 'From the decision record (the authority terms recorded when the decision was made):' : 'The reason cannot be established from the available record.';
+    } else if (AUTHORITY_Q.test(question)) {
       await authorityContext(this.pool, ctx, b, project, now);
       b.pack.fallback = 'Approval authority as NW OS records it (from the authority resolver and approval routing):';
     } else {
