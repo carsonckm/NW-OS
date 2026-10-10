@@ -101,6 +101,8 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
     }
   };
   const life = e.lifecycle as Row | undefined;
+  // The server decides (it never changes back once an exception has been critical).
+  const dismissible = e.severity !== 'critical' && life?.dismissible !== false;
   const state: string = life?.state ?? 'active';
   const transition = (action: string, withReason?: string) => act(() => api.post(`/owner/exceptions/${action}`, { id: e.id, expected_state: state, ...(withReason !== undefined ? { reason: withReason } : {}) }));
   const isPendingApproval = String(e.id).startsWith('approval:');
@@ -158,6 +160,11 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
         </p>
       )}
       {state === 'resolved' && e.severity === 'critical' && <p className="text-[11px] font-bold text-rose-800">You marked this resolved, but its condition is still present; critical exceptions stay listed.</p>}
+      {!dismissible && life?.not_dismissible_reason && (
+        <p className="text-[11px] text-slate-600" data-testid="not-dismissible-reason">
+          <span className="font-bold">Cannot be dismissed or snoozed:</span> {life.not_dismissible_reason}
+        </p>
+      )}
       <p className="text-[11px] font-bold text-amber-800">Recommended: {e.recommended}</p>
       {error && <p className="text-[11px] font-bold text-rose-700" role="alert">{error}</p>}
       <div className="flex flex-wrap gap-1">
@@ -197,10 +204,10 @@ const Card: React.FC<{ e: Row; onDone: () => void }> = ({ e, onDone }) => {
             Resolve
           </Button>
         )}
-        {life && e.severity !== 'critical' && ['active', 'acknowledged', 'waiting', 'stale'].includes(state) && <Button onClick={() => reasonPanel('dismiss')}>Dismiss…</Button>}
+        {life && dismissible && ['active', 'acknowledged', 'waiting', 'stale'].includes(state) && <Button onClick={() => reasonPanel('dismiss')}>Dismiss…</Button>}
         {life && ['resolved', 'dismissed'].includes(state) && <Button onClick={() => reasonPanel('reopen')}>Reopen…</Button>}
         {life && <Button onClick={() => setPanel(panel === 'lifecycle' ? 'none' : 'lifecycle')}>{panel === 'lifecycle' ? 'Hide lifecycle' : 'Lifecycle history'}</Button>}
-        {e.severity !== 'critical' && !e.snoozed_until && (
+        {dismissible && !e.snoozed_until && (
           <Button onClick={() => setPanel('snooze')}>
             <BellOff className="h-3 w-3" /> Snooze
           </Button>

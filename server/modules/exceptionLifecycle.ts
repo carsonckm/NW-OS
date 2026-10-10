@@ -32,6 +32,7 @@ import { writeAudit, type AuditActor } from '../audit';
 import { NotFoundError, ValidationError } from '../core/repository';
 import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import type { PlannedAction, RuleDef } from '../automation/types';
+import { insertNotifications } from '../automation/notify';
 import { ownerExceptions, requireOwner, type OwnerException } from './approvalOps';
 
 type Row = Record<string, any>;
@@ -85,6 +86,67 @@ async function ensureState(db: Db, e: OwnerException, now: Date) {
   if (ins.rowCount) await insertEvent(db, e.id, { action: 'observed', to: 'active', severity: e.severity, data: { type: e.type, reasons: e.reasons.map((r) => r.code) } });
 }
 
+/** Records what the server sees now on an existing state row: severity, fingerprint, presence. */
+async function observe(db: Db, e: OwnerException, row: Row, now: Date) {
+  const fp = fingerprintOf(e);
+  // The fingerprint includes the severity; the stored severity is compared too, so a stored value
+  // that drifted on its own is corrected (and recorded) as well.
+  const changed = fp !== row.fingerprint || e.severity !== row.severity;
+  const recurred = !row.present;
+  await db.query(
+    `UPDATE owner_exception_states SET last_seen_at = $2, present = true, severity = $3, fingerprint = $4, title = $5${changed ? ', last_activity_at = $2' : ''} WHERE exception_key = $1`,
+    [e.id, now, e.severity, fp, String(e.title).slice(0, 500)]
+  );
+  if (changed) await insertEvent(db, e.id, { action: 'changed', from: row.state, to: row.state, severity: e.severity, data: { before: row.fingerprint, after: fp } });
+  if (recurred) await insertEvent(db, e.id, { action: 'recurred', from: row.state, to: row.state, severity: e.severity, reason: ['resolved', 'dismissed'].includes(row.state) ? 'The condition is present again. It stays closed until the Owner reopens it.' : null });
+  return { changed, recurred };
+}
+
+/**
+ * Before a dismissal or snooze: brings the exception's stored record (its severity in particular)
+ * up to date with what the server sees now, exactly as the lifecycle rule would, in its own
+ * transaction. The database refuses a dismissal or snooze by the stored severity (migration 026)
+ * and refuses lowering a critical exception in the same transaction as dismissing or snoozing it,
+ * so the record is brought up to date first and the action then checks it under the row lock.
+ */
+export async function refreshObservation(pool: Pool, e: OwnerException, now: Date) {
+  await withTransaction(pool, async (db) => {
+    const row = (await db.query('SELECT * FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [e.id])).rows[0];
+    if (row && (fingerprintOf(e) !== row.fingerprint || e.severity !== row.severity || !row.present)) await observe(db, e, row, now);
+  });
+}
+
+/**
+ * Why an exception cannot be dismissed or snoozed. The restriction is permanent: an exception
+ * that has been critical stays non-dismissible even if its severity drops (migration 027).
+ */
+export const NOT_DISMISSIBLE = {
+  critical: 'Critical: it can never be dismissed or snoozed, now or later, even if its severity drops. You can acknowledge it, put it on waiting or resolve it.',
+  locked: (act: 'dismiss' | 'snooze' | 'both', since: unknown) =>
+    `This exception has been critical${since ? ` (since ${new Date(since as string).toISOString().slice(0, 10)})` : ''}, so it can never be ${act === 'dismiss' ? 'dismissed' : act === 'snooze' ? 'snoozed' : 'dismissed or snoozed'}. You can acknowledge it, put it on waiting or resolve it.`,
+};
+/** Whether the Owner may dismiss / snooze this exception, and the permanent reason if not. */
+export function dismissibility(severity: string, row: Row | undefined) {
+  if (row?.critical_locked && severity !== 'critical') return { dismissible: false, not_dismissible_reason: NOT_DISMISSIBLE.locked('both', row.critical_locked_at) };
+  if (severity === 'critical' || row?.critical_locked) return { dismissible: false, not_dismissible_reason: NOT_DISMISSIBLE.critical };
+  return { dismissible: true, not_dismissible_reason: null };
+}
+
+/**
+ * The severity a dismissal or snooze is checked and recorded against: the stored one, which must
+ * also be what the server sees now. Critical is refused; a mismatch means the exception changed
+ * since the request was read (a conflict: reload and try again).
+ */
+function storedSeverityFor(act: 'dismiss' | 'snooze', row: Row, live: OwnerException | undefined) {
+  const stored = row.severity as string;
+  if (row.critical_locked && stored !== 'critical' && live?.severity !== 'critical') throw new ValidationError(NOT_DISMISSIBLE.locked(act, row.critical_locked_at));
+  if (stored === 'critical' || live?.severity === 'critical') {
+    throw new ValidationError(act === 'dismiss' ? 'A critical exception cannot be dismissed (it can be acknowledged, put on waiting or resolved)' : 'A critical exception cannot be snoozed (safety, Strategic, blocked production / site / payment, no valid approver, critical project)');
+  }
+  if (live && live.severity !== stored) throw new ConflictError('The exception changed while you were acting on it: reload and try again');
+  return stored;
+}
+
 /** The live exceptions (visible and snoozed), keyed by id. */
 async function liveExceptions(pool: Pool, ctx: Ctx, now: Date) {
   const cur = await ownerExceptions(pool, ctx, now);
@@ -108,6 +170,7 @@ export async function transitionException(pool: Pool, ctx: Ctx, actor: AuditActo
   if (b.expected_state !== undefined && !(STATES as readonly string[]).includes(b.expected_state)) throw new ValidationError('expected_state is not a lifecycle state');
 
   const live = (await liveExceptions(pool, ctx, now)).get(b.id);
+  if (act === 'dismiss' && live) await refreshObservation(pool, live, now);
   return withTransaction(pool, async (db) => {
     if (live) await ensureState(db, live, now);
     const row = (await db.query('SELECT * FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [b.id])).rows[0];
@@ -119,9 +182,8 @@ export async function transitionException(pool: Pool, ctx: Ctx, actor: AuditActo
     // Repeating the same action (a double click, a replayed request) changes nothing.
     if (from === to && !(act === 'wait' && reason && reason !== row.waiting_for)) return { id: b.id, state: from, changed: false };
     if (!FROM[act].includes(from)) throw new ValidationError(`Cannot ${act} an exception that is ${from}`);
-    const severity: string = live?.severity ?? row.severity;
+    const severity: string = act === 'dismiss' ? storedSeverityFor('dismiss', row, live) : live?.severity ?? row.severity;
     const present = Boolean(live);
-    if (act === 'dismiss' && severity === 'critical') throw new ValidationError('A critical exception cannot be dismissed (it can be acknowledged, put on waiting or resolved)');
     if (act === 'resolve' && present && b.id.startsWith('approval:')) throw new ValidationError('This approval is still pending: decide it on its record (it resolves on its own once decided)');
     if (act === 'reopen' && !present) throw new ValidationError('Its condition is no longer present: there is nothing to reopen');
     const who = { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role };
@@ -138,10 +200,11 @@ export async function transitionException(pool: Pool, ctx: Ctx, actor: AuditActo
 /** Snooze / un-snooze also appear in the exception's history. */
 export async function recordSnoozeEvent(db: Db, e: OwnerException | undefined, key: string, action: 'snooze' | 'unsnooze', ctx: Ctx, reason: string | null, now: Date, data: Row = {}) {
   if (e) await ensureState(db, e, now);
-  const row = (await db.query('SELECT state FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [key])).rows[0];
+  const row = (await db.query('SELECT state, severity, critical_locked, critical_locked_at FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [key])).rows[0];
   if (!row) return;
+  const severity = action === 'snooze' ? storedSeverityFor('snooze', row, e) : e?.severity ?? null;
   await db.query('UPDATE owner_exception_states SET last_activity_at = $2 WHERE exception_key = $1', [key, now]);
-  await insertEvent(db, key, { action, from: row.state, to: row.state, actor: { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role }, reason, severity: e?.severity ?? null, data });
+  await insertEvent(db, key, { action, from: row.state, to: row.state, actor: { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role }, reason, severity, data });
 }
 
 /** The full history of one exception (Owner only; 404 like a missing one otherwise). */
@@ -169,7 +232,11 @@ export async function closedExceptions(db: Db, ctx: Ctx, now: Date, days = 30) {
  */
 export async function syncExceptionLifecycle(pool: Pool, ctx: Ctx, now = new Date()) {
   const live = await liveExceptions(pool, ctx, now);
-  const counts = { observed: 0, changed: 0, cleared: 0, auto_resolved: 0, recurred: 0, stale: 0 };
+  const counts = { observed: 0, changed: 0, cleared: 0, auto_resolved: 0, recurred: 0, stale: 0, findings_new: 0, findings_cleared: 0, findings_alerted: 0 };
+  // Integrity first: before this run records anything (a lowered stored severity is still visible).
+  const found = await detectIntegrityFindings(pool, live, now);
+  counts.findings_new = found.created;
+  counts.findings_cleared = found.cleared;
   await withTransaction(pool, async (db) => {
     const rows = await lifecycleRows(db, [...live.keys()]);
     for (const e of live.values()) {
@@ -179,21 +246,9 @@ export async function syncExceptionLifecycle(pool: Pool, ctx: Ctx, now = new Dat
         counts.observed++;
         continue;
       }
-      const fp = fingerprintOf(e);
-      const changed = fp !== row.fingerprint;
-      const recurred = !row.present;
-      await db.query(
-        `UPDATE owner_exception_states SET last_seen_at = $2, present = true, severity = $3, fingerprint = $4, title = $5${changed ? ', last_activity_at = $2' : ''} WHERE exception_key = $1`,
-        [e.id, now, e.severity, fp, String(e.title).slice(0, 500)]
-      );
-      if (changed) {
-        counts.changed++;
-        await insertEvent(db, e.id, { action: 'changed', from: row.state, to: row.state, severity: e.severity, data: { before: row.fingerprint, after: fp } });
-      }
-      if (recurred) {
-        counts.recurred++;
-        await insertEvent(db, e.id, { action: 'recurred', from: row.state, to: row.state, severity: e.severity, reason: ['resolved', 'dismissed'].includes(row.state) ? 'The condition is present again. It stays closed until the Owner reopens it.' : null });
-      }
+      const seen = await observe(db, e, row, now);
+      if (seen.changed) counts.changed++;
+      if (seen.recurred) counts.recurred++;
     }
     // Conditions that cleared.
     const gone = (await db.query(`SELECT * FROM owner_exception_states WHERE present AND NOT (exception_key = ANY($1)) FOR UPDATE`, [[...live.keys()]])).rows;
@@ -218,7 +273,113 @@ export async function syncExceptionLifecycle(pool: Pool, ctx: Ctx, now = new Dat
       counts.stale++;
     }
   });
+  // Alerts are delivered after the findings are committed, one by one, and retried by every
+  // run until delivered: a failed alert never loses the finding.
+  counts.findings_alerted = await alertIntegrityFindings(pool, now);
   return counts;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Integrity findings (Batch 11). The database prevents dismissing or snoozing an exception that
+// is, or has been, recorded as critical. It cannot prevent what a holder of the runtime
+// credential records about an exception NW OS has not recorded yet, or a stored severity lowered
+// with a forged event. The lifecycle rule compares what is stored with what the server sees now
+// and records every inconsistency as a finding: evidence only, nothing is repaired or erased.
+// ---------------------------------------------------------------------------------------------
+
+export const INTEGRITY_FINDINGS = {
+  closed_while_critical: {
+    title: 'A critical exception is dismissed or snoozed',
+    explain: 'NW OS sees this exception as critical now, but it is stored as dismissed or snoozed. Critical exceptions cannot be dismissed or snoozed through NW OS. Either it was closed while not critical and has become critical since, or the stored record was changed outside NW OS.',
+  },
+  severity_lowered_while_critical: {
+    title: 'A critical exception was stored with a lower severity',
+    explain: 'NW OS sees this exception as critical now, and it had been recorded as critical, but its stored severity was lowered. Either its risk fell and rose again between two runs, or the stored record was changed outside NW OS.',
+  },
+  locked_but_closed: {
+    title: 'An exception that has been critical is dismissed or snoozed',
+    explain: 'This exception has been critical, so it can never be dismissed or snoozed, yet it is stored as dismissed or snoozed. It may have been closed before it became critical, or the stored record was changed outside NW OS.',
+  },
+} as const;
+type FindingKind = keyof typeof INTEGRITY_FINDINGS;
+
+async function detectIntegrityFindings(pool: Pool, live: Map<string, OwnerException>, now: Date) {
+  return withTransaction(pool, async (db) => {
+    const rows = await lifecycleRows(db, [...live.keys()]);
+    const snoozes = new Map((await db.query('SELECT exception_key, snoozed_until FROM owner_exception_snoozes WHERE snoozed_until > $1', [now])).rows.map((r) => [r.exception_key as string, r]));
+    const detected = new Map<string, { key: string; finding: FindingKind; details: Row }>();
+    for (const e of live.values()) {
+      const row = rows.get(e.id);
+      if (!row) continue;
+      const snooze = snoozes.get(e.id);
+      const closed = row.state === 'dismissed' || Boolean(snooze);
+      const details = {
+        live_severity: e.severity,
+        stored_severity: row.severity,
+        state: row.state,
+        snoozed_until: snooze ? new Date(snooze.snoozed_until).toISOString() : null,
+        critical_locked: Boolean(row.critical_locked),
+        critical_locked_at: row.critical_locked_at ? new Date(row.critical_locked_at).toISOString() : null,
+        reasons: e.reasons.filter((r) => r.level === 'critical').map((r) => r.code),
+      };
+      const add = (finding: FindingKind, extra: Row = {}) => detected.set(`${e.id}|${finding}`, { key: e.id, finding, details: { ...details, ...extra } });
+      if (e.severity === 'critical' && closed) add('closed_while_critical');
+      else if (row.critical_locked && closed) add('locked_but_closed');
+      if (e.severity === 'critical' && row.severity !== 'critical' && row.critical_locked) {
+        const lowering = (await db.query(`SELECT id, occurred_at, actor_name FROM owner_exception_events WHERE exception_key = $1 AND action IN ('changed', 'observed') AND severity IS DISTINCT FROM 'critical' ORDER BY id DESC LIMIT 1`, [e.id])).rows[0];
+        add('severity_lowered_while_critical', lowering ? { lowering_event_id: String(lowering.id), lowering_event_at: new Date(lowering.occurred_at).toISOString(), lowering_event_actor: lowering.actor_name ?? 'NW OS' } : {});
+      }
+    }
+    const open = (await db.query('SELECT * FROM owner_exception_integrity_findings WHERE cleared_at IS NULL FOR UPDATE')).rows;
+    const openByKey = new Map(open.map((f) => [`${f.exception_key}|${f.finding}`, f]));
+    const actor = { name: 'NW OS exception lifecycle', role: 'system' };
+    let created = 0;
+    let cleared = 0;
+    for (const [k, d] of detected) {
+      const existing = openByKey.get(k);
+      if (existing) {
+        // Still open: no new alert, only when it was last seen.
+        await db.query('UPDATE owner_exception_integrity_findings SET last_detected_at = GREATEST(last_detected_at, $2) WHERE id = $1', [existing.id, now]);
+        continue;
+      }
+      const ins = (await db.query(
+        `INSERT INTO owner_exception_integrity_findings (exception_key, finding, first_detected_at, last_detected_at, details) VALUES ($1, $2, $3, $3, $4)
+         ON CONFLICT (exception_key, finding) WHERE cleared_at IS NULL DO NOTHING RETURNING id`,
+        [d.key, d.finding, now, JSON.stringify(d.details)]
+      )).rows[0];
+      if (!ins) continue;
+      created++;
+      await writeAudit(db, actor, { action: 'security.exception_integrity_finding', entityType: 'owner_exception', entityId: d.key, after: { finding_id: String(ins.id), finding: d.finding, ...d.details }, details: INTEGRITY_FINDINGS[d.finding].title });
+    }
+    for (const f of open) {
+      if (detected.has(`${f.exception_key}|${f.finding}`)) continue;
+      await db.query('UPDATE owner_exception_integrity_findings SET cleared_at = $2 WHERE id = $1', [f.id, now]);
+      cleared++;
+      await writeAudit(db, actor, { action: 'security.exception_integrity_cleared', entityType: 'owner_exception', entityId: f.exception_key, after: { finding_id: String(f.id), finding: f.finding }, details: 'The inconsistency no longer holds (the finding and its evidence are kept)' });
+    }
+    return { created, cleared };
+  });
+}
+
+/** Alerts the active Owner(s) about open findings not alerted yet; one notification per finding. */
+async function alertIntegrityFindings(pool: Pool, now: Date) {
+  const pending = (await pool.query('SELECT * FROM owner_exception_integrity_findings WHERE cleared_at IS NULL AND alerted_at IS NULL ORDER BY id')).rows;
+  let delivered = 0;
+  for (const f of pending) {
+    try {
+      await withTransaction(pool, async (db) => {
+        const owners = (await db.query(`SELECT id FROM users WHERE role = 'Owner / CEO' AND is_active ORDER BY id`)).rows.map((r) => r.id as string);
+        if (!owners.length) throw new Error('No active Owner to alert');
+        const kind = INTEGRITY_FINDINGS[f.finding as FindingKind];
+        await insertNotifications(db, owners, { title: `Integrity check: ${kind.title}`, message: `${f.exception_key}. ${kind.explain}`, type: 'warning', priority: 'urgent', project_id: null, link_tab: 'dashboard', entity_type: 'owner_exception', entity_id: f.exception_key }, `exception-integrity:${f.id}`, 'exception_lifecycle');
+        await db.query('UPDATE owner_exception_integrity_findings SET alerted_at = $2, alert_attempts = alert_attempts + 1, last_alert_error = NULL WHERE id = $1', [f.id, now]);
+      });
+      delivered++;
+    } catch (err) {
+      await pool.query('UPDATE owner_exception_integrity_findings SET alert_attempts = alert_attempts + 1, last_alert_error = $2 WHERE id = $1', [f.id, String((err as Error).message).slice(0, 300)]).catch(() => {});
+    }
+  }
+  return delivered;
 }
 
 /** The Owner's context for the scheduled lifecycle rule (the Exception Center is the Owner's). */
@@ -257,17 +418,18 @@ export async function ownerExceptionCenter(pool: Pool, ctx: Ctx, now = new Date(
   const life = (key: string) => {
     const r = rows.get(key);
     return r
-      ? { state: r.state as LifecycleStateName, state_changed_at: new Date(r.state_changed_at).toISOString(), last_activity_at: new Date(r.last_activity_at).toISOString(), waiting_for: r.waiting_for ?? null, present: true, tracked: true }
-      : { state: 'active' as LifecycleStateName, state_changed_at: null, last_activity_at: null, waiting_for: null, present: true, tracked: false };
+      ? { state: r.state as LifecycleStateName, state_changed_at: new Date(r.state_changed_at).toISOString(), last_activity_at: new Date(r.last_activity_at).toISOString(), waiting_for: r.waiting_for ?? null, present: true, tracked: true, critical_locked: Boolean(r.critical_locked), critical_locked_at: r.critical_locked_at ? new Date(r.critical_locked_at).toISOString() : null }
+      : { state: 'active' as LifecycleStateName, state_changed_at: null, last_activity_at: null, waiting_for: null, present: true, tracked: false, critical_locked: false, critical_locked_at: null as string | null };
   };
-  const exceptions: (OwnerException & { lifecycle: ReturnType<typeof life> })[] = [];
+  const withLife = <T extends OwnerException>(e: T) => ({ ...e, lifecycle: { ...life(e.id), ...dismissibility(e.severity, rows.get(e.id)) } });
+  const exceptions: ReturnType<typeof withLife<OwnerException>>[] = [];
   const closedLive: typeof exceptions = [];
   for (const e of base.exceptions) {
-    const item = { ...e, lifecycle: life(e.id) };
+    const item = withLife(e);
     if (['resolved', 'dismissed'].includes(item.lifecycle.state) && e.severity !== 'critical') closedLive.push(item);
     else exceptions.push(item);
   }
-  const snoozed = base.snoozed.map((e) => ({ ...e, lifecycle: life(e.id) }));
+  const snoozed = base.snoozed.map((e) => withLife(e));
   const liveIds = new Set([...base.exceptions, ...base.snoozed].map((e) => e.id));
   const closed = [
     ...closedLive.map((e) => ({ id: e.id, title: e.title, type: e.type, severity: e.severity, project_id: e.project_id, state: e.lifecycle.state, state_changed_at: e.lifecycle.state_changed_at, present: true })),

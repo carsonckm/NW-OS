@@ -84,18 +84,122 @@ and leave a permanent record. They cannot judge whether the recorded facts are t
   - So an event from an earlier transaction cannot cover a later change.
 - **Reasons:** dismissing needs a reason. Reopening needs a `reopen` event with a reason.
 - **Critical exceptions:** a dismissal or snooze is refused when its event records the severity
-  as critical, or records none.
-  - The server writes the severity it recomputed from live data at the moment of the action, so
-    through the application a critical exception is never dismissed or snoozed.
-  - The database cannot recompute severity itself. A writer holding the runtime credential could
-    record a false, non-critical severity on the event; that false record stays permanently in
-    the append-only history.
+  as critical, or records none. Migration 026 (Batch 11, below) tightened this to the stored
+  severity.
 - **Severity:** a severity change needs a `changed` event.
 - **New exceptions:** a new exception starts `active` with its `observed` event.
 - **Snoozes:** a snooze needs a recorded exception and its `snooze` event.
 
 The application already wrote state and event together in one transaction, so no application
 code changed for this. The full suite passes in both modes.
+
+### Migration 026 (Batch 11): critical exceptions, by the stored severity
+
+Migration 025 checked the severity written on the dismissal or snooze event, and the writer
+chooses that value. Migration `026_phase6_critical_exception_integrity.sql` replaces the two
+check functions (the triggers are kept) so that the **stored severity**
+(`owner_exception_states.severity`) decides:
+
+- **Stored severity decides:** a dismissal or snooze is refused while the exception's stored
+  severity is critical. A dismissal is also refused if the row was critical just before the
+  change. The severity on the event is never accepted as proof.
+- **Event must match:** the dismissal or snooze event must record exactly the stored severity.
+  It must be its own `dismiss` / `snooze` event, written in the same transaction. An event of
+  another exception, another action or an earlier transaction does not count.
+- **No same-transaction lowering:** a critical exception cannot be lowered and dismissed or
+  snoozed in one transaction, in any order of statements (including in the same statement).
+- **Error code:** lifecycle refusals use their own SQLSTATE, `NWX01`. The API answers it with a
+  generic `409 conflict` ("reload and try again"). The database's message stays in the server
+  log.
+
+The application keeps the stored severity authoritative and current:
+- **Where severity comes from:** the server computes an exception's severity from live data
+  (the most severe of its reasons). It is stored when the exception is first recorded, and kept
+  current by the hourly lifecycle rule, which writes a `changed` event.
+- **Before an action:** before a dismissal or snooze, the server first brings that exception's
+  stored record up to date with what it sees now, in its own transaction. This is exactly what
+  the lifecycle rule would do: a stale or drifted stored severity is corrected and recorded with
+  a `changed` event.
+- **Under the row lock:** the action then checks, with the row locked, that the stored severity
+  is not critical and matches what the server sees. A mismatch means the exception changed in
+  the meantime: `409 conflict`.
+- **No other change:** acknowledge, wait, resolve and reopen are unchanged, including for
+  critical exceptions.
+
+### Migration 027 (Batch 11): once critical, never dismissible; integrity findings
+
+**A. A permanent lock, maintained by the database.**
+- **Columns:** `owner_exception_states.critical_locked` (and `critical_locked_at`).
+- **How it is set:** the database sets it itself, through triggers owned by `nwos_owner`:
+  - when the stored severity is critical, on insert or update;
+  - when any history event records the exception as critical. History is append-only, so such
+    an event cannot be removed.
+- **It is never cleared:** an attempt to clear it is refused (`NWX01`), and its date cannot be
+  moved.
+- **What it blocks:** a locked exception cannot be dismissed or snoozed, through the API or by
+  direct SQL. This holds even after its stored severity is lowered, legitimately (its risk fell)
+  or with a forged `changed` event.
+- **What it allows:** acknowledge, wait, resolve and reopen work as before.
+- **Existing data:** the migration locks every exception that is, or was ever recorded as,
+  critical.
+- **In the Owner Exception Center:**
+  - the API returns `lifecycle.dismissible` and `lifecycle.not_dismissible_reason`;
+  - the screen hides Dismiss and Snooze, and states the permanent reason. For example: "This
+    exception has been critical (since …), so it can never be dismissed or snoozed. You can
+    acknowledge it, put it on waiting or resolve it."
+- **Live severity:** the live-severity display is unchanged.
+
+**B. Integrity findings** (`owner_exception_integrity_findings`; never deleted: no DELETE for the
+runtime role, and triggers refuse delete and truncate).
+- **When:** the hourly `exception_lifecycle` rule compares what is stored with what the server
+  sees now. It does this **before** it records anything, so a lowered stored severity is still
+  visible.
+- **What it records:**
+  - `closed_while_critical`: dismissed or snoozed, while live-critical;
+  - `severity_lowered_while_critical`: live-critical and locked, but stored with a lower
+    severity. The finding names the most recent lowering event.
+  - `locked_but_closed`: locked, not live-critical, and dismissed or snoozed.
+- **Deduplication:** there is one open finding per exception and kind, enforced by a unique
+  index, so repeated or concurrent runs neither duplicate findings nor repeat alerts.
+- **For each new finding:**
+  - a `security.exception_integrity_finding` audit row, recording the states, severities, lock
+    and event ids (no secrets or payloads);
+  - an urgent notification to every active Owner, one per finding;
+  - an `INTEGRITY_FINDING` entry in the Owner Exception Center, while the finding is open.
+- **Failed alerts:** a failed alert is recorded on the finding (`alert_attempts`,
+  `last_alert_error`) and retried by every run until it is delivered. The finding itself is
+  never lost.
+- **When the inconsistency ends:** the next run sets `cleared_at` and writes a
+  `security.exception_integrity_cleared` audit row. The finding row and its evidence stay.
+- **Nothing is repaired automatically:** no state is changed, no event is altered. The Owner
+  decides, for example to reopen and end the snooze, through audited Owner actions. The run
+  does, as always, record the real severity (a `changed` event), so a detected exception is
+  locked from then on.
+- **Findings may be legitimate.** An exception dismissed while not critical that has become
+  critical since, or a risk that fell and rose again between two runs, produces a finding too.
+  The finding text says so.
+
+### Migration 028 (Batch 11 final review): fixed keys, findings as evidence
+
+The final security review, run as the real `nwos_app` role, found two gaps in 027. Both are
+fixed and tested.
+- **Moving a snooze onto a locked exception.** An active snooze on a non-critical exception
+  could be moved onto a locked one with `UPDATE owner_exception_snoozes SET exception_key = …`.
+  The snooze check let an "unchanged" snooze through by comparing its end only.
+  - Now the exception key of a state or snooze row cannot be changed: a trigger refuses it,
+    with `NWX01`.
+  - The snooze check also compares the key.
+- **Findings could be rewritten.** The runtime role could rewrite finding rows: what was found,
+  its key and kind, its dates, or fake "cleared" and "alerted". A guard trigger now refuses
+  changes to what was found and when it was first detected. Also:
+  - `last_detected_at` and `alert_attempts` only move forward;
+  - a cleared finding stays cleared; a recurrence is a new finding;
+  - a delivered alert cannot be changed;
+  - a finding can be marked alerted only once the Owner notification for it exists.
+
+  A finding cleared by a forged update is detected again, as a new finding with a new audit row
+  and alert, on the next run while the inconsistency holds (tested). The audit log keeps a copy
+  of every finding.
 
 ## 3. Startup checks (no silent fallback)
 
@@ -375,9 +479,17 @@ as a time-boxed emergency measure.
   function, change a table, skip triggers for its session, grant itself privileges or act as
   another role.
 - **Exception state follows the lifecycle:** a state change must be a valid transition and come
-  with a matching history event in the same transaction. A dismissal or snooze whose event
-  records the exception as critical is refused. A severity change, a snooze and a new exception
-  must each be recorded.
+  with a matching history event in the same transaction. A severity change, a snooze and a new
+  exception must each be recorded.
+- **Critical exceptions (Batch 11):**
+  - an exception that is stored, or has ever been recorded, as critical is permanently locked:
+    it cannot be dismissed or snoozed, whatever severity the request or the event claims, and
+    even after its stored severity is lowered in another transaction (**attack path 1 is
+    prevented**);
+  - the lock cannot be cleared, and an active snooze cannot be moved onto a locked exception
+    (exception keys are fixed);
+  - it cannot be lowered and dismissed or snoozed in the same transaction;
+  - a fabricated or unrelated event does not authorise a dismissal or snooze.
 - **The locked System Policy rows** (the Sensitive / Strategic ceilings) cannot be changed,
   deactivated or deleted.
 
@@ -387,8 +499,26 @@ credential can write every row the application can write, like a server bug coul
 - **History:** it can **append** plausible-looking audit rows and exception history events,
   including ones that satisfy the lifecycle checks. Examples:
   - a "dismiss" with a reason and a forged actor name;
-  - a critical exception recorded as non-critical (a false severity on the event, or a forged
-    "changed" event lowering it), then dismissed or snoozed.
+  - a forged `changed` event lowering a critical exception's stored severity. Since migration
+    027 this no longer lets it be dismissed or snoozed (the lock stays). It is detected as
+    `severity_lowered_while_critical` on the next hourly run.
+  - **attack path 2, detected but NOT prevented:** an exception NW OS has not recorded yet (a
+    new critical condition, until the next hourly run or Owner action records it) can be
+    recorded first with a false, non-critical severity, then snoozed and dismissed.
+    - The database cannot know the real severity, which is computed by the server from
+      business data that the same credential can also change. So it cannot refuse this
+      without trusting the application.
+    - What remains:
+      - the Owner Center still shows the exception as critical (live severity);
+      - the next hourly run records the real severity, which locks it;
+      - that run also records a `closed_while_critical` finding, writes a security audit row
+        and alerts the Owner;
+      - the forged records stay as evidence.
+    - The exposure window is the time until the next run (at most an hour). Within it nothing
+      alerts.
+  - falsified business data (e.g. a project's risk set back to "On Track"): the exception
+    then is not critical by any measure, live view included. Protecting the business data
+    itself needs database-side end-user identity (not in this batch).
 
   Every such record is permanent: it cannot change or remove what is already there, including
   its own forged records.
@@ -401,6 +531,13 @@ credential can write every row the application can write, like a server bug coul
   assignments, and authority rules that are not locked (it could add a rule granting someone
   authority). These are refused by the API, but not by the database.
 - **Security audit rows:** it can add misleading `security.*` rows, or flood the audit trail.
+- **Integrity findings and alerts:**
+  - it can add bogus findings;
+  - it can mark an open finding cleared. The next run re-detects it as a new finding while the
+    inconsistency holds.
+  - it can mark the Owner's notification read or delete it (notifications are not protected),
+    so an alert can be suppressed. The finding stays open and listed in the Exception Center,
+    and its audit row stays.
 
 So the database protects **what has already been recorded**, and the **shape** of new exception
 records. It does not prove that a new record came from a real user action. Detecting forged but
