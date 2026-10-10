@@ -16,6 +16,8 @@ import { createLegacyAIRouter } from './ai/legacy';
 import { createLegacyRulesRouter } from './ai/legacyRules';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
+import { setPrivilegeDenialMonitor } from './http/errors';
+import { writeAudit } from './audit';
 
 /**
  * Mounts authentication, user administration and the core-chain API, and puts the
@@ -24,6 +26,18 @@ import type { Pool } from './db/pool';
  */
 export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool; dataSource: CoreDataSource }) {
   const store = pool ? new AuthStore(pool) : undefined;
+  // Phase 6 Batch 10: a request the database refuses for lack of privilege is a security event.
+  if (pool) {
+    setPrivilegeDenialMonitor(app, async (d) => {
+      console.error(`[security] database privilege denied: ${d.method} ${d.path} (${d.user?.role ?? 'no user'})`);
+      await writeAudit(pool, { id: d.user?.id ?? null, name: d.user?.name ?? null, role: d.user?.role ?? null, ip: d.ip }, {
+        action: 'security.database_privilege_denied',
+        entityType: 'database',
+        details: `${d.method} ${d.path}: ${d.message}`,
+        after: { sqlstate: '42501' },
+      });
+    });
+  }
 
   if (pool && store) {
     app.use('/api/auth', createAuthRouter({ pool, store }));

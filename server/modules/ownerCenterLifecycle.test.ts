@@ -362,16 +362,16 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 9: Owner Center correctness a
     });
 
     it('history and records cannot be changed or deleted; un-snooze keeps the snooze', async () => {
-      await expect(db.pool.query(`UPDATE owner_exception_events SET reason = 'x' WHERE exception_key = $1`, [riskKey()])).rejects.toThrow(/append-only/);
-      await expect(db.pool.query(`DELETE FROM owner_exception_events WHERE exception_key = $1`, [riskKey()])).rejects.toThrow(/append-only/);
-      await expect(db.pool.query(`DELETE FROM owner_exception_states WHERE exception_key = $1`, [riskKey()])).rejects.toThrow(/never deleted/);
+      await expect(db.pool.query(`UPDATE owner_exception_events SET reason = 'x' WHERE exception_key = $1`, [riskKey()])).rejects.toThrow(/append-only|permission denied/);
+      await expect(db.pool.query(`DELETE FROM owner_exception_events WHERE exception_key = $1`, [riskKey()])).rejects.toThrow(/append-only|permission denied/);
+      await expect(db.pool.query(`DELETE FROM owner_exception_states WHERE exception_key = $1`, [riskKey()])).rejects.toThrow(/never deleted|permission denied/);
       // Snooze a non-critical exception, then un-snooze: both in its history, the row kept.
       const id = (await exc()).exceptions.find((x: Row) => x.severity !== 'critical' && x.lifecycle.state !== 'resolved')!.id as string;
       await owner().post('/api/owner/exceptions/snooze').send({ id, hours: 2, reason: 'After the site meeting' }).expect(200);
       await owner().delete(`/api/owner/exceptions/snooze/${encodeURIComponent(id)}`).expect(200);
       expect((await q(`SELECT count(*)::int AS n FROM owner_exception_snoozes WHERE exception_key = $1`, [id]))[0].n).toBe(1);
       expect((await history(id)).events.map((x: Row) => x.action)).toEqual(expect.arrayContaining(['snooze', 'unsnooze']));
-      await expect(db.pool.query(`DELETE FROM owner_exception_snoozes WHERE exception_key = $1`, [id])).rejects.toThrow(/never deleted/);
+      await expect(db.pool.query(`DELETE FROM owner_exception_snoozes WHERE exception_key = $1`, [id])).rejects.toThrow(/never deleted|permission denied/);
     });
 
     it('only the Owner may act or read history; everyone else is refused', async () => {
