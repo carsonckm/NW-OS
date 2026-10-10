@@ -2,12 +2,13 @@
 --
 -- With role separation (docs/database-privileges.md) the runtime role can no longer disable or
 -- replace these protections. It still legitimately writes exception states, snoozes and history,
--- so these checks make sure a direct write cannot do what the API refuses:
+-- so these checks make every change, including a direct write, follow the lifecycle and leave a
+-- record (they cannot judge whether the recorded facts, e.g. a severity, are true):
 --
 --  * every state change follows the lifecycle state machine and is recorded, in the same
 --    transaction, by a history event with the same from / to state (no silent state changes);
---  * a critical exception is never dismissed, and never snoozed (by the severity the server
---    recomputed for the action and recorded on its event);
+--  * a dismissal or snooze whose event records the exception as critical (or no severity) is
+--    refused (the server records the severity it recomputed for the action);
 --  * a dismissal or reopen event carries a reason;
 --  * a severity change is recorded by a "changed" event in the same transaction;
 --  * a new state row starts "active" with its "observed" event.

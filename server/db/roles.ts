@@ -75,15 +75,25 @@ export async function applyRuntimeGrants(db: Db, schema: string, roles: RoleName
     `REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC`,
     `REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM ${app}`,
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${s} TO ${app}`,
-    // Trigger functions fire without EXECUTE; nobody else needs to call them.
-    `REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC`,
-    `REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM ${app}`,
     // Objects future migrations create (as the owner) get the same treatment.
     `ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA ${s} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${app}`,
     `ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA ${s} GRANT USAGE, SELECT ON SEQUENCES TO ${app}`,
     `ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA ${s} REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`,
   ].filter(Boolean) as string[];
   for (const q of stmts) await db.query(q);
+  // NW OS's own functions are trigger functions: they fire without EXECUTE and nobody needs to
+  // call them. Functions that belong to an extension installed in the schema (pgcrypto, citext,
+  // ...) are the extension's, not NW OS's: their privileges are left as the extension set them.
+  const fns = (await db.query(
+    `SELECT p.oid::regprocedure::text AS sig, p.prokind FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = $1 AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`,
+    [schema]
+  )).rows;
+  for (const f of fns) {
+    const kw = f.prokind === 'p' ? 'PROCEDURE' : 'FUNCTION';
+    await db.query(`REVOKE ALL ON ${kw} ${f.sig} FROM PUBLIC`);
+    await db.query(`REVOKE ALL ON ${kw} ${f.sig} FROM ${app}`);
+  }
 }
 
 export interface PrivilegeReport {
@@ -123,9 +133,36 @@ export async function runtimePrivilegeReport(db: Db, schema?: string): Promise<P
   const dbo = (await db.query(`SELECT pg_has_role(current_user, datdba, 'MEMBER') AS own, has_database_privilege(current_user, oid, 'CREATE') AS create FROM pg_database WHERE datname = current_database()`)).rows[0];
   if (dbo.own) issues.push(`owns database ${who.d}`);
   else if (dbo.create) issues.push(`can create schemas in database ${who.d} (could shadow tables through search_path)`);
+  // Effective grant options (direct, inherited or through PUBLIC), not just grants naming the user.
   const grantable = (await db.query(
-    `SELECT count(*)::int AS n FROM information_schema.role_table_grants WHERE table_schema = $1 AND grantee = current_user AND is_grantable = 'YES'`, [sch])).rows[0].n;
-  if (grantable) issues.push(`holds ${grantable} privilege(s) WITH GRANT OPTION`);
+    `SELECT
+       (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+           AND has_table_privilege(current_user, c.oid, 'SELECT WITH GRANT OPTION, INSERT WITH GRANT OPTION, UPDATE WITH GRANT OPTION, DELETE WITH GRANT OPTION, TRUNCATE WITH GRANT OPTION, REFERENCES WITH GRANT OPTION, TRIGGER WITH GRANT OPTION')) AS tables,
+       (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1 AND c.relkind = 'S' AND has_sequence_privilege(current_user, c.oid, 'USAGE WITH GRANT OPTION, SELECT WITH GRANT OPTION, UPDATE WITH GRANT OPTION')) AS sequences,
+       (SELECT count(*)::int FROM pg_namespace n WHERE n.nspname = $1 AND has_schema_privilege(current_user, n.oid, 'USAGE WITH GRANT OPTION, CREATE WITH GRANT OPTION')) AS schema`,
+    [sch]
+  )).rows[0];
+  const nGrantable = grantable.tables + grantable.sequences + grantable.schema;
+  if (nGrantable) issues.push(`holds ${nGrantable} privilege(s) WITH GRANT OPTION`);
+  // Any other schema the connection resolves names through: CREATE there could shadow NW OS's
+  // tables or functions (search_path), owning it could drop what is in it.
+  const others = (await db.query(
+    `SELECT n.nspname, pg_has_role(current_user, n.nspowner, 'MEMBER') AS own, has_schema_privilege(current_user, n.oid, 'CREATE') AS create
+       FROM pg_namespace n WHERE n.nspname = ANY (current_schemas(false)) AND n.nspname <> $1`,
+    [sch]
+  )).rows;
+  for (const o of others) if (o.own || o.create) issues.push(`${o.own ? 'owns' : 'can create objects in'} schema ${o.nspname}, which is on its search_path`);
+  // A SECURITY DEFINER function runs as its owner: being able to call one is a way to act as
+  // another role. NW OS defines none (functions of an installed extension are the extension's).
+  const definers = (await db.query(
+    `SELECT p.oid::regprocedure::text AS f FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = $1 AND p.prosecdef AND NOT pg_has_role(current_user, p.proowner, 'MEMBER') AND has_function_privilege(current_user, p.oid, 'EXECUTE')
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`,
+    [sch]
+  )).rows.map((r) => r.f as string);
+  if (definers.length) issues.push(`can call SECURITY DEFINER function(s) that run as another role: ${definers.join(', ')}`);
   const tables = (await db.query(`SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`, [sch])).rows;
   for (const t of tables) {
     const p = (await db.query(`SELECT has_table_privilege(current_user, $1::oid, 'TRUNCATE') AS tr, has_table_privilege(current_user, $1::oid, 'TRIGGER') AS tg, has_table_privilege(current_user, $1::oid, 'REFERENCES') AS rf, has_table_privilege(current_user, $1::oid, 'UPDATE') AS up, has_table_privilege(current_user, $1::oid, 'DELETE') AS de, has_table_privilege(current_user, $1::oid, 'INSERT') AS ins`, [t.oid])).rows[0];
@@ -139,21 +176,52 @@ export async function runtimePrivilegeReport(db: Db, schema?: string): Promise<P
   return { user: who.u, schema: sch, issues };
 }
 
-/**
- * Called before the server listens. A runtime connection that could bypass the database
- * protections is refused in production (no silent fallback). The only way past is an explicit,
- * logged operator decision: NWOS_ALLOW_PRIVILEGED_DATABASE=true. Elsewhere it is a warning.
- * Never logs connection strings or credentials.
- */
 /** The server's database login is privileged and the server must not start. */
 export class PrivilegedDatabaseError extends Error {}
 
+/** Credentials only the migration step and the one-off role bootstrap may hold. */
+export const NON_RUNTIME_CREDENTIALS = ['DATABASE_MIGRATION_URL', 'DATABASE_ADMIN_URL'] as const;
+
+/**
+ * Called before the server listens (server.ts), with process.env.
+ *
+ * - A runtime connection that could bypass the database protections is refused in production
+ *   (NODE_ENV=production, which `npm start` sets). There is no silent fallback.
+ * - The only way past it is an explicit operator decision: NWOS_ALLOW_PRIVILEGED_DATABASE set to
+ *   exactly "true". It is honoured in production only, logged as an error and written to the
+ *   audit trail on every start. Any other value is ignored with a warning, and a flag left set on
+ *   a restricted login is reported so that it gets removed.
+ * - Outside production a privileged login is a warning (development), and the flag has no effect.
+ * - The migration and administrator credentials must not be in the server's environment:
+ *   production refuses to start, development warns. The override does not cover this.
+ *
+ * Never logs connection strings or credentials (only variable names and role names).
+ */
 export async function enforceRuntimePrivileges(db: Db, env: NodeJS.ProcessEnv = process.env, log: Pick<Console, 'warn' | 'error'> = console) {
+  const production = env.NODE_ENV === 'production';
+  // The running server never holds the migration or administrator credential (only the names of
+  // the variables are reported, never their values). The privileged-database override does not
+  // cover this: those credentials have no use in the server.
+  const extra = NON_RUNTIME_CREDENTIALS.filter((k) => env[k]?.trim());
+  if (extra.length) {
+    const msg = `[db] ${extra.join(' and ')} ${extra.length > 1 ? 'are' : 'is'} set in the server's environment. Only the migration step (DATABASE_MIGRATION_URL) and the one-off role bootstrap (DATABASE_ADMIN_URL) may hold ${extra.length > 1 ? 'them' : 'it'}; remove ${extra.length > 1 ? 'them' : 'it'} from the server (docs/database-privileges.md).`;
+    if (production) throw new PrivilegedDatabaseError(`${msg}\n  Refusing to start in production.`);
+    log.warn(`${msg}\n  (Development: starting anyway. Production refuses to start.)`);
+  }
+  // The override is honoured only as the exact value "true", and only in production.
+  const override = env.NWOS_ALLOW_PRIVILEGED_DATABASE;
+  const overrideOn = override === 'true';
+  if (override !== undefined && override !== '' && !overrideOn) {
+    log.warn(`[db] NWOS_ALLOW_PRIVILEGED_DATABASE is set to an unrecognised value and is ignored (only the exact value "true" is honoured).`);
+  }
   const report = await runtimePrivilegeReport(db);
-  if (!report.issues.length) return report;
+  if (!report.issues.length) {
+    if (overrideOn) log.warn(`[db] NWOS_ALLOW_PRIVILEGED_DATABASE=true is set but not needed: "${report.user}" is a restricted runtime role. Remove it so that a privileged login is refused again.`);
+    return report;
+  }
   const summary = `[db] The runtime database user "${report.user}" is not a restricted runtime role:\n  - ${report.issues.join('\n  - ')}\n  It could disable or rewrite NW OS's audit and history protections. Connect the server as ${roleNamesFromEnv(env).app} (docs/database-privileges.md).`;
-  if (env.NODE_ENV === 'production') {
-    if (env.NWOS_ALLOW_PRIVILEGED_DATABASE === 'true') {
+  if (production) {
+    if (overrideOn) {
       log.error(`${summary}\n  NWOS_ALLOW_PRIVILEGED_DATABASE=true: starting anyway by explicit operator choice. The database is NOT hardened.`);
       // The override is a security event of its own: recorded in the audit trail (no secrets).
       await writeAudit(db, { name: 'NW OS server', role: 'system' }, {
@@ -219,7 +287,8 @@ export async function bootstrapRoles(admin: PoolClient, opts: { schema: string; 
     const objects = (await admin.query(
       `SELECT c.relname AS name, c.relkind AS kind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = $2)
-          AND NOT (c.relkind = 'S' AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype IN ('a', 'i')))`,
+          AND NOT (c.relkind = 'S' AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype IN ('a', 'i')))
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')`,
       [schema, roles.owner]
     )).rows;
     for (const t of objects) {
@@ -228,13 +297,15 @@ export async function bootstrapRoles(admin: PoolClient, opts: { schema: string; 
     }
     const fns = (await admin.query(
       `SELECT p.oid::regprocedure::text AS sig, p.prokind FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = $1 AND p.proowner <> (SELECT oid FROM pg_roles WHERE rolname = $2)`,
+        WHERE n.nspname = $1 AND p.proowner <> (SELECT oid FROM pg_roles WHERE rolname = $2)
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`,
       [schema, roles.owner]
     )).rows;
     for (const f of fns) await admin.query(`ALTER ${f.prokind === 'p' ? 'PROCEDURE' : 'FUNCTION'} ${f.sig} OWNER TO ${o}`);
     const types = (await admin.query(
       `SELECT t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-        WHERE n.nspname = $1 AND t.typtype IN ('e', 'd') AND t.typowner <> (SELECT oid FROM pg_roles WHERE rolname = $2)`,
+        WHERE n.nspname = $1 AND t.typtype IN ('e', 'd') AND t.typowner <> (SELECT oid FROM pg_roles WHERE rolname = $2)
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e')`,
       [schema, roles.owner]
     )).rows;
     for (const t of types) await admin.query(`ALTER TYPE ${s}.${ident(t.typname)} OWNER TO ${o}`);

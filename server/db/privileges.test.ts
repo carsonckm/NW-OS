@@ -10,7 +10,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPool, type Pool } from './pool';
 import { migrate } from './migrate';
 import { bootstrapRoles, enforceRuntimePrivileges, ident, runtimePrivilegeReport } from './roles';
-import { TEST_DATABASE_ADMIN_URL, TEST_DATABASE_URL, type TestDb } from '../test/db';
+import { randomUUID } from 'crypto';
+import { TEST_DATABASE_ADMIN_URL, TEST_DATABASE_URL, withCredentials, type TestDb } from '../test/db';
 import { setupDemoWorld } from '../test/demoWorld';
 
 type Row = Record<string, any>;
@@ -106,6 +107,123 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       expect(everything).not.toMatch(/password/i);
       // The real runtime role starts cleanly in production.
       await expect(enforceRuntimePrivileges(appPool, { NODE_ENV: 'production' }, quietLog)).resolves.toMatchObject({ issues: [] });
+    });
+  });
+
+  describe('the startup override and the credentials the server may hold', () => {
+    const capture = () => {
+      const logged: string[] = [];
+      return { logged, log: { warn: (m: string) => logged.push(`warn:${m}`), error: (m: string) => logged.push(`error:${m}`) } };
+    };
+    const overrides = async () => (await appPool.query(`SELECT count(*)::int AS n FROM audit_logs WHERE action = 'security.privileged_database_override'`)).rows[0].n as number;
+
+    it.each(['TRUE', 'True', '1', 'yes', 'on', ' true', 'true '])('NWOS_ALLOW_PRIVILEGED_DATABASE=%j is not "true": a privileged login is still refused in production, with a warning', async (value) => {
+      const { logged, log } = capture();
+      const before = await overrides();
+      await expect(enforceRuntimePrivileges(db.owner, { NODE_ENV: 'production', NWOS_ALLOW_PRIVILEGED_DATABASE: value }, log)).rejects.toThrow(/Refusing to start in production/);
+      expect(logged.some((m) => m.startsWith('warn:') && /unrecognised value and is ignored/.test(m))).toBe(true);
+      expect(await overrides()).toBe(before);
+    });
+
+    it('the override has no effect outside production, and a flag left on a restricted login is reported for removal', async () => {
+      const before = await overrides();
+      for (const NODE_ENV of [undefined, 'development', 'test', 'staging']) {
+        const { logged, log } = capture();
+        await enforceRuntimePrivileges(db.owner, { NODE_ENV, NWOS_ALLOW_PRIVILEGED_DATABASE: 'true' }, log);
+        expect(logged.some((m) => m.startsWith('warn:') && /Production refuses to start/.test(m))).toBe(true);
+        expect(logged.some((m) => m.startsWith('error:'))).toBe(false);
+      }
+      expect(await overrides()).toBe(before);
+      const { logged, log } = capture();
+      await expect(enforceRuntimePrivileges(appPool, { NODE_ENV: 'production', NWOS_ALLOW_PRIVILEGED_DATABASE: 'true' }, log)).resolves.toMatchObject({ issues: [] });
+      expect(logged.some((m) => /set but not needed/.test(m))).toBe(true);
+      expect(await overrides()).toBe(before);
+    });
+
+    it('the server never holds the migration or administrator credential: production refuses to start (the override does not help), development warns; values are never echoed', async () => {
+      const secret = 'postgres://someone:s3cr3t-value@db.example/nwos';
+      for (const key of ['DATABASE_MIGRATION_URL', 'DATABASE_ADMIN_URL']) {
+        const { logged, log } = capture();
+        let message = '';
+        await enforceRuntimePrivileges(appPool, { NODE_ENV: 'production', NWOS_ALLOW_PRIVILEGED_DATABASE: 'true', [key]: secret }, log).catch((e) => (message = (e as Error).message));
+        expect(message).toMatch(new RegExp(`${key} is set in the server's environment[\\s\\S]*Refusing to start in production`));
+        await enforceRuntimePrivileges(appPool, { NODE_ENV: 'development', [key]: secret }, log);
+        expect(logged.some((m) => m.startsWith('warn:') && m.includes(key))).toBe(true);
+        expect([message, ...logged].join('\n')).not.toContain('s3cr3t-value');
+      }
+      // Empty values are not credentials.
+      await expect(enforceRuntimePrivileges(appPool, { NODE_ENV: 'production', DATABASE_MIGRATION_URL: '', DATABASE_ADMIN_URL: ' ' }, quietLog)).resolves.toMatchObject({ issues: [] });
+    });
+  });
+
+  describe('the privilege checker looks at effective privileges, not names', () => {
+    it('flags privileges reached through an inherited role, grant options, CREATE on another search_path schema and callable SECURITY DEFINER functions', async () => {
+      // A login whose name looks like a runtime role and which owns nothing directly: every
+      // problem comes through a role it inherits, a schema on its search_path or a function.
+      const admin = createPool({ connectionString: TEST_DATABASE_ADMIN_URL!, max: 1 });
+      pools.push(admin);
+      const login = `${roles.app}_lookalike`;
+      const via = `${roles.app}_via`;
+      const other = `${db.schema}_other`;
+      const pw = randomUUID();
+      const s = ident(db.schema);
+      try {
+        await admin.query(`CREATE ROLE ${ident(via)} NOLOGIN`);
+        await admin.query(`CREATE ROLE ${ident(login)} LOGIN INHERIT PASSWORD '${pw}'`);
+        await admin.query(`GRANT ${ident(via)} TO ${ident(login)}`);
+        await admin.query(`GRANT USAGE ON SCHEMA ${s} TO ${ident(via)}`);
+        await admin.query(`GRANT SELECT, UPDATE ON ${s}.audit_logs TO ${ident(via)} WITH GRANT OPTION`);
+        await admin.query(`CREATE SCHEMA ${ident(other)}`);
+        await admin.query(`GRANT CREATE, USAGE ON SCHEMA ${ident(other)} TO ${ident(login)}`);
+        await admin.query(`CREATE FUNCTION ${s}.b10_definer() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'`);
+        await admin.query(`ALTER FUNCTION ${s}.b10_definer() OWNER TO ${ident(roles.owner)}`);
+        await admin.query(`GRANT EXECUTE ON FUNCTION ${s}.b10_definer() TO ${ident(login)}, ${ident(roles.app)}`);
+        const lookalike = createPool({ connectionString: withCredentials(TEST_DATABASE_URL!, login, pw), max: 1, options: `-c search_path=${db.schema},${other}` });
+        pools.push(lookalike);
+        const issues = (await runtimePrivilegeReport(lookalike, db.schema)).issues.join('\n');
+        expect(issues).toMatch(new RegExp(`can act as other roles: ${via}`));
+        expect(issues).toMatch(/can UPDATE or DELETE append-only audit_logs/);
+        expect(issues).toMatch(/WITH GRANT OPTION/);
+        expect(issues).toMatch(new RegExp(`can create objects in schema ${other}, which is on its search_path`));
+        expect(issues).toMatch(/SECURITY DEFINER function\(s\) that run as another role: b10_definer\(\)/);
+        // The real runtime role is flagged for the callable SECURITY DEFINER function too.
+        expect((await runtimePrivilegeReport(appPool)).issues.join('\n')).toMatch(/SECURITY DEFINER/);
+        await expect(enforceRuntimePrivileges(appPool, { NODE_ENV: 'production' }, quietLog)).rejects.toThrow(/SECURITY DEFINER/);
+      } finally {
+        await admin.query(`DROP FUNCTION IF EXISTS ${s}.b10_definer()`);
+        await admin.query(`DROP SCHEMA IF EXISTS ${ident(other)} CASCADE`);
+        await admin.query(`REVOKE ALL ON ${s}.audit_logs FROM ${ident(via)} CASCADE`).catch(() => {});
+        await admin.query(`REVOKE ALL ON SCHEMA ${s} FROM ${ident(via)}`).catch(() => {});
+        for (const p of pools.splice(pools.indexOf(admin) + 1)) await p.end().catch(() => {});
+        await admin.query(`DROP ROLE IF EXISTS ${ident(login)}`);
+        await admin.query(`DROP ROLE IF EXISTS ${ident(via)}`);
+      }
+      expect((await runtimePrivilegeReport(appPool)).issues).toEqual([]);
+    });
+
+    it('an extension installed in the schema keeps its own objects: the bootstrap neither takes them over nor revokes their use', async () => {
+      const admin = createPool({ connectionString: TEST_DATABASE_ADMIN_URL!, max: 1 });
+      pools.push(admin);
+      const elsewhere = (await admin.query(`SELECT 1 FROM pg_extension WHERE extname = 'citext'`)).rowCount;
+      if (elsewhere) return; // installed in another schema of this database: nothing to test here
+      await admin.query(`CREATE EXTENSION citext SCHEMA ${ident(db.schema)}`);
+      try {
+        const client = await admin.connect();
+        try {
+          await bootstrapRoles(client, { schema: db.schema, roles });
+        } finally {
+          client.release();
+        }
+        await db.migrate();
+        const takenOver = (await admin.query(
+          `SELECT count(*)::int AS n FROM pg_proc p JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+            JOIN pg_extension e ON e.oid = d.refobjid WHERE e.extname = 'citext' AND pg_get_userbyid(p.proowner) = $1`, [roles.owner])).rows[0].n;
+        expect(takenOver).toBe(0);
+        expect((await appPool.query(`SELECT 'a'::citext = 'A'::citext AS eq`)).rows[0].eq).toBe(true);
+        expect((await runtimePrivilegeReport(appPool)).issues).toEqual([]);
+      } finally {
+        await admin.query('DROP EXTENSION IF EXISTS citext');
+      }
     });
   });
 
@@ -307,7 +425,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       ).toMatch(/with a reason where one is required/);
     });
 
-    it('a critical exception can never be dismissed or snoozed by direct SQL', async () => {
+    it('a dismissal or snooze recorded against a critical exception is refused, even by direct SQL', async () => {
       const key = await exception('critical');
       expect(
         (await inTx([
