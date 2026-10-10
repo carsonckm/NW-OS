@@ -179,6 +179,28 @@ runtime role, and triggers refuse delete and truncate).
   critical since, or a risk that fell and rose again between two runs, produces a finding too.
   The finding text says so.
 
+### Migration 028 (Batch 11 final review): fixed keys, findings as evidence
+
+The final security review, run as the real `nwos_app` role, found two gaps in 027. Both are
+fixed and tested.
+- **Moving a snooze onto a locked exception.** An active snooze on a non-critical exception
+  could be moved onto a locked one with `UPDATE owner_exception_snoozes SET exception_key = …`.
+  The snooze check let an "unchanged" snooze through by comparing its end only.
+  - Now the exception key of a state or snooze row cannot be changed: a trigger refuses it,
+    with `NWX01`.
+  - The snooze check also compares the key.
+- **Findings could be rewritten.** The runtime role could rewrite finding rows: what was found,
+  its key and kind, its dates, or fake "cleared" and "alerted". A guard trigger now refuses
+  changes to what was found and when it was first detected. Also:
+  - `last_detected_at` and `alert_attempts` only move forward;
+  - a cleared finding stays cleared; a recurrence is a new finding;
+  - a delivered alert cannot be changed;
+  - a finding can be marked alerted only once the Owner notification for it exists.
+
+  A finding cleared by a forged update is detected again, as a new finding with a new audit row
+  and alert, on the next run while the inconsistency holds (tested). The audit log keeps a copy
+  of every finding.
+
 ## 3. Startup checks (no silent fallback)
 
 On start, before the API and its automation scheduler are mounted, the server
@@ -464,7 +486,8 @@ as a time-boxed emergency measure.
     it cannot be dismissed or snoozed, whatever severity the request or the event claims, and
     even after its stored severity is lowered in another transaction (**attack path 1 is
     prevented**);
-  - the lock cannot be cleared;
+  - the lock cannot be cleared, and an active snooze cannot be moved onto a locked exception
+    (exception keys are fixed);
   - it cannot be lowered and dismissed or snoozed in the same transaction;
   - a fabricated or unrelated event does not authorise a dismissal or snooze.
 - **The locked System Policy rows** (the Sensitive / Strategic ceilings) cannot be changed,
@@ -508,6 +531,13 @@ credential can write every row the application can write, like a server bug coul
   assignments, and authority rules that are not locked (it could add a rule granting someone
   authority). These are refused by the API, but not by the database.
 - **Security audit rows:** it can add misleading `security.*` rows, or flood the audit trail.
+- **Integrity findings and alerts:**
+  - it can add bogus findings;
+  - it can mark an open finding cleared. The next run re-detects it as a new finding while the
+    inconsistency holds.
+  - it can mark the Owner's notification read or delete it (notifications are not protected),
+    so an alert can be suppressed. The finding stays open and listed in the Exception Center,
+    and its audit row stays.
 
 So the database protects **what has already been recorded**, and the **shape** of new exception
 records. It does not prove that a new record came from a real user action. Detecting forged but

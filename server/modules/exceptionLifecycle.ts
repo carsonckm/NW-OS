@@ -339,7 +339,7 @@ async function detectIntegrityFindings(pool: Pool, live: Map<string, OwnerExcept
       const existing = openByKey.get(k);
       if (existing) {
         // Still open: no new alert, only when it was last seen.
-        await db.query('UPDATE owner_exception_integrity_findings SET last_detected_at = $2 WHERE id = $1', [existing.id, now]);
+        await db.query('UPDATE owner_exception_integrity_findings SET last_detected_at = GREATEST(last_detected_at, $2) WHERE id = $1', [existing.id, now]);
         continue;
       }
       const ins = (await db.query(

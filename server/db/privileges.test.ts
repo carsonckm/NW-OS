@@ -253,6 +253,15 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       `CREATE RULE r AS ON DELETE TO audit_logs DO INSTEAD NOTHING`,
       'ALTER TABLE owner_exception_states ENABLE ROW LEVEL SECURITY',
       'COMMENT ON TABLE audit_logs IS $$x$$',
+      // Batch 11 protections
+      'DROP TRIGGER owner_exception_states_critical_lock ON owner_exception_states',
+      'ALTER TABLE owner_exception_events DISABLE TRIGGER owner_exception_events_critical_lock',
+      'ALTER TABLE owner_exception_snoozes DISABLE TRIGGER owner_exception_snoozes_key_fixed',
+      'DROP TRIGGER owner_exception_integrity_findings_guard ON owner_exception_integrity_findings',
+      `CREATE OR REPLACE FUNCTION owner_exception_critical_lock() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`,
+      `CREATE OR REPLACE FUNCTION owner_exception_integrity_findings_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`,
+      'ALTER TABLE owner_exception_states DROP COLUMN critical_locked',
+      'ALTER TABLE owner_exception_states ALTER COLUMN critical_locked SET DEFAULT true',
     ])('refuses: %s', async (sql) => {
       await refused(sql);
     });
@@ -263,7 +272,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
 
     it('the protections are all still in place afterwards', async () => {
       const triggers = (await appPool.query(`SELECT tgname, tgenabled FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND NOT tgisinternal ORDER BY 1`, [db.schema])).rows;
-      for (const name of ['audit_logs_no_update', 'audit_logs_no_truncate', 'owner_exception_events_no_change', 'owner_exception_states_keep', 'owner_exception_states_integrity', 'owner_exception_snoozes_integrity', 'delegated_authorities_locked_guard', 'delivery_receipts_immutable', 'drawing_revisions_immutable']) {
+      for (const name of ['audit_logs_no_update', 'audit_logs_no_truncate', 'owner_exception_events_no_change', 'owner_exception_states_keep', 'owner_exception_states_integrity', 'owner_exception_snoozes_integrity', 'delegated_authorities_locked_guard', 'delivery_receipts_immutable', 'drawing_revisions_immutable', 'owner_exception_states_critical_lock', 'owner_exception_events_critical_lock', 'owner_exception_states_key_fixed', 'owner_exception_snoozes_key_fixed', 'owner_exception_integrity_findings_guard', 'owner_exception_integrity_findings_no_delete']) {
         expect(triggers.find((t) => t.tgname === name), name).toMatchObject({ tgenabled: 'O' });
       }
     });
@@ -899,6 +908,52 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       expect((await findings(key)).filter((f) => f.finding === 'closed_while_critical')).toHaveLength(1);
       expect(await audits(key, 'security.exception_integrity_finding')).toHaveLength(1);
       expect(await notes(key)).toHaveLength(1);
+    });
+
+    it('final review: an active snooze cannot be moved onto a locked exception, and exception keys cannot be changed', async () => {
+      const A = 'test:b11:rekey-a';
+      const B = 'test:b11:rekey-b';
+      for (const [k, sev] of [[A, 'attention'], [B, 'critical']]) {
+        expect(await inTx([[`INSERT INTO owner_exception_states (exception_key, exception_type, title, severity, fingerprint) VALUES ($1, 't', 't', $2, 'f')`, [k, sev]], [`INSERT INTO owner_exception_events (exception_key, action, to_state, severity) VALUES ($1, 'observed', 'active', $2)`, [k, sev]]])).toBeUndefined();
+      }
+      expect(await inTx(snoozeSql(A, 'attention'))).toBeUndefined();
+      const moved = await inTx([[`UPDATE owner_exception_snoozes SET exception_key = $2 WHERE exception_key = $1`, [A, B]]]);
+      expect(code(moved)).toBe('NWX01');
+      expect(moved!.message).toMatch(/exception key .* cannot be changed/);
+      expect((await appPool.query('SELECT count(*)::int AS n FROM owner_exception_snoozes WHERE exception_key = $1', [B])).rows[0].n).toBe(0);
+      expect(code(await inTx([[`UPDATE owner_exception_states SET exception_key = 'test:b11:rekey-c' WHERE exception_key = $1`, [B]]]))).toBe('NWX01');
+      // The same exception's existing snooze may still be updated without changing its end.
+      expect(await inTx([[`UPDATE owner_exception_snoozes SET reason = 'still later' WHERE exception_key = $1`, [A]]])).toBeUndefined();
+    });
+
+    it('final review: findings are evidence: what was found, when, and whether it was cleared or alerted cannot be rewritten', async () => {
+      const key = 'test:b11:evidence';
+      const f = (await appPool.query(`INSERT INTO owner_exception_integrity_findings (exception_key, finding, details) VALUES ($1, 'closed_while_critical', '{"stored_severity":"info"}') RETURNING *`, [key])).rows[0];
+      const upd = (set: string, p: unknown[] = []) => inTx([[`UPDATE owner_exception_integrity_findings SET ${set} WHERE id = $1`, [f.id, ...p]]]);
+      for (const set of [`details = '{}'`, `exception_key = 'other'`, `finding = 'locked_but_closed'`, `first_detected_at = now() - interval '1 day'`, `last_detected_at = last_detected_at - interval '1 hour'`, `alert_attempts = alert_attempts - 1`]) {
+        const err = await upd(set);
+        expect(code(err), set).toBe('NWX01');
+      }
+      // Marked alerted without the Owner notification: refused.
+      expect((await upd('alerted_at = now()'))?.message).toMatch(/only once the Owner notification exists/);
+      // Cleared once: stays cleared, cannot be re-opened or moved.
+      expect(await upd('cleared_at = now()')).toBeUndefined();
+      expect(code(await upd('cleared_at = NULL'))).toBe('NWX01');
+      expect(code(await upd(`cleared_at = now() + interval '1 day'`))).toBe('NWX01');
+      expect((await appPool.query('SELECT details, exception_key, finding FROM owner_exception_integrity_findings WHERE id = $1', [f.id])).rows[0]).toEqual({ details: { stored_severity: 'info' }, exception_key: key, finding: 'closed_while_critical' });
+    });
+
+    it('final review: a finding cleared by a forged update is re-detected as a new finding (new audit row and alert) while the inconsistency holds', async () => {
+      const key = 'issue:iss-b11-c';
+      const [open] = (await findings(key)).filter((x) => !x.cleared_at);
+      expect(open).toBeDefined();
+      await appPool.query('UPDATE owner_exception_integrity_findings SET cleared_at = now() WHERE id = $1', [open.id]);
+      await sync();
+      const all = await findings(key);
+      expect(all.filter((x) => !x.cleared_at)).toHaveLength(1);
+      expect(all.length).toBe(2);
+      expect(await audits(key, 'security.exception_integrity_finding')).toHaveLength(2);
+      expect(await notes(key)).toHaveLength(2);
     });
 
     it('findings are evidence: the runtime role cannot delete them', async () => {
