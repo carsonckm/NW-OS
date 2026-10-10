@@ -7,6 +7,7 @@
  */
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { sendError } from '../http/errors';
 import { createPool, type Pool } from './pool';
 import { migrate } from './migrate';
 import { bootstrapRoles, enforceRuntimePrivileges, ident, runtimePrivilegeReport } from './roles';
@@ -492,6 +493,207 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       await refused(`UPDATE delegated_authorities SET active = false WHERE id = '${locked.id}'`, /is locked/);
       await refused(`DELETE FROM delegated_authorities WHERE id = '${locked.id}'`, /is locked/);
       await refused(`ALTER TABLE delegated_authorities DISABLE TRIGGER delegated_authorities_locked_guard`);
+    });
+  });
+
+  describe('Batch 11: a critical exception cannot be dismissed or snoozed, by its stored severity', () => {
+    const owner = () => as['Owner / CEO'];
+    const CRIT = 'project:proj-1:Critical';
+    let n = 0;
+    const code = (e: Error | undefined) => (e as Error & { code?: string } | undefined)?.code;
+    const stored = async (key: string) => (await appPool.query('SELECT state, severity FROM owner_exception_states WHERE exception_key = $1', [key])).rows[0] as Row;
+    const events = async (key: string) => (await appPool.query('SELECT action, severity FROM owner_exception_events WHERE exception_key = $1 ORDER BY id', [key])).rows as Row[];
+    const snoozed = async (key: string) => (await appPool.query('SELECT count(*)::int AS n FROM owner_exception_snoozes WHERE exception_key = $1 AND snoozed_until > now()', [key])).rows[0].n as number;
+    /** A recorded exception (state row + "observed" event), as direct SQL as the runtime role. */
+    async function recorded(severity: string) {
+      const key = `test:b11:${severity}:${++n}`;
+      expect(await inTx([
+        [`INSERT INTO owner_exception_states (exception_key, exception_type, title, severity, fingerprint) VALUES ($1, 'test', 'Test', $2, 'fp')`, [key, severity]],
+        [`INSERT INTO owner_exception_events (exception_key, action, to_state, severity) VALUES ($1, 'observed', 'active', $2)`, [key, severity]],
+      ])).toBeUndefined();
+      return key;
+    }
+    const dismissSql = (key: string, severity: string | null, from = 'active'): [string, unknown[]][] => [
+      [`UPDATE owner_exception_states SET state = 'dismissed' WHERE exception_key = $1`, [key]],
+      [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'dismiss', $2, 'dismissed', $3, 'Go away')`, [key, from, severity]],
+    ];
+    const snoozeSql = (key: string, severity: string | null): [string, unknown[]][] => [
+      [`INSERT INTO owner_exception_snoozes (exception_key, snoozed_until, reason, snoozed_by) VALUES ($1, now() + interval '1 day', 'later', 'user-owner') ON CONFLICT (exception_key) DO UPDATE SET snoozed_until = EXCLUDED.snoozed_until`, [key]],
+      [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'snooze', 'active', 'active', $2, 'later')`, [key, severity]],
+    ];
+    const lowerSql = (key: string, to = 'attention'): [string, unknown[]][] => [
+      [`UPDATE owner_exception_states SET severity = $2 WHERE exception_key = $1`, [key, to]],
+      [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity) VALUES ($1, 'changed', 'active', 'active', $2)`, [key, to]],
+    ];
+
+    let riskBefore: Row;
+    beforeAll(async () => {
+      riskBefore = (await appPool.query(`SELECT risk_status, risk_reason FROM projects WHERE id = 'proj-1'`)).rows[0];
+      await appPool.query(`UPDATE projects SET risk_status = 'Critical', risk_reason = 'Batch 11 test' WHERE id = 'proj-1'`);
+    });
+    afterAll(async () => {
+      await appPool.query(`UPDATE projects SET risk_status = $1, risk_reason = $2 WHERE id = 'proj-1'`, [riskBefore.risk_status, riskBefore.risk_reason]);
+    });
+
+    it('1-2. the API refuses to dismiss or snooze a live critical exception, whatever the request says', async () => {
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      expect(list.exceptions.find((e: Row) => e.id === CRIT)).toMatchObject({ severity: 'critical' });
+      const d = await owner().post('/api/owner/exceptions/dismiss').send({ id: CRIT, reason: 'Not now' }).expect(400);
+      expect(d.body.message).toMatch(/critical exception cannot be dismissed/);
+      const forged = await owner().post('/api/owner/exceptions/dismiss').send({ id: CRIT, reason: 'Not now', severity: 'info' });
+      expect(forged.status).toBe(400);
+      const z = await owner().post('/api/owner/exceptions/snooze').send({ id: CRIT, hours: 2, reason: 'later' }).expect(400);
+      expect(z.body.message).toMatch(/critical exception cannot be snoozed/);
+      expect(await owner().post('/api/owner/exceptions/snooze').send({ id: CRIT, hours: 2, reason: 'later', severity: 'info' }).then((r) => r.status)).toBe(400);
+      // Nothing was written: the refused action's transaction (which would have recorded the
+      // exception) rolled back as a whole.
+      expect(await stored(CRIT)).toBeUndefined();
+      expect(await snoozed(CRIT)).toBe(0);
+      expect((await events(CRIT)).map((e) => e.action)).not.toContain('dismiss');
+    });
+
+    it('7. acknowledging, waiting and resolving a critical exception still work', async () => {
+      await owner().post('/api/owner/exceptions/acknowledge').send({ id: CRIT }).expect(200);
+      await owner().post('/api/owner/exceptions/wait').send({ id: CRIT, reason: 'Board decision' }).expect(200);
+      await owner().post('/api/owner/exceptions/resolve').send({ id: CRIT, reason: 'Handled' }).expect(200);
+      expect(await stored(CRIT)).toMatchObject({ state: 'resolved', severity: 'critical' });
+      // Resolved while its condition is present: a critical exception is never hidden.
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      expect(list.exceptions.find((e: Row) => e.id === CRIT)).toMatchObject({ severity: 'critical' });
+      await owner().post('/api/owner/exceptions/reopen').send({ id: CRIT, reason: 'Back on' }).expect(200);
+    });
+
+    it('3-4. direct SQL cannot dismiss or snooze a stored-critical exception, even with a false non-critical severity on the event', async () => {
+      const key = await recorded('critical');
+      for (const sev of ['critical', 'attention', 'info', null]) {
+        const d = await inTx(dismissSql(key, sev));
+        expect(code(d), `dismiss with event severity ${sev}`).toBe('NWX01');
+        expect(d!.message).toMatch(/critical exception cannot be dismissed/);
+        const z = await inTx(snoozeSql(key, sev));
+        expect(code(z), `snooze with event severity ${sev}`).toBe('NWX01');
+        expect(z!.message).toMatch(/critical exception cannot be snoozed/);
+      }
+      expect(await stored(key)).toMatchObject({ state: 'active', severity: 'critical' });
+      expect(await snoozed(key)).toBe(0);
+      expect((await events(key)).map((e) => e.action)).toEqual(['observed']);
+    });
+
+    it('5. lowering the severity and dismissing or snoozing in one transaction is refused, in either order', async () => {
+      const key = await recorded('critical');
+      for (const statements of [
+        [...lowerSql(key), ...dismissSql(key, 'attention')],
+        [...dismissSql(key, 'attention'), ...lowerSql(key)],
+        [...lowerSql(key), ...snoozeSql(key, 'attention')],
+        [...snoozeSql(key, 'attention'), ...lowerSql(key)],
+        // in the same statement as the dismissal
+        [[`UPDATE owner_exception_states SET severity = 'info', state = 'dismissed' WHERE exception_key = $1`, [key]], [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity) VALUES ($1, 'changed', 'active', 'active', 'info')`, [key]], [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'dismiss', 'active', 'dismissed', 'info', 'x')`, [key]]] as [string, unknown[]][],
+      ]) {
+        const err = await inTx(statements);
+        expect(code(err)).toBe('NWX01');
+        expect(err!.message).toMatch(/critical exception cannot be (lowered and dismissed or snoozed in one transaction|dismissed|snoozed)/);
+      }
+      expect(await stored(key)).toMatchObject({ state: 'active', severity: 'critical' });
+      expect(await snoozed(key)).toBe(0);
+    });
+
+    it('6. a fabricated or unrelated history event does not authorise a dismissal or snooze', async () => {
+      const key = await recorded('attention');
+      const other = await recorded('attention');
+      // The event of another exception.
+      expect(code(await inTx([dismissSql(key, 'attention')[0], dismissSql(other, 'attention')[1]]))).toBe('NWX01');
+      // A dismissal event committed earlier, in another transaction.
+      await appPool.query(`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'dismiss', 'active', 'dismissed', 'attention', 'earlier')`, [key]);
+      expect(code(await inTx([dismissSql(key, 'attention')[0]]))).toBe('NWX01');
+      // Another action's event, or a severity other than the stored one.
+      expect(code(await inTx([dismissSql(key, 'attention')[0], [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'acknowledge', 'active', 'dismissed', 'attention', 'x')`, [key]]]))).toBe('NWX01');
+      expect((await inTx(dismissSql(key, 'info')))?.message).toMatch(/stored severity/);
+      expect((await inTx(snoozeSql(key, 'info')))?.message).toMatch(/stored severity/);
+      expect(code(await inTx([snoozeSql(key, 'attention')[0], snoozeSql(other, 'attention')[1]]))).toBe('NWX01');
+      expect(await stored(key)).toMatchObject({ state: 'active' });
+      expect(await snoozed(key)).toBe(0);
+      // With its own event and the stored severity, the same writes are accepted.
+      expect(await inTx(dismissSql(key, 'attention'))).toBeUndefined();
+      expect(await inTx(snoozeSql(other, 'attention'))).toBeUndefined();
+    });
+
+    it('8. non-critical exceptions keep their dismissal and snooze, with reasons and history recording the stored severity', async () => {
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      const pick = list.exceptions.filter((e: Row) => e.severity !== 'critical' && e.lifecycle.state === 'active' && e.id !== CRIT);
+      expect(pick.length).toBeGreaterThanOrEqual(2);
+      const [a, b] = pick;
+      await owner().post('/api/owner/exceptions/dismiss').send({ id: a.id }).expect(400);
+      await owner().post('/api/owner/exceptions/dismiss').send({ id: a.id, reason: 'Duplicate of another item' }).expect(200);
+      const ha = await events(a.id);
+      expect(ha.at(-1)).toMatchObject({ action: 'dismiss', severity: a.severity });
+      expect(await stored(a.id)).toMatchObject({ state: 'dismissed', severity: a.severity });
+      await owner().post('/api/owner/exceptions/snooze').send({ id: b.id, hours: 2 }).expect(400);
+      await owner().post('/api/owner/exceptions/snooze').send({ id: b.id, hours: 2, reason: 'After the site visit' }).expect(200);
+      expect((await events(b.id)).at(-1)).toMatchObject({ action: 'snooze', severity: b.severity });
+      expect(await snoozed(b.id)).toBe(1);
+      await owner().delete(`/api/owner/exceptions/snooze/${encodeURIComponent(b.id)}`).expect(200);
+      expect(await snoozed(b.id)).toBe(0);
+    });
+
+    it('9. repeated and concurrent requests keep their idempotency and conflict behaviour', async () => {
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      const c = list.exceptions.find((e: Row) => e.severity !== 'critical' && e.lifecycle.state === 'active' && e.id !== CRIT)!;
+      const before = (await events(c.id)).length;
+      const [r1, r2] = await Promise.all([
+        owner().post('/api/owner/exceptions/dismiss').send({ id: c.id, reason: 'Twice', expected_state: 'active' }),
+        owner().post('/api/owner/exceptions/dismiss').send({ id: c.id, reason: 'Twice', expected_state: 'active' }),
+      ]);
+      expect([r1.status, r2.status].sort()).toEqual([200, 409]);
+      const replay = await owner().post('/api/owner/exceptions/dismiss').send({ id: c.id, reason: 'Twice' }).expect(200);
+      expect(replay.body).toMatchObject({ changed: false });
+      expect((await events(c.id)).filter((e) => e.action === 'dismiss')).toHaveLength(1);
+      expect((await events(c.id)).length).toBeGreaterThan(before);
+    });
+
+    it('the stored severity follows what the server sees: a drifted record is corrected before the action, never trusted', async () => {
+      // A live critical exception whose stored record was lowered (by a forged "changed" event in
+      // its own transaction): the API still refuses, and puts the stored severity back.
+      await owner().get('/api/owner/exceptions').expect(200);
+      expect(await inTx(lowerSql(CRIT, 'info'))).toBeUndefined();
+      await owner().post('/api/owner/exceptions/dismiss').send({ id: CRIT, reason: 'x' }).expect(400);
+      await owner().post('/api/owner/exceptions/snooze').send({ id: CRIT, hours: 1, reason: 'x' }).expect(400);
+      expect(await stored(CRIT)).toMatchObject({ severity: 'critical' });
+      expect((await events(CRIT)).at(-1)).toMatchObject({ action: 'changed', severity: 'critical' });
+      // A live non-critical exception whose stored record says critical (stale or drifted): the
+      // server records the real severity first, in its own transaction, then dismisses.
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      const e = list.exceptions.find((x: Row) => x.severity !== 'critical' && x.lifecycle.state === 'active' && x.id !== CRIT)!;
+      await owner().post('/api/owner/exceptions/acknowledge').send({ id: e.id }).expect(200);
+      expect(await inTx([[`UPDATE owner_exception_states SET severity = 'critical' WHERE exception_key = $1`, [e.id]], [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity) VALUES ($1, 'changed', 'acknowledged', 'acknowledged', 'critical')`, [e.id]]])).toBeUndefined();
+      await owner().post('/api/owner/exceptions/dismiss').send({ id: e.id, reason: 'Handled' }).expect(200);
+      expect((await events(e.id)).slice(-2)).toEqual([{ action: 'changed', severity: e.severity }, { action: 'dismiss', severity: e.severity }]);
+    });
+
+    it('limitation (documented): a forged downgrade committed on its own is accepted by the database, stays in the history, and the Owner Center still lists the exception as critical', async () => {
+      // The database cannot recompute severity from the business data; a holder of the runtime
+      // credential can lower the stored record in one transaction and dismiss in the next.
+      // What remains: the forged "changed" event is permanent, and the server's live view never
+      // hides a critical exception, whatever its stored state.
+      expect(await inTx(lowerSql(CRIT, 'info'))).toBeUndefined();
+      const st = (await stored(CRIT)).state as string;
+      expect(await inTx(dismissSql(CRIT, 'info', st))).toBeUndefined();
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      expect(list.exceptions.find((x: Row) => x.id === CRIT)).toMatchObject({ severity: 'critical', lifecycle: { state: 'dismissed' } });
+      expect((await events(CRIT)).slice(-2).map((x) => x.action)).toEqual(['changed', 'dismiss']);
+    });
+
+    it('a database lifecycle refusal reaches the browser as a generic 409 conflict, without database details', async () => {
+      const sent: { status?: number; body?: Row } = {};
+      const res = { status(code: number) { sent.status = code; return this; }, json(b: Row) { sent.body = b; return this; } } as never;
+      const warn = console.warn;
+      console.warn = () => {};
+      try {
+        sendError(res, Object.assign(new Error('owner exception project:x: a critical exception cannot be dismissed'), { code: 'NWX01' }));
+      } finally {
+        console.warn = warn;
+      }
+      expect(sent.status).toBe(409);
+      expect(sent.body).toEqual({ error: 'conflict', message: expect.stringMatching(/Reload and try again/) });
+      expect(JSON.stringify(sent.body)).not.toMatch(/project:x|owner exception/);
     });
   });
 

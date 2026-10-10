@@ -32,6 +32,13 @@ export function sendError(res: Response, err: unknown) {
     return res.status(status).json({ error: status === 409 ? 'conflict' : 'validation_error', message: err.message, details: err.details });
   }
   const pgErr = err as { code?: string; message?: string; detail?: string; constraint?: string };
+  // A refusal by the exception-lifecycle integrity checks (migrations 025 / 026). The API checks
+  // the same rules first, so this means the exception changed meanwhile (e.g. it became critical):
+  // a conflict, with a generic message (the database's message stays in the server log).
+  if (pgErr.code === 'NWX01') {
+    console.warn('[api] exception lifecycle refused by the database:', pgErr.message);
+    return res.status(409).json({ error: 'conflict', message: 'This exception changed while you were acting on it (it may have become critical). Reload and try again.' });
+  }
   const mapped = pgErr.code && PG_ERRORS[pgErr.code];
   if (mapped) {
     return res.status(mapped[0]).json({

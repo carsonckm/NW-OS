@@ -31,7 +31,7 @@ import {
 } from './approvalRouting';
 import { LIFECYCLE_RANK, loadPolicies, slaPercent, stageFor, type SlaPolicy } from './approvalMonitor';
 import { resolveApprovalAuthority, type ResourceKind } from './authorityResolver';
-import { recordSnoozeEvent } from './exceptionLifecycle';
+import { recordSnoozeEvent, refreshObservation } from './exceptionLifecycle';
 import { businessElapsedMs, DAY_MS, loadCalendar, type BusinessCalendar } from './businessCalendar';
 import { coverageGaps, delegationEffectiveness, GAP_STATUSES, type CoverageStatus } from './delegationCoverage';
 
@@ -555,6 +555,9 @@ export async function snoozeException(pool: Pool, ctx: AccessContext, actor: Aud
   if (!e) throw notFound(`Exception ${b.id}`);
   if (e.severity === 'critical') throw new ValidationError('A critical exception cannot be snoozed (safety, Strategic, blocked production / site / payment, no valid approver, critical project)');
   const until = new Date(now.getTime() + b.hours * HOUR);
+  // The stored record (its severity) is brought up to date first: the database checks a snooze
+  // against the stored severity (migration 026). recordSnoozeEvent re-checks it under the lock.
+  await refreshObservation(pool, e, now);
   return withTransaction(pool, async (db) => {
     await db.query(
       `INSERT INTO owner_exception_snoozes (exception_key, snoozed_until, reason, snoozed_by) VALUES ($1, $2, $3, $4)

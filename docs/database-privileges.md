@@ -84,18 +84,47 @@ and leave a permanent record. They cannot judge whether the recorded facts are t
   - So an event from an earlier transaction cannot cover a later change.
 - **Reasons:** dismissing needs a reason. Reopening needs a `reopen` event with a reason.
 - **Critical exceptions:** a dismissal or snooze is refused when its event records the severity
-  as critical, or records none.
-  - The server writes the severity it recomputed from live data at the moment of the action, so
-    through the application a critical exception is never dismissed or snoozed.
-  - The database cannot recompute severity itself. A writer holding the runtime credential could
-    record a false, non-critical severity on the event; that false record stays permanently in
-    the append-only history.
+  as critical, or records none. Migration 026 (Batch 11, below) tightened this to the stored
+  severity.
 - **Severity:** a severity change needs a `changed` event.
 - **New exceptions:** a new exception starts `active` with its `observed` event.
 - **Snoozes:** a snooze needs a recorded exception and its `snooze` event.
 
 The application already wrote state and event together in one transaction, so no application
 code changed for this. The full suite passes in both modes.
+
+### Migration 026 (Batch 11): critical exceptions, by the stored severity
+
+Migration 025 checked the severity written on the dismissal or snooze event, and the writer
+chooses that value. Migration `026_phase6_critical_exception_integrity.sql` replaces the two
+check functions (the triggers are kept) so that the **stored severity**
+(`owner_exception_states.severity`) decides:
+
+- **Stored severity decides:** a dismissal or snooze is refused while the exception's stored
+  severity is critical. A dismissal is also refused if the row was critical just before the
+  change. The severity on the event is never accepted as proof.
+- **Event must match:** the dismissal or snooze event must record exactly the stored severity.
+  It must be its own `dismiss` / `snooze` event, written in the same transaction. An event of
+  another exception, another action or an earlier transaction does not count.
+- **No same-transaction lowering:** a critical exception cannot be lowered and dismissed or
+  snoozed in one transaction, in any order of statements (including in the same statement).
+- **Error code:** lifecycle refusals use their own SQLSTATE, `NWX01`. The API answers it with a
+  generic `409 conflict` ("reload and try again"). The database's message stays in the server
+  log.
+
+The application keeps the stored severity authoritative and current:
+- **Where severity comes from:** the server computes an exception's severity from live data
+  (the most severe of its reasons). It is stored when the exception is first recorded, and kept
+  current by the hourly lifecycle rule, which writes a `changed` event.
+- **Before an action:** before a dismissal or snooze, the server first brings that exception's
+  stored record up to date with what it sees now, in its own transaction. This is exactly what
+  the lifecycle rule would do: a stale or drifted stored severity is corrected and recorded with
+  a `changed` event.
+- **Under the row lock:** the action then checks, with the row locked, that the stored severity
+  is not critical and matches what the server sees. A mismatch means the exception changed in
+  the meantime: `409 conflict`.
+- **No other change:** acknowledge, wait, resolve and reopen are unchanged, including for
+  critical exceptions.
 
 ## 3. Startup checks (no silent fallback)
 
@@ -375,9 +404,13 @@ as a time-boxed emergency measure.
   function, change a table, skip triggers for its session, grant itself privileges or act as
   another role.
 - **Exception state follows the lifecycle:** a state change must be a valid transition and come
-  with a matching history event in the same transaction. A dismissal or snooze whose event
-  records the exception as critical is refused. A severity change, a snooze and a new exception
-  must each be recorded.
+  with a matching history event in the same transaction. A severity change, a snooze and a new
+  exception must each be recorded.
+- **Critical exceptions (Batch 11):**
+  - an exception whose **stored** severity is critical cannot be dismissed or snoozed, whatever
+    severity the request or the event claims;
+  - it cannot be lowered and dismissed or snoozed in the same transaction;
+  - a fabricated or unrelated event does not authorise a dismissal or snooze.
 - **The locked System Policy rows** (the Sensitive / Strategic ceilings) cannot be changed,
   deactivated or deleted.
 
@@ -387,8 +420,16 @@ credential can write every row the application can write, like a server bug coul
 - **History:** it can **append** plausible-looking audit rows and exception history events,
   including ones that satisfy the lifecycle checks. Examples:
   - a "dismiss" with a reason and a forged actor name;
-  - a critical exception recorded as non-critical (a false severity on the event, or a forged
-    "changed" event lowering it), then dismissed or snoozed.
+  - a forged `changed` event lowering a critical exception's stored severity, committed on its
+    own, followed by a dismissal or snooze in a **later** transaction. The database cannot
+    recompute severity from the business data, and the runtime credential can also change that
+    business data itself. What remains:
+    - the forged `changed` event is permanent;
+    - the server's live view still lists the exception as critical, whatever its stored state
+      (tested);
+    - the next server action or hourly rule writes the real severity back.
+  - a new exception the lifecycle has not recorded yet, recorded first with a false
+    non-critical severity. The live view above still applies.
 
   Every such record is permanent: it cannot change or remove what is already there, including
   its own forged records.

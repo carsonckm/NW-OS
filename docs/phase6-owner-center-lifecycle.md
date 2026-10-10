@@ -175,6 +175,8 @@ The Owner Exceptions panel shows:
   a new exception and the old one auto-resolves.
 - **Database owner:** resolved in Batch 10. With role separation the server's login owns
   nothing and cannot disable these triggers. Migration 025 also makes the database enforce the
-  state machine and recorded transitions, and refuses a dismissal or snooze recorded against a
-  critical exception. It cannot verify that a recorded severity is true
-  (docs/database-privileges.md §2 and §7).
+  state machine and recorded transitions. Since Batch 11 (migration 026) it refuses a dismissal or
+  snooze while the exception's **stored** severity is critical, whatever severity is claimed.
+  Before a dismissal or snooze the server brings the stored severity up to date with what it sees
+  (its own transaction, with a `changed` event). For what a compromised runtime credential can
+  still do, see docs/database-privileges.md §2 and §7.

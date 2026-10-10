@@ -85,6 +85,50 @@ async function ensureState(db: Db, e: OwnerException, now: Date) {
   if (ins.rowCount) await insertEvent(db, e.id, { action: 'observed', to: 'active', severity: e.severity, data: { type: e.type, reasons: e.reasons.map((r) => r.code) } });
 }
 
+/** Records what the server sees now on an existing state row: severity, fingerprint, presence. */
+async function observe(db: Db, e: OwnerException, row: Row, now: Date) {
+  const fp = fingerprintOf(e);
+  // The fingerprint includes the severity; the stored severity is compared too, so a stored value
+  // that drifted on its own is corrected (and recorded) as well.
+  const changed = fp !== row.fingerprint || e.severity !== row.severity;
+  const recurred = !row.present;
+  await db.query(
+    `UPDATE owner_exception_states SET last_seen_at = $2, present = true, severity = $3, fingerprint = $4, title = $5${changed ? ', last_activity_at = $2' : ''} WHERE exception_key = $1`,
+    [e.id, now, e.severity, fp, String(e.title).slice(0, 500)]
+  );
+  if (changed) await insertEvent(db, e.id, { action: 'changed', from: row.state, to: row.state, severity: e.severity, data: { before: row.fingerprint, after: fp } });
+  if (recurred) await insertEvent(db, e.id, { action: 'recurred', from: row.state, to: row.state, severity: e.severity, reason: ['resolved', 'dismissed'].includes(row.state) ? 'The condition is present again. It stays closed until the Owner reopens it.' : null });
+  return { changed, recurred };
+}
+
+/**
+ * Before a dismissal or snooze: brings the exception's stored record (its severity in particular)
+ * up to date with what the server sees now, exactly as the lifecycle rule would, in its own
+ * transaction. The database refuses a dismissal or snooze by the stored severity (migration 026)
+ * and refuses lowering a critical exception in the same transaction as dismissing or snoozing it,
+ * so the record is brought up to date first and the action then checks it under the row lock.
+ */
+export async function refreshObservation(pool: Pool, e: OwnerException, now: Date) {
+  await withTransaction(pool, async (db) => {
+    const row = (await db.query('SELECT * FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [e.id])).rows[0];
+    if (row && (fingerprintOf(e) !== row.fingerprint || e.severity !== row.severity || !row.present)) await observe(db, e, row, now);
+  });
+}
+
+/**
+ * The severity a dismissal or snooze is checked and recorded against: the stored one, which must
+ * also be what the server sees now. Critical is refused; a mismatch means the exception changed
+ * since the request was read (a conflict: reload and try again).
+ */
+function storedSeverityFor(act: 'dismiss' | 'snooze', row: Row, live: OwnerException | undefined) {
+  const stored = row.severity as string;
+  if (stored === 'critical' || live?.severity === 'critical') {
+    throw new ValidationError(act === 'dismiss' ? 'A critical exception cannot be dismissed (it can be acknowledged, put on waiting or resolved)' : 'A critical exception cannot be snoozed (safety, Strategic, blocked production / site / payment, no valid approver, critical project)');
+  }
+  if (live && live.severity !== stored) throw new ConflictError('The exception changed while you were acting on it: reload and try again');
+  return stored;
+}
+
 /** The live exceptions (visible and snoozed), keyed by id. */
 async function liveExceptions(pool: Pool, ctx: Ctx, now: Date) {
   const cur = await ownerExceptions(pool, ctx, now);
@@ -108,6 +152,7 @@ export async function transitionException(pool: Pool, ctx: Ctx, actor: AuditActo
   if (b.expected_state !== undefined && !(STATES as readonly string[]).includes(b.expected_state)) throw new ValidationError('expected_state is not a lifecycle state');
 
   const live = (await liveExceptions(pool, ctx, now)).get(b.id);
+  if (act === 'dismiss' && live) await refreshObservation(pool, live, now);
   return withTransaction(pool, async (db) => {
     if (live) await ensureState(db, live, now);
     const row = (await db.query('SELECT * FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [b.id])).rows[0];
@@ -119,9 +164,8 @@ export async function transitionException(pool: Pool, ctx: Ctx, actor: AuditActo
     // Repeating the same action (a double click, a replayed request) changes nothing.
     if (from === to && !(act === 'wait' && reason && reason !== row.waiting_for)) return { id: b.id, state: from, changed: false };
     if (!FROM[act].includes(from)) throw new ValidationError(`Cannot ${act} an exception that is ${from}`);
-    const severity: string = live?.severity ?? row.severity;
+    const severity: string = act === 'dismiss' ? storedSeverityFor('dismiss', row, live) : live?.severity ?? row.severity;
     const present = Boolean(live);
-    if (act === 'dismiss' && severity === 'critical') throw new ValidationError('A critical exception cannot be dismissed (it can be acknowledged, put on waiting or resolved)');
     if (act === 'resolve' && present && b.id.startsWith('approval:')) throw new ValidationError('This approval is still pending: decide it on its record (it resolves on its own once decided)');
     if (act === 'reopen' && !present) throw new ValidationError('Its condition is no longer present: there is nothing to reopen');
     const who = { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role };
@@ -138,10 +182,11 @@ export async function transitionException(pool: Pool, ctx: Ctx, actor: AuditActo
 /** Snooze / un-snooze also appear in the exception's history. */
 export async function recordSnoozeEvent(db: Db, e: OwnerException | undefined, key: string, action: 'snooze' | 'unsnooze', ctx: Ctx, reason: string | null, now: Date, data: Row = {}) {
   if (e) await ensureState(db, e, now);
-  const row = (await db.query('SELECT state FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [key])).rows[0];
+  const row = (await db.query('SELECT state, severity FROM owner_exception_states WHERE exception_key = $1 FOR UPDATE', [key])).rows[0];
   if (!row) return;
+  const severity = action === 'snooze' ? storedSeverityFor('snooze', row, e) : e?.severity ?? null;
   await db.query('UPDATE owner_exception_states SET last_activity_at = $2 WHERE exception_key = $1', [key, now]);
-  await insertEvent(db, key, { action, from: row.state, to: row.state, actor: { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role }, reason, severity: e?.severity ?? null, data });
+  await insertEvent(db, key, { action, from: row.state, to: row.state, actor: { id: ctx.user.id, name: ctx.user.name, role: ctx.user.role }, reason, severity, data });
 }
 
 /** The full history of one exception (Owner only; 404 like a missing one otherwise). */
@@ -179,21 +224,9 @@ export async function syncExceptionLifecycle(pool: Pool, ctx: Ctx, now = new Dat
         counts.observed++;
         continue;
       }
-      const fp = fingerprintOf(e);
-      const changed = fp !== row.fingerprint;
-      const recurred = !row.present;
-      await db.query(
-        `UPDATE owner_exception_states SET last_seen_at = $2, present = true, severity = $3, fingerprint = $4, title = $5${changed ? ', last_activity_at = $2' : ''} WHERE exception_key = $1`,
-        [e.id, now, e.severity, fp, String(e.title).slice(0, 500)]
-      );
-      if (changed) {
-        counts.changed++;
-        await insertEvent(db, e.id, { action: 'changed', from: row.state, to: row.state, severity: e.severity, data: { before: row.fingerprint, after: fp } });
-      }
-      if (recurred) {
-        counts.recurred++;
-        await insertEvent(db, e.id, { action: 'recurred', from: row.state, to: row.state, severity: e.severity, reason: ['resolved', 'dismissed'].includes(row.state) ? 'The condition is present again. It stays closed until the Owner reopens it.' : null });
-      }
+      const seen = await observe(db, e, row, now);
+      if (seen.changed) counts.changed++;
+      if (seen.recurred) counts.recurred++;
     }
     // Conditions that cleared.
     const gone = (await db.query(`SELECT * FROM owner_exception_states WHERE present AND NOT (exception_key = ANY($1)) FOR UPDATE`, [[...live.keys()]])).rows;
