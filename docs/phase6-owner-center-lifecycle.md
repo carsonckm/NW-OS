@@ -87,7 +87,7 @@ Migration `024_phase6_owner_exception_lifecycle.sql` adds:
 | acknowledge | active, waiting, stale | acknowledged | optional |
 | wait | active, acknowledged, stale | waiting | **required** (what or whom you are waiting for) |
 | resolve | active, acknowledged, waiting, stale | resolved | optional |
-| dismiss | active, acknowledged, waiting, stale | dismissed | **required**; **never for a critical exception** |
+| dismiss | active, acknowledged, waiting, stale | dismissed | **required**; **never for an exception that is or has been critical** |
 | reopen | resolved, dismissed | active | **required**; only while the condition is present |
 
 NW OS itself records, through the `exception_lifecycle` automation rule (hourly):
@@ -180,3 +180,8 @@ The Owner Exceptions panel shows:
   Before a dismissal or snooze the server brings the stored severity up to date with what it sees
   (its own transaction, with a `changed` event). For what a compromised runtime credential can
   still do, see docs/database-privileges.md §2 and §7.
+- **Once critical, never dismissible (Batch 11, migration 027):** an exception that has been
+  critical is permanently locked by the database. It can no longer be dismissed or snoozed, even
+  if its severity drops; acknowledge, wait, resolve and reopen still work. The screen says so
+  instead of offering the buttons. The hourly rule also records integrity findings, which are
+  audited, alerted once and listed in the Exception Center (database-privileges.md §2).

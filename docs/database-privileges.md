@@ -126,6 +126,59 @@ The application keeps the stored severity authoritative and current:
 - **No other change:** acknowledge, wait, resolve and reopen are unchanged, including for
   critical exceptions.
 
+### Migration 027 (Batch 11): once critical, never dismissible; integrity findings
+
+**A. A permanent lock, maintained by the database.**
+- **Columns:** `owner_exception_states.critical_locked` (and `critical_locked_at`).
+- **How it is set:** the database sets it itself, through triggers owned by `nwos_owner`:
+  - when the stored severity is critical, on insert or update;
+  - when any history event records the exception as critical. History is append-only, so such
+    an event cannot be removed.
+- **It is never cleared:** an attempt to clear it is refused (`NWX01`), and its date cannot be
+  moved.
+- **What it blocks:** a locked exception cannot be dismissed or snoozed, through the API or by
+  direct SQL. This holds even after its stored severity is lowered, legitimately (its risk fell)
+  or with a forged `changed` event.
+- **What it allows:** acknowledge, wait, resolve and reopen work as before.
+- **Existing data:** the migration locks every exception that is, or was ever recorded as,
+  critical.
+- **In the Owner Exception Center:**
+  - the API returns `lifecycle.dismissible` and `lifecycle.not_dismissible_reason`;
+  - the screen hides Dismiss and Snooze, and states the permanent reason. For example: "This
+    exception has been critical (since …), so it can never be dismissed or snoozed. You can
+    acknowledge it, put it on waiting or resolve it."
+- **Live severity:** the live-severity display is unchanged.
+
+**B. Integrity findings** (`owner_exception_integrity_findings`; never deleted: no DELETE for the
+runtime role, and triggers refuse delete and truncate).
+- **When:** the hourly `exception_lifecycle` rule compares what is stored with what the server
+  sees now. It does this **before** it records anything, so a lowered stored severity is still
+  visible.
+- **What it records:**
+  - `closed_while_critical`: dismissed or snoozed, while live-critical;
+  - `severity_lowered_while_critical`: live-critical and locked, but stored with a lower
+    severity. The finding names the most recent lowering event.
+  - `locked_but_closed`: locked, not live-critical, and dismissed or snoozed.
+- **Deduplication:** there is one open finding per exception and kind, enforced by a unique
+  index, so repeated or concurrent runs neither duplicate findings nor repeat alerts.
+- **For each new finding:**
+  - a `security.exception_integrity_finding` audit row, recording the states, severities, lock
+    and event ids (no secrets or payloads);
+  - an urgent notification to every active Owner, one per finding;
+  - an `INTEGRITY_FINDING` entry in the Owner Exception Center, while the finding is open.
+- **Failed alerts:** a failed alert is recorded on the finding (`alert_attempts`,
+  `last_alert_error`) and retried by every run until it is delivered. The finding itself is
+  never lost.
+- **When the inconsistency ends:** the next run sets `cleared_at` and writes a
+  `security.exception_integrity_cleared` audit row. The finding row and its evidence stay.
+- **Nothing is repaired automatically:** no state is changed, no event is altered. The Owner
+  decides, for example to reopen and end the snooze, through audited Owner actions. The run
+  does, as always, record the real severity (a `changed` event), so a detected exception is
+  locked from then on.
+- **Findings may be legitimate.** An exception dismissed while not critical that has become
+  critical since, or a risk that fell and rose again between two runs, produces a finding too.
+  The finding text says so.
+
 ## 3. Startup checks (no silent fallback)
 
 On start, before the API and its automation scheduler are mounted, the server
@@ -407,8 +460,11 @@ as a time-boxed emergency measure.
   with a matching history event in the same transaction. A severity change, a snooze and a new
   exception must each be recorded.
 - **Critical exceptions (Batch 11):**
-  - an exception whose **stored** severity is critical cannot be dismissed or snoozed, whatever
-    severity the request or the event claims;
+  - an exception that is stored, or has ever been recorded, as critical is permanently locked:
+    it cannot be dismissed or snoozed, whatever severity the request or the event claims, and
+    even after its stored severity is lowered in another transaction (**attack path 1 is
+    prevented**);
+  - the lock cannot be cleared;
   - it cannot be lowered and dismissed or snoozed in the same transaction;
   - a fabricated or unrelated event does not authorise a dismissal or snooze.
 - **The locked System Policy rows** (the Sensitive / Strategic ceilings) cannot be changed,
@@ -420,16 +476,26 @@ credential can write every row the application can write, like a server bug coul
 - **History:** it can **append** plausible-looking audit rows and exception history events,
   including ones that satisfy the lifecycle checks. Examples:
   - a "dismiss" with a reason and a forged actor name;
-  - a forged `changed` event lowering a critical exception's stored severity, committed on its
-    own, followed by a dismissal or snooze in a **later** transaction. The database cannot
-    recompute severity from the business data, and the runtime credential can also change that
-    business data itself. What remains:
-    - the forged `changed` event is permanent;
-    - the server's live view still lists the exception as critical, whatever its stored state
-      (tested);
-    - the next server action or hourly rule writes the real severity back.
-  - a new exception the lifecycle has not recorded yet, recorded first with a false
-    non-critical severity. The live view above still applies.
+  - a forged `changed` event lowering a critical exception's stored severity. Since migration
+    027 this no longer lets it be dismissed or snoozed (the lock stays). It is detected as
+    `severity_lowered_while_critical` on the next hourly run.
+  - **attack path 2, detected but NOT prevented:** an exception NW OS has not recorded yet (a
+    new critical condition, until the next hourly run or Owner action records it) can be
+    recorded first with a false, non-critical severity, then snoozed and dismissed.
+    - The database cannot know the real severity, which is computed by the server from
+      business data that the same credential can also change. So it cannot refuse this
+      without trusting the application.
+    - What remains:
+      - the Owner Center still shows the exception as critical (live severity);
+      - the next hourly run records the real severity, which locks it;
+      - that run also records a `closed_while_critical` finding, writes a security audit row
+        and alerts the Owner;
+      - the forged records stay as evidence.
+    - The exposure window is the time until the next run (at most an hour). Within it nothing
+      alerts.
+  - falsified business data (e.g. a project's risk set back to "On Track"): the exception
+    then is not critical by any measure, live view included. Protecting the business data
+    itself needs database-side end-user identity (not in this batch).
 
   Every such record is permanent: it cannot change or remove what is already there, including
   its own forged records.

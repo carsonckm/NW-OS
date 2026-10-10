@@ -8,6 +8,8 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sendError } from '../http/errors';
+import { AccessContext } from '../auth/access';
+import { syncExceptionLifecycle } from '../modules/exceptionLifecycle';
 import { createPool, type Pool } from './pool';
 import { migrate } from './migrate';
 import { bootstrapRoles, enforceRuntimePrivileges, ident, runtimePrivilegeReport } from './roles';
@@ -590,7 +592,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       ]) {
         const err = await inTx(statements);
         expect(code(err)).toBe('NWX01');
-        expect(err!.message).toMatch(/critical exception cannot be (lowered and dismissed or snoozed in one transaction|dismissed|snoozed)/);
+        expect(err!.message).toMatch(/(critical exception cannot be (lowered and dismissed or snoozed in one transaction|dismissed|snoozed))|has been critical cannot be (dismissed|snoozed)/);
       }
       expect(await stored(key)).toMatchObject({ state: 'active', severity: 'critical' });
       expect(await snoozed(key)).toBe(0);
@@ -658,27 +660,31 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       await owner().post('/api/owner/exceptions/snooze').send({ id: CRIT, hours: 1, reason: 'x' }).expect(400);
       expect(await stored(CRIT)).toMatchObject({ severity: 'critical' });
       expect((await events(CRIT)).at(-1)).toMatchObject({ action: 'changed', severity: 'critical' });
-      // A live non-critical exception whose stored record says critical (stale or drifted): the
-      // server records the real severity first, in its own transaction, then dismisses.
+      // A live non-critical exception whose stored record says critical (stale or forged): the
+      // server records the real severity first, but a record of "critical" locks the exception
+      // for good (migration 027), so it fails safe: it can no longer be dismissed.
       const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
       const e = list.exceptions.find((x: Row) => x.severity !== 'critical' && x.lifecycle.state === 'active' && x.id !== CRIT)!;
       await owner().post('/api/owner/exceptions/acknowledge').send({ id: e.id }).expect(200);
       expect(await inTx([[`UPDATE owner_exception_states SET severity = 'critical' WHERE exception_key = $1`, [e.id]], [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity) VALUES ($1, 'changed', 'acknowledged', 'acknowledged', 'critical')`, [e.id]]])).toBeUndefined();
-      await owner().post('/api/owner/exceptions/dismiss').send({ id: e.id, reason: 'Handled' }).expect(200);
-      expect((await events(e.id)).slice(-2)).toEqual([{ action: 'changed', severity: e.severity }, { action: 'dismiss', severity: e.severity }]);
+      const refused = await owner().post('/api/owner/exceptions/dismiss').send({ id: e.id, reason: 'Handled' }).expect(400);
+      expect(refused.body.message).toMatch(/has been critical .*can never be dismissed/);
+      expect(await stored(e.id)).toMatchObject({ severity: e.severity, state: 'acknowledged' });
+      expect((await events(e.id)).at(-1)).toMatchObject({ action: 'changed', severity: e.severity });
     });
 
-    it('limitation (documented): a forged downgrade committed on its own is accepted by the database, stays in the history, and the Owner Center still lists the exception as critical', async () => {
-      // The database cannot recompute severity from the business data; a holder of the runtime
-      // credential can lower the stored record in one transaction and dismiss in the next.
-      // What remains: the forged "changed" event is permanent, and the server's live view never
-      // hides a critical exception, whatever its stored state.
+    it('path 1 (prevented): a forged downgrade committed on its own does not make a once-critical exception dismissible or snoozable', async () => {
       expect(await inTx(lowerSql(CRIT, 'info'))).toBeUndefined();
       const st = (await stored(CRIT)).state as string;
-      expect(await inTx(dismissSql(CRIT, 'info', st))).toBeUndefined();
-      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
-      expect(list.exceptions.find((x: Row) => x.id === CRIT)).toMatchObject({ severity: 'critical', lifecycle: { state: 'dismissed' } });
-      expect((await events(CRIT)).slice(-2).map((x) => x.action)).toEqual(['changed', 'dismiss']);
+      const d = await inTx(dismissSql(CRIT, 'info', st));
+      expect(code(d)).toBe('NWX01');
+      expect(d!.message).toMatch(/has been critical cannot be dismissed/);
+      const z = await inTx(snoozeSql(CRIT, 'info'));
+      expect(code(z)).toBe('NWX01');
+      expect(z!.message).toMatch(/has been critical cannot be snoozed/);
+      expect(await stored(CRIT)).toMatchObject({ severity: 'info', state: st });
+      // The forged downgrade itself stays in the history.
+      expect((await events(CRIT)).at(-1)).toMatchObject({ action: 'changed', severity: 'info' });
     });
 
     it('a database lifecycle refusal reaches the browser as a generic 409 conflict, without database details', async () => {
@@ -694,6 +700,210 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       expect(sent.status).toBe(409);
       expect(sent.body).toEqual({ error: 'conflict', message: expect.stringMatching(/Reload and try again/) });
       expect(JSON.stringify(sent.body)).not.toMatch(/project:x|owner exception/);
+    });
+  });
+
+  describe('Batch 11 (A + C): once critical, never dismissible; integrity findings and alerts', () => {
+    const owner = () => as['Owner / CEO'];
+    const code = (e: Error | undefined) => (e as Error & { code?: string } | undefined)?.code;
+    const stored = async (key: string) => (await appPool.query('SELECT state, severity, critical_locked, critical_locked_at FROM owner_exception_states WHERE exception_key = $1', [key])).rows[0] as Row;
+    const events = async (key: string) => (await appPool.query('SELECT id, action, severity FROM owner_exception_events WHERE exception_key = $1 ORDER BY id', [key])).rows as Row[];
+    const findings = async (key: string) => (await appPool.query('SELECT * FROM owner_exception_integrity_findings WHERE exception_key = $1 ORDER BY id', [key])).rows as Row[];
+    const notes = async (key: string) => (await appPool.query(`SELECT * FROM notifications WHERE entity_type = 'owner_exception' AND entity_id = $1`, [key])).rows as Row[];
+    const audits = async (key: string, action: string) => (await appPool.query('SELECT * FROM audit_logs WHERE entity_id = $1 AND action = $2 ORDER BY id', [key, action])).rows as Row[];
+    let ctx: AccessContext;
+    const sync = () => syncExceptionLifecycle(appPool, ctx);
+    const view = async (id: string) => ((await owner().get('/api/owner/exceptions').expect(200)).body.exceptions as Row[]).find((e) => e.id === id);
+    const changedSql = (key: string, sev: string, st = 'active'): [string, unknown[]][] => [
+      [`UPDATE owner_exception_states SET severity = $2 WHERE exception_key = $1`, [key, sev]],
+      [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity) VALUES ($1, 'changed', $2, $2, $3)`, [key, st, sev]],
+    ];
+    const dismissSql = (key: string, sev: string, from = 'active'): [string, unknown[]][] => [
+      [`UPDATE owner_exception_states SET state = 'dismissed' WHERE exception_key = $1`, [key]],
+      [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'dismiss', $2, 'dismissed', $3, 'x')`, [key, from, sev]],
+    ];
+    const snoozeSql = (key: string, sev: string, st = 'active'): [string, unknown[]][] => [
+      [`INSERT INTO owner_exception_snoozes (exception_key, snoozed_until, reason, snoozed_by) VALUES ($1, now() + interval '1 day', 'x', 'user-owner') ON CONFLICT (exception_key) DO UPDATE SET snoozed_until = EXCLUDED.snoozed_until`, [key]],
+      [`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity, reason) VALUES ($1, 'snooze', $2, $2, $3, 'x')`, [key, st, sev]],
+    ];
+    const P1 = 'project:proj-2:Critical';
+    const P2 = 'issue:iss-b11-p2';
+    /** A new live critical exception (a safety issue) that NW OS has not recorded yet. */
+    const newSafetyIssue = (id: string) => appPool.query(`INSERT INTO issues (id, project_id, status, priority, data) VALUES ($1, 'proj-1', 'Reported', 'Critical', '{"title":"Exposed wiring","category":"Safety"}')`, [id]);
+    const ISS = 'issue:iss-b11';
+
+    beforeAll(async () => {
+      ctx = await AccessContext.load(appPool, (await appPool.query(`SELECT * FROM users WHERE id = 'user-owner'`)).rows[0]);
+      await appPool.query(`INSERT INTO issues (id, project_id, status, priority, data) VALUES ('iss-b11', 'proj-1', 'Reported', 'Critical', '{"title":"Loose fitting","category":"Quality"}')`);
+    });
+
+    it('the lock is set by the database whenever an exception is stored or recorded as critical, and never cleared', async () => {
+      await appPool.query(`UPDATE projects SET risk_status = 'Critical' WHERE id = 'proj-2'`);
+      await sync();
+      expect(await stored(P1)).toMatchObject({ severity: 'critical', critical_locked: true });
+      const since = (await stored(P1)).critical_locked_at;
+      // Clearing it, or moving its date, is refused / ignored.
+      const unlock = await inTx([[`UPDATE owner_exception_states SET critical_locked = false WHERE exception_key = $1`, [P1]]]);
+      expect(code(unlock)).toBe('NWX01');
+      expect(unlock!.message).toMatch(/cannot become dismissible again/);
+      await appPool.query(`UPDATE owner_exception_states SET critical_locked_at = now() + interval '1 day' WHERE exception_key = $1`, [P1]);
+      expect((await stored(P1)).critical_locked_at).toEqual(since);
+      // Inserting a new record as critical locks it; so does any history event recording critical.
+      expect(await inTx([[`INSERT INTO owner_exception_states (exception_key, exception_type, title, severity, fingerprint) VALUES ('test:b11:lock', 'test', 'T', 'attention', 'fp')`, []], [`INSERT INTO owner_exception_events (exception_key, action, to_state, severity) VALUES ('test:b11:lock', 'observed', 'active', 'attention')`, []]])).toBeUndefined();
+      expect(await stored('test:b11:lock')).toMatchObject({ critical_locked: false });
+      await appPool.query(`INSERT INTO owner_exception_events (exception_key, action, from_state, to_state, severity) VALUES ('test:b11:lock', 'acknowledge', 'active', 'active', 'critical')`).catch(() => {});
+      expect(await stored('test:b11:lock')).toMatchObject({ severity: 'attention', critical_locked: true });
+    });
+
+    it('path 1 (PREVENTED), each step committed as nwos_app: lowering the stored severity in one transaction does not allow dismissing or snoozing in a later one', async () => {
+      expect(await inTx(changedSql(P1, 'info'))).toBeUndefined();
+      expect(await stored(P1)).toMatchObject({ severity: 'info', critical_locked: true });
+      for (const sev of ['info', 'attention']) {
+        const d = await inTx(dismissSql(P1, sev));
+        expect(code(d)).toBe('NWX01');
+        expect(d!.message).toMatch(/has been critical cannot be dismissed/);
+        const z = await inTx(snoozeSql(P1, sev));
+        expect(code(z)).toBe('NWX01');
+        expect(z!.message).toMatch(/has been critical cannot be snoozed/);
+      }
+      expect(await stored(P1)).toMatchObject({ state: 'active' });
+    });
+
+    it('C: the lowered stored severity is detected on the next run (not before), audited and alerted once; the record is corrected, the forged event kept', async () => {
+      expect(await findings(P1)).toEqual([]); // detection waits for the hourly rule
+      const forged = (await events(P1)).at(-1)!;
+      await sync();
+      const [f] = await findings(P1);
+      expect(f).toMatchObject({ finding: 'severity_lowered_while_critical', cleared_at: null });
+      expect(f.details).toMatchObject({ live_severity: 'critical', stored_severity: 'info', critical_locked: true, lowering_event_id: String(forged.id) });
+      expect(f.alerted_at).not.toBeNull();
+      expect(await audits(P1, 'security.exception_integrity_finding')).toHaveLength(1);
+      expect(await notes(P1)).toHaveLength(1);
+      // The run then records the real severity; the forged event stays in the history.
+      expect(await stored(P1)).toMatchObject({ severity: 'critical' });
+      expect((await events(P1)).some((e) => String(e.id) === String(forged.id))).toBe(true);
+      // Next run: the condition no longer holds, so the finding is cleared (kept, audited).
+      await sync();
+      expect((await findings(P1))[0].cleared_at).not.toBeNull();
+      expect(await audits(P1, 'security.exception_integrity_cleared')).toHaveLength(1);
+      expect(await notes(P1)).toHaveLength(1);
+    });
+
+    it('path 2 (DETECTED, NOT PREVENTED), each step committed as nwos_app: an unrecorded critical exception recorded with a false low severity can be snoozed and dismissed; the next run detects, audits, alerts and locks it', async () => {
+      await newSafetyIssue('iss-b11-p2');
+      expect(await view(P2)).toMatchObject({ severity: 'critical' });
+      expect(await stored(P2)).toBeUndefined();
+      expect(await inTx([[`INSERT INTO owner_exception_states (exception_key, exception_type, title, project_id, severity, fingerprint) VALUES ($1, 'CRITICAL_ISSUE', 'x', 'proj-1', 'info', 'forged')`, [P2]], [`INSERT INTO owner_exception_events (exception_key, action, to_state, severity) VALUES ($1, 'observed', 'active', 'info')`, [P2]]])).toBeUndefined();
+      expect(await inTx(snoozeSql(P2, 'info'))).toBeUndefined();
+      expect(await inTx(dismissSql(P2, 'info'))).toBeUndefined();
+      // The Owner Center still shows it as critical (live severity), whatever is stored.
+      expect(await view(P2)).toMatchObject({ severity: 'critical', lifecycle: { state: 'dismissed', dismissible: false } });
+      expect(await findings(P2)).toEqual([]);
+      await sync();
+      const f = await findings(P2);
+      expect(f.map((x) => x.finding)).toEqual(['closed_while_critical']);
+      expect(f[0].details).toMatchObject({ live_severity: 'critical', stored_severity: 'info', state: 'dismissed' });
+      expect(await audits(P2, 'security.exception_integrity_finding')).toHaveLength(1);
+      expect(await notes(P2)).toHaveLength(1);
+      expect((await notes(P2))[0]).toMatchObject({ priority: 'urgent', title: expect.stringMatching(/Integrity check/) });
+      // The run recorded the real severity: from now on it is locked, and nothing was repaired.
+      expect(await stored(P2)).toMatchObject({ severity: 'critical', critical_locked: true, state: 'dismissed' });
+      // The finding is in the Exception Center too.
+      const list = (await owner().get('/api/owner/exceptions').expect(200)).body as Row;
+      expect(list.exceptions.find((e: Row) => e.type === 'INTEGRITY_FINDING' && e.title.includes(P2))).toBeDefined();
+      // Repeated runs: no duplicate finding, audit or alert.
+      await sync();
+      await sync();
+      expect(await findings(P2)).toHaveLength(1);
+      expect(await audits(P2, 'security.exception_integrity_finding')).toHaveLength(1);
+      expect(await notes(P2)).toHaveLength(1);
+      // The Owner reopens it (an audited Owner action); the finding then clears on the next run.
+      await owner().post('/api/owner/exceptions/reopen').send({ id: P2, reason: 'Not closed by me' }).expect(200);
+      await sync();
+      // Still snoozed (by the forged snooze): the finding holds until that ends too.
+      expect((await findings(P2))[0].cleared_at).toBeNull();
+      await owner().delete(`/api/owner/exceptions/snooze/${encodeURIComponent(P2)}`).expect(200);
+      await sync();
+      expect((await findings(P2))[0].cleared_at).not.toBeNull();
+      expect(await audits(P2, 'security.exception_integrity_cleared')).toHaveLength(1);
+      // And it can no longer be dismissed or snoozed, through the API or SQL.
+      expect((await owner().post('/api/owner/exceptions/dismiss').send({ id: P2, reason: 'x' })).status).toBe(400);
+      expect(code(await inTx(dismissSql(P2, 'info')))).toBe('NWX01');
+    });
+
+    it('legitimate severity changes: an exception that becomes critical is locked for good; the lock survives every permitted transition and the screen says so', async () => {
+      await sync();
+      expect(await stored(ISS)).toMatchObject({ severity: 'urgent', critical_locked: false });
+      expect(await view(ISS)).toMatchObject({ lifecycle: { dismissible: true, not_dismissible_reason: null } });
+      // Becomes a safety issue (critical), then not again.
+      await appPool.query(`UPDATE issues SET data = data || '{"category":"Safety"}' WHERE id = 'iss-b11'`);
+      await sync();
+      expect(await stored(ISS)).toMatchObject({ severity: 'critical', critical_locked: true });
+      await appPool.query(`UPDATE issues SET data = data || '{"category":"Quality"}' WHERE id = 'iss-b11'`);
+      await sync();
+      expect(await stored(ISS)).toMatchObject({ severity: 'urgent', critical_locked: true });
+      const item = await view(ISS);
+      expect(item).toMatchObject({ severity: 'urgent', lifecycle: { dismissible: false } });
+      expect(item.lifecycle.not_dismissible_reason).toMatch(/has been critical .* can never be dismissed or snoozed/);
+      const d = await owner().post('/api/owner/exceptions/dismiss').send({ id: ISS, reason: 'x' }).expect(400);
+      expect(d.body.message).toMatch(/has been critical .* can never be dismissed/);
+      const z = await owner().post('/api/owner/exceptions/snooze').send({ id: ISS, hours: 1, reason: 'x' });
+      expect(z.status).toBe(400);
+      // Acknowledge, wait, resolve, reopen: all still work, and the lock stays.
+      await owner().post('/api/owner/exceptions/acknowledge').send({ id: ISS }).expect(200);
+      await owner().post('/api/owner/exceptions/wait').send({ id: ISS, reason: 'Contractor' }).expect(200);
+      await owner().post('/api/owner/exceptions/resolve').send({ id: ISS }).expect(200);
+      await owner().post('/api/owner/exceptions/reopen').send({ id: ISS, reason: 'Back' }).expect(200);
+      expect(await stored(ISS)).toMatchObject({ state: 'active', critical_locked: true });
+      expect(await findings(ISS)).toEqual([]);
+    });
+
+    it('C: alert delivery failure is recorded and retried until it succeeds, then never repeated', async () => {
+      // Make notification delivery fail (test-only fixture, as the owner role).
+      await db.owner.query(`CREATE FUNCTION b11_fail_notify() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'notification service down'; END $$`);
+      await db.owner.query(`CREATE TRIGGER b11_fail_notify BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION b11_fail_notify()`);
+      try {
+        // An unrecorded critical exception recorded low and snoozed outside NW OS (path 2).
+        const k2 = 'issue:iss-b11-f';
+        await newSafetyIssue('iss-b11-f');
+        expect(await inTx([[`INSERT INTO owner_exception_states (exception_key, exception_type, title, severity, fingerprint) VALUES ($1, 't', 'x', 'info', 'f')`, [k2]], [`INSERT INTO owner_exception_events (exception_key, action, to_state, severity) VALUES ($1, 'observed', 'active', 'info')`, [k2]]])).toBeUndefined();
+        expect(await inTx(snoozeSql(k2, 'info'))).toBeUndefined();
+        await sync();
+        let [f] = await findings(k2);
+        expect(f).toMatchObject({ finding: 'closed_while_critical', alerted_at: null, alert_attempts: 1, last_alert_error: expect.stringMatching(/notification service down/) });
+        await sync();
+        [f] = await findings(k2);
+        expect(f).toMatchObject({ alerted_at: null, alert_attempts: 2 });
+        expect(await notes(k2)).toEqual([]);
+        expect(await audits(k2, 'security.exception_integrity_finding')).toHaveLength(1);
+      } finally {
+        await db.owner.query('DROP TRIGGER IF EXISTS b11_fail_notify ON notifications');
+        await db.owner.query('DROP FUNCTION IF EXISTS b11_fail_notify()');
+      }
+      await sync();
+      const [f] = await findings('issue:iss-b11-f');
+      expect(f).toMatchObject({ alert_attempts: 3, last_alert_error: null });
+      expect(f.alerted_at).not.toBeNull();
+      await sync();
+      expect(await notes('issue:iss-b11-f')).toHaveLength(1);
+    });
+
+    it('C: concurrent runs record one finding and one alert', async () => {
+      const key = 'issue:iss-b11-c';
+      await newSafetyIssue('iss-b11-c');
+      expect(await inTx([[`INSERT INTO owner_exception_states (exception_key, exception_type, title, severity, fingerprint) VALUES ($1, 't', 'x', 'info', 'f')`, [key]], [`INSERT INTO owner_exception_events (exception_key, action, to_state, severity) VALUES ($1, 'observed', 'active', 'info')`, [key]]])).toBeUndefined();
+      expect(await inTx(dismissSql(key, 'info'))).toBeUndefined();
+      const results = await Promise.allSettled([sync(), sync(), sync()]);
+      expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
+      await sync();
+      expect((await findings(key)).filter((f) => f.finding === 'closed_while_critical')).toHaveLength(1);
+      expect(await audits(key, 'security.exception_integrity_finding')).toHaveLength(1);
+      expect(await notes(key)).toHaveLength(1);
+    });
+
+    it('findings are evidence: the runtime role cannot delete them', async () => {
+      expect((await inTx([['DELETE FROM owner_exception_integrity_findings', []]]))?.message).toMatch(/permission denied/);
+      expect((await inTx([['TRUNCATE owner_exception_integrity_findings', []]]))?.message).toMatch(/permission denied|never deleted/);
     });
   });
 

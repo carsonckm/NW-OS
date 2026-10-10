@@ -31,7 +31,7 @@ import {
 } from './approvalRouting';
 import { LIFECYCLE_RANK, loadPolicies, slaPercent, stageFor, type SlaPolicy } from './approvalMonitor';
 import { resolveApprovalAuthority, type ResourceKind } from './authorityResolver';
-import { recordSnoozeEvent, refreshObservation } from './exceptionLifecycle';
+import { INTEGRITY_FINDINGS, recordSnoozeEvent, refreshObservation } from './exceptionLifecycle';
 import { businessElapsedMs, DAY_MS, loadCalendar, type BusinessCalendar } from './businessCalendar';
 import { coverageGaps, delegationEffectiveness, GAP_STATUSES, type CoverageStatus } from './delegationCoverage';
 
@@ -485,6 +485,14 @@ export async function ownerExceptions(pool: Pool, ctx: AccessContext, now = new 
   }
   for (const e of (await delegationEffectiveness(pool, now)).delegations.filter((x) => x.finding && x.in_force)) {
     out.push(finish({ id: `delegation:${e.rule_id}:ineffective`, type: 'DELEGATION_INEFFECTIVE', reasons: [{ code: 'OWNER_FALLBACK_RATE', label: `${e.owner_fallback_rate}% of ${e.approvals} decisions in its scope returned to you`, points: 15, level: 'attention' }], title: `Delegation ${e.code} covers only part of the workload`, project_id: null, project_name: null, client_name: null, decision: e.decision_type, status: null, current_approver: null, value: null, risk: null, due_at: null, age_hours: null, why_owner: e.finding!, recommended: 'Look at the fallback reasons: widen the delegation, or keep those decisions on purpose.', link: { tab: 'authority' }, resource: null, actions: ['open'] }));
+  }
+
+  // Batch 11: inconsistencies the lifecycle rule found between stored exceptions and what the
+  // server sees (owner_exception_integrity_findings), until they no longer hold.
+  for (const f of (await pool.query(`SELECT id, exception_key, finding, first_detected_at FROM owner_exception_integrity_findings WHERE cleared_at IS NULL ORDER BY id`)).rows) {
+    const kind = INTEGRITY_FINDINGS[f.finding as keyof typeof INTEGRITY_FINDINGS];
+    if (!kind) continue;
+    out.push(finish({ id: `integrity:${f.id}`, type: 'INTEGRITY_FINDING', reasons: [{ code: 'INTEGRITY_FINDING', label: kind.title, points: 60, level: 'urgent' }], title: `${kind.title}: ${f.exception_key}`, project_id: null, project_name: null, client_name: null, decision: null, status: 'Open', current_approver: null, value: null, risk: null, due_at: null, age_hours: Math.round((now.getTime() - new Date(f.first_detected_at).getTime()) / HOUR), why_owner: kind.explain, recommended: `Open the history of ${f.exception_key}. If you did not close it, reopen it and treat the server's database credential as possibly compromised (rotate it).`, link: null, resource: null, actions: ['open'] }));
   }
 
   const otherEsc = (await pool.query(`SELECT id, project_id, created_at, data->>'title' AS title, data->>'reason' AS reason FROM escalations WHERE status = 'Open' AND level = 2 AND coalesce(data->>'rule_key', '') <> 'approval_monitor' ORDER BY id`)).rows.filter((e) => !e.project_id || ctx.canSeeProject(e.project_id));

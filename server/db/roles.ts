@@ -29,7 +29,7 @@ export const DEFAULT_ROLES: RoleNames = { owner: 'nwos_owner', migrator: 'nwos_m
 /** History tables: the application may read and append, never change or remove. */
 export const APPEND_ONLY_TABLES = ['audit_logs', 'owner_exception_events', 'delivery_receipts'];
 /** Records the application updates but never deletes (their triggers refuse deletes too). */
-export const NO_DELETE_TABLES = ['owner_exception_states', 'owner_exception_snoozes', 'drawing_revisions'];
+export const NO_DELETE_TABLES = ['owner_exception_states', 'owner_exception_snoozes', 'drawing_revisions', 'owner_exception_integrity_findings'];
 /** Managed by the migrator only. */
 export const READ_ONLY_TABLES = ['schema_migrations'];
 
