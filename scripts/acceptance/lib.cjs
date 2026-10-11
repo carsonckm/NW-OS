@@ -8,6 +8,14 @@ const psql = (sql) =>
   process.env.ACCEPTANCE_DATABASE_URL
     ? execSync(`psql "$ACCEPTANCE_DATABASE_URL" -tAc ${JSON.stringify(sql)}`).toString().trim()
     : execSync(`PGPASSWORD=nwos psql -h localhost -U nwos -d ${process.env.PGDATABASE || 'nwos_dev'} -tAc ${JSON.stringify(sql)}`).toString().trim();
+// Fixture SQL that sets up protected records (authority rules, accounts) for a scenario, such as
+// moving a rule's dates to simulate time. Since Batch 12B the runtime role cannot do that without
+// a signed-in Owner (migration 031), so it runs on ACCEPTANCE_ADMIN_DATABASE_URL (the migrator)
+// when it is set, like the account scripts.
+const psqlAdmin = (sql) =>
+  process.env.ACCEPTANCE_ADMIN_DATABASE_URL
+    ? execSync(`psql "$ACCEPTANCE_ADMIN_DATABASE_URL" -tAc ${JSON.stringify(sql)}`).toString().trim()
+    : psql(sql);
 async function open(account, browser) {
   const ctx = await browser.newContext({ viewport: { width: 1700, height: 1000 } });
   const page = await ctx.newPage();
@@ -28,4 +36,4 @@ const api = (page, method, path, body) => page.evaluate(async ([m, p, b]) => { c
 const vis = (loc) => loc.filter({ visible: true }).first();
 let n = 0;
 const step = (msg) => console.log(`${++n}. ${msg}`);
-module.exports = { chromium, psql, open, synced, settle, nav, api, vis, step, SHOTS };
+module.exports = { chromium, psql, psqlAdmin, open, synced, settle, nav, api, vis, step, SHOTS };
