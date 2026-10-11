@@ -107,6 +107,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 knowledge base and recurring proble
       expect((await as['Site Supervisor'].post('/api/recurring-problems/review').send({ pattern_key: 'issue:Drawing / Design', decision: 'Dismissed', note: 'x' })).status).toBe(403);
       expect((await owner().post('/api/recurring-problems/review').send({ pattern_key: 'issue:Drawing / Design', decision: 'Dismissed' })).status).toBe(400);
       expect((await owner().post('/api/recurring-problems/review').send({ pattern_key: 'issue:Nope', decision: 'Action taken' })).status).toBe(400);
+      // Batch 12B: the Production Manager sees assigned projects only; the evidence spans proj-x.
+      await owner().put('/api/users/user-prod-mgr/projects').send({ project_ids: ['proj-1', 'proj-2', 'proj-x'] }).expect(200);
       const draft = (await prod().post('/api/recurring-problems/draft-knowledge').send({ pattern_key: 'issue:Drawing / Design' }).expect(201)).body;
       expect(draft).toMatchObject({ status: 'Draft', category: 'Drawings', created_by_id: 'user-prod-mgr', solution: '' });
       expect(draft.problem).toMatch(/rp-1/);

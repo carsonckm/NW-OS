@@ -74,7 +74,7 @@ export class AutomationEngine {
   }
 
   private async ctx() {
-    return (this.systemCtx ??= await AccessContext.load(this.pool, SYSTEM_USER));
+    return (this.systemCtx ??= await AccessContext.load(this.pool, SYSTEM_USER, { background: true }));
   }
 
   /** Performs one planned action exactly once (ledger + action in one transaction). */

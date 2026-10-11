@@ -382,10 +382,14 @@ async function alertIntegrityFindings(pool: Pool, now: Date) {
   return delivered;
 }
 
-/** The Owner's context for the scheduled lifecycle rule (the Exception Center is the Owner's). */
+/**
+ * The Owner's view for the scheduled lifecycle rule (the Exception Center is the Owner's): a
+ * background context, used only to compute what the Owner sees. It holds no approval authority
+ * and no database identity, so it cannot act as the Owner (Batch 12B); its events have no actor.
+ */
 async function ownerContext(pool: Pool) {
   const u = (await pool.query(`SELECT * FROM users WHERE role = 'Owner / CEO' AND is_active ORDER BY id LIMIT 1`)).rows[0] as AuthUser | undefined;
-  return u ? AccessContext.load(pool, u) : undefined;
+  return u ? AccessContext.load(pool, u, { background: true }) : undefined;
 }
 
 export const exceptionLifecycleRule: RuleDef = {

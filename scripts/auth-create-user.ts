@@ -1,4 +1,6 @@
 // Creates a real (non-development) user. Use this for the first Owner account.
+// Runs on the migrator credential (DATABASE_MIGRATION_URL): the runtime credential cannot create
+// accounts without a signed-in Owner or Admin (docs/trusted-identity.md).
 //
 //   NEW_USER_PASSWORD='...' npm run auth:create-user -- --email you@company.com --name "Your Name" --role "Owner / CEO"
 //   Optional: --client-id <id> (Client role), --contractor-id <id> (Contractor role)
@@ -8,7 +10,7 @@ import dotenv from 'dotenv';
 import { passwordProblem } from '../server/auth/password';
 import { isRole } from '../server/auth/permissions';
 import { AuthStore } from '../server/auth/store';
-import { readDatabaseSettings } from '../server/db/config';
+import { readAccountAdminSettings } from '../server/db/config';
 import { createPool } from '../server/db/pool';
 
 dotenv.config();
@@ -28,18 +30,19 @@ async function main() {
   const problem = passwordProblem(password);
   if (problem) throw new Error(`NEW_USER_PASSWORD: ${problem}`);
 
-  const settings = readDatabaseSettings();
-  if (!settings.pool) throw new Error('DATABASE_URL is not set');
+  const settings = readAccountAdminSettings();
+  if (!settings.pool) throw new Error('DATABASE_MIGRATION_URL (or, for development, DATABASE_URL) is not set');
   const pool = createPool(settings.pool);
   try {
-    const user = await new AuthStore(pool).createUser({
+    const store = new AuthStore(pool);
+    const user = await store.withIdentity(undefined, (db) => store.createUser(db, {
       name,
       email,
       role,
       password,
       client_id: arg('client-id') ?? null,
       contractor_id: arg('contractor-id') ?? null,
-    });
+    }));
     console.log(`Created ${user.role} ${user.email} (${user.id})`);
   } finally {
     await pool.end();

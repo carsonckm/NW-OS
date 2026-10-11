@@ -31,7 +31,26 @@ export const APPEND_ONLY_TABLES = ['audit_logs', 'owner_exception_events', 'deli
 /** Records the application updates but never deletes (their triggers refuse deletes too). */
 export const NO_DELETE_TABLES = ['owner_exception_states', 'owner_exception_snoozes', 'drawing_revisions', 'owner_exception_integrity_findings'];
 /** Managed by the migrator only. */
-export const READ_ONLY_TABLES = ['schema_migrations'];
+export const READ_ONLY_TABLES = ['schema_migrations', 'authority_decision_types'];
+/**
+ * Credentials, sessions and the per-transaction identity (Batch 12B): the runtime role has no
+ * privilege at all. It works with them only through AUTH_API_FUNCTIONS.
+ */
+export const NO_ACCESS_TABLES = ['sessions', 'auth_credentials', 'auth_config', 'auth_login_failures', 'auth_tx_identity'];
+/**
+ * The SECURITY DEFINER functions the runtime role may call (migration 031). Each verifies its
+ * own evidence (a password-derived key, a session token, a verified identity) and pins its
+ * search_path. No other NW OS function is callable by the runtime role.
+ */
+export const AUTH_API_FUNCTIONS = [
+  'auth_password_params(text)',
+  'auth_login(text,text,text,text)',
+  'auth_session(text)',
+  'auth_logout(text)',
+  'auth_assume(text)',
+  'auth_set_password(text,jsonb,text,text)',
+  'auth_purge_expired()',
+];
 
 const NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 export function roleNamesFromEnv(env: NodeJS.ProcessEnv = process.env): RoleNames {
@@ -72,6 +91,7 @@ export async function applyRuntimeGrants(db: Db, schema: string, roles: RoleName
     APPEND_ONLY_TABLES.some(has) && `REVOKE UPDATE, DELETE ON ${list(APPEND_ONLY_TABLES)} FROM ${app}`,
     NO_DELETE_TABLES.some(has) && `REVOKE DELETE ON ${list(NO_DELETE_TABLES)} FROM ${app}`,
     READ_ONLY_TABLES.some(has) && `REVOKE INSERT, UPDATE, DELETE ON ${list(READ_ONLY_TABLES)} FROM ${app}`,
+    NO_ACCESS_TABLES.some(has) && `REVOKE ALL ON ${list(NO_ACCESS_TABLES)} FROM ${app}`,
     `REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC`,
     `REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM ${app}`,
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${s} TO ${app}`,
@@ -94,6 +114,12 @@ export async function applyRuntimeGrants(db: Db, schema: string, roles: RoleName
     await db.query(`REVOKE ALL ON ${kw} ${f.sig} FROM PUBLIC`);
     await db.query(`REVOKE ALL ON ${kw} ${f.sig} FROM ${app}`);
   }
+  // The authentication API (Batch 12B): the only functions the runtime role may call.
+  const api = (await db.query(
+    `SELECT p.oid::regprocedure::text AS sig, regexp_replace(p.oid::regprocedure::text, '^.*\\.', '') AS bare FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
+    [schema]
+  )).rows.filter((f) => AUTH_API_FUNCTIONS.includes(String(f.bare).replace(/ /g, '')));
+  for (const f of api) await db.query(`GRANT EXECUTE ON FUNCTION ${f.sig} TO ${app}`);
 }
 
 export interface PrivilegeReport {
@@ -162,7 +188,17 @@ export async function runtimePrivilegeReport(db: Db, schema?: string): Promise<P
         AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')`,
     [sch]
   )).rows.map((r) => r.f as string);
-  if (definers.length) issues.push(`can call SECURITY DEFINER function(s) that run as another role: ${definers.join(', ')}`);
+  // The authentication API (AUTH_API_FUNCTIONS) is the deliberate exception, and only with a
+  // pinned search_path (otherwise a caller could shadow its tables with temporary ones).
+  const bare = (sig: string) => sig.replace(/^.*\./, '').replace(/ /g, '');
+  const unexpected = definers.filter((f) => !AUTH_API_FUNCTIONS.includes(bare(f)));
+  if (unexpected.length) issues.push(`can call SECURITY DEFINER function(s) that run as another role: ${unexpected.join(', ')}`);
+  const unpinned = (await db.query(
+    `SELECT p.oid::regprocedure::text AS f FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = $1 AND p.prosecdef AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) c WHERE c LIKE 'search_path=%pg_temp')`,
+    [sch]
+  )).rows.map((r) => r.f as string);
+  if (unpinned.length) issues.push(`SECURITY DEFINER function(s) without a pinned search_path: ${unpinned.join(', ')}`);
   const tables = (await db.query(`SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`, [sch])).rows;
   for (const t of tables) {
     const p = (await db.query(`SELECT has_table_privilege(current_user, $1::oid, 'TRUNCATE') AS tr, has_table_privilege(current_user, $1::oid, 'TRIGGER') AS tg, has_table_privilege(current_user, $1::oid, 'REFERENCES') AS rf, has_table_privilege(current_user, $1::oid, 'UPDATE') AS up, has_table_privilege(current_user, $1::oid, 'DELETE') AS de, has_table_privilege(current_user, $1::oid, 'INSERT') AS ins`, [t.oid])).rows[0];
@@ -170,6 +206,10 @@ export async function runtimePrivilegeReport(db: Db, schema?: string): Promise<P
     if (APPEND_ONLY_TABLES.includes(t.relname) && (p.up || p.de)) issues.push(`can UPDATE or DELETE append-only ${t.relname}`);
     if (NO_DELETE_TABLES.includes(t.relname) && p.de) issues.push(`can DELETE ${t.relname}`);
     if (READ_ONLY_TABLES.includes(t.relname) && (p.ins || p.up || p.de)) issues.push(`can write ${t.relname}`);
+    if (NO_ACCESS_TABLES.includes(t.relname)) {
+      const sel = (await db.query(`SELECT has_table_privilege(current_user, $1::oid, 'SELECT') AS s`, [t.oid])).rows[0].s;
+      if (sel || p.ins || p.up || p.de) issues.push(`can read or write ${t.relname} directly`);
+    }
   }
   const predefined = (await db.query(`SELECT rolname FROM pg_roles WHERE rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program', 'pg_signal_backend', 'pg_write_all_data') AND pg_has_role(current_user, oid, 'MEMBER')`)).rows.map((x) => x.rolname);
   if (predefined.length) issues.push(`holds server roles: ${predefined.join(', ')}`);

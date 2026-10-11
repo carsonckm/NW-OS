@@ -1,3 +1,4 @@
+import { assumeIdentity } from '../auth/identity';
 import { randomUUID } from 'crypto';
 import { AccessContext, ForbiddenError } from '../auth/access';
 import { changedFields, writeAudit, type AuditActor } from '../audit';
@@ -295,6 +296,8 @@ export class DataService {
     let touched: Set<string> | undefined;
     const result = await withTransaction(this.pool, async (db) => {
       await db.query('SET CONSTRAINTS ALL DEFERRED');
+      // A signed-in user's write acts for that user in the database (migration 031).
+      await assumeIdentity(db, ctx);
       const deferred: (() => Promise<void>)[] = [];
       const h = this.hookContext(ctx, db, actor, mode, deferred);
       touched = h.touched;

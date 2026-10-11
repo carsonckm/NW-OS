@@ -13,19 +13,21 @@ type Row = Record<string, any>;
 describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval management (monitor, escalation, re-routing, Owner exceptions)', () => {
   let db: TestDb;
   let as: Record<string, request.Agent> = {};
+  // Deactivation ends a user's sessions in the database (migration 031): sign them in again.
+  let relogin: (userId: string) => Promise<void>;
   let raiser: request.Agent;
   let engine: AutomationEngine;
   let cal: BusinessCalendar;
   let clock = new Date();
   beforeAll(async () => {
     let app: Parameters<typeof request>[0];
-    ({ db, as, app } = (await setupDemoWorld()) as never);
+    ({ db, as, app, relogin } = (await setupDemoWorld()) as never);
     // Raises the test variations (a PM on the project who never decides their own), so the
     // delegated PM and the Owner may both decide them.
-    await seedUsers(db.pool, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
+    await seedUsers(db.owner, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
     raiser = await signIn(app as never, 'raiser@test.local');
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
-    await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm2', 'Second PM', 'pm2@test.local', 'x', 'Project Manager', true), ('user-pm3', 'Third PM', 'pm3@test.local', 'x', 'Project Manager', true)`);
+    await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-pm2', 'Second PM', 'pm2@test.local', 'Project Manager', true), ('user-pm3', 'Third PM', 'pm3@test.local', 'Project Manager', true)`);
     engine = new AutomationEngine(db.pool, () => clock);
     await ensureRules(db.pool);
     cal = await loadCalendar(db.pool);
@@ -43,7 +45,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
   const newProject = async () => {
     const id = next('proj-b4');
     await owner().post('/api/projects').send({ id, project_number: id.toUpperCase(), project_name: id, client_id: 'client-2', site_address: 'KL', contract_value: 1, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2'), ($1, 'user-pm3'), ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2'), ($1, 'user-pm3'), ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
     return id;
   };
   const grant = async (projectId: string, over: Row = {}) =>
@@ -184,7 +186,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
       const short = await grant(Q, { name: 'Short PM authority' });
       const id = await variation(Q);
       expect((await route('variation', id)).authority_rule_id).toBe(short.id);
-      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 minute' WHERE id = $1`, [short.id]);
+      await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 minute' WHERE id = $1`, [short.id]);
       const refused = await approveVo('Project Manager', id);
       expect(refused.status).toBe(403);
       expect(refused.body.reason_code).toBe('AUTHORITY_EXPIRED');
@@ -235,7 +237,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
       await grant(Q, { name: 'PM2 by name', target_role: undefined, target_user_id: 'user-pm2', priority: 210 });
       const id = await variation(Q);
       expect((await route('variation', id)).assigned_user_id).toBe('user-pm2');
-      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-pm2'`); // directly: no API re-evaluation
+      await db.owner.query(`UPDATE users SET is_active = false WHERE id = 'user-pm2'`); // directly: no API re-evaluation
       try {
         await monitor(new Date());
         const r = await route('variation', id);
@@ -245,7 +247,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
         expect(audit.details).toMatch(/APPROVER_INACTIVE/);
         await noOrphans();
       } finally {
-        await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-pm2'`);
+        await db.owner.query(`UPDATE users SET is_active = true WHERE id = 'user-pm2'`);
       }
     });
 
@@ -254,7 +256,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
       await grant(Q, { name: 'PM3 by name', target_role: undefined, target_user_id: 'user-pm3', priority: 220 });
       const id = await variation(Q);
       expect((await route('variation', id)).assigned_user_id).toBe('user-pm3');
-      await db.pool.query(`UPDATE users SET role = 'Production Staff' WHERE id = 'user-pm3'`);
+      await db.owner.query(`UPDATE users SET role = 'Production Staff' WHERE id = 'user-pm3'`);
       try {
         await monitor(new Date());
         const r = await route('variation', id);
@@ -262,7 +264,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
         expect(r.route_reason).toBe('authority_changed');
         await noOrphans();
       } finally {
-        await db.pool.query(`UPDATE users SET role = 'Project Manager' WHERE id = 'user-pm3'`);
+        await db.owner.query(`UPDATE users SET role = 'Project Manager' WHERE id = 'user-pm3'`);
       }
     });
 
@@ -279,7 +281,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
 
     it('11. Multiple Owners: the primary Owner receives Owner fallbacks; without a primary, the highest priority; only the Owner configures it', async () => {
       const Q = await newProject();
-      await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-owner2', 'Second Owner', 'owner2@test.local', 'x', 'Owner / CEO', true)`);
+      await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-owner2', 'Second Owner', 'owner2@test.local', 'Owner / CEO', true)`);
       try {
         const before = await approvalRequest(Q);
         expect((await route('approval', before)).assigned_user_id).toBe('user-owner'); // equal priority: user id, as before
@@ -296,8 +298,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
         // Two primaries are refused.
         expect((await owner().put('/api/authority/owner-routing').send({ owners: [{ id: 'user-owner2', owner_priority: 0, is_primary_owner: true }, { id: 'user-owner', owner_priority: 0, is_primary_owner: true }] })).status).toBe(400);
       } finally {
-        await db.pool.query(`UPDATE users SET is_active = false, owner_priority = 0, is_primary_owner = false WHERE id = 'user-owner2'`);
-        await db.pool.query(`UPDATE users SET owner_priority = 0, is_primary_owner = false WHERE id = 'user-owner'`);
+        await db.owner.query(`UPDATE users SET is_active = false, owner_priority = 0, is_primary_owner = false WHERE id = 'user-owner2'`);
+        await db.owner.query(`UPDATE users SET owner_priority = 0, is_primary_owner = false WHERE id = 'user-owner'`);
         await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test cleanup' }));
       }
     });
@@ -357,8 +359,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
       const short = await grant(Q, { name: 'Ends soon' });
       const id = await variation(Q);
       const before = await route('variation', id);
-      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 minute' WHERE id = $1`, [short.id]);
-      await db.pool.query(`UPDATE users SET is_active = false WHERE role = 'Owner / CEO'`);
+      await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 minute' WHERE id = $1`, [short.id]);
+      await db.owner.query(`UPDATE users SET is_active = false WHERE role = 'Owner / CEO'`);
       let run;
       try {
         run = await monitor(new Date());
@@ -367,7 +369,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 4: proactive approval managem
         expect((await route('variation', id)).id).toBe(before.id); // rolled back: never orphaned
         await noOrphans();
       } finally {
-        await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-owner'`);
+        await db.owner.query(`UPDATE users SET is_active = true WHERE id = 'user-owner'`);
+        await relogin('user-owner');
       }
       expect((await monitor()).status).toBe('succeeded');
       expect(await route('variation', id)).toMatchObject({ assigned_user_id: 'user-owner', owner_reason_code: 'AUTHORITY_EXPIRED' });

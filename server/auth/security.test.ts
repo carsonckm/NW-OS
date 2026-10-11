@@ -22,7 +22,7 @@ const USERS: SeedUser[] = [
   { id: 'user-site', role: 'Site Supervisor', email: 'site@test.local' },
   { id: 'user-purchasing', role: 'Purchasing', email: 'purchasing@test.local' },
   { id: 'user-accountant', role: 'Accountant', email: 'accountant@test.local' },
-  { id: 'user-prod-mgr', role: 'Production Manager', email: 'prodmgr@test.local' },
+  { id: 'user-prod-mgr', role: 'Production Manager', email: 'prodmgr@test.local', assigned: ['proj-1', 'proj-2'] },
   { id: 'user-prod-staff', role: 'Production Staff', email: 'staff@test.local', assigned: ['proj-1'] },
   { id: 'user-contractor', role: 'Contractor', email: 'contractor@test.local', contractor_id: 'con-1' },
   { id: 'user-client', role: 'Client', email: 'client@test.local', client_id: 'client-1' },
@@ -56,7 +56,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       workItems: [...INITIAL_WORK_ITEMS, itemX],
     });
     expect(imported.ok).toBe(true);
-    await seedUsers(db.pool, USERS);
+    await seedUsers(db.owner, USERS);
     app = buildApp(db.pool);
     for (const u of USERS) as[u.role] = await signIn(app, u.email);
   });
@@ -118,10 +118,13 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       expect(wrong.body).toEqual(unknown.body);
     });
 
-    it('stores passwords only as scrypt hashes', async () => {
-      const res = await db.pool.query(`SELECT password_hash FROM users WHERE email = 'owner@test.local'`);
-      expect(res.rows[0].password_hash).toMatch(/^scrypt\$/);
-      expect(res.rows[0].password_hash).not.toContain(TEST_PASSWORD);
+    it('stores passwords only as the digest of a scrypt-derived key, out of the users table (Batch 12B)', async () => {
+      const cols = (await db.pool.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users'`)).rows.map((r) => r.column_name);
+      expect(cols).not.toContain('password_hash');
+      const c = (await db.owner.query(`SELECT c.* FROM auth_credentials c JOIN users u ON u.id = c.user_id WHERE u.email = 'owner@test.local'`)).rows[0];
+      expect(c).toMatchObject({ scheme: 'scrypt', params: { N: 32768, r: 8, p: 1, keylen: 64 } });
+      expect(c.verifier).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(c)).not.toContain(TEST_PASSWORD);
     });
 
     it('records last_login', async () => {
@@ -144,13 +147,14 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
     });
 
     it('refuses development seed accounts when NODE_ENV=production', async () => {
-      await new AuthStore(db.pool).createUser({
+      const store = new AuthStore(db.owner);
+      await store.withIdentity(undefined, (c) => store.createUser(c, {
         name: 'Seed',
         email: 'seed@dev.nwos.local',
         role: 'Owner / CEO',
         password: TEST_PASSWORD,
         is_dev_seed: true,
-      });
+      }));
       const before = process.env.NODE_ENV;
       process.env.NODE_ENV = 'production';
       try {

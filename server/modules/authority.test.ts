@@ -12,9 +12,11 @@ type Row = Record<string, any>;
 describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data model, API and audit', () => {
   let db: TestDb;
   let as: Record<string, request.Agent> = {};
+  // Deactivation ends a user's sessions in the database (migration 031): sign them in again.
+  let relogin: (userId: string) => Promise<void>;
   let app: Parameters<typeof request>[0];
   beforeAll(async () => {
-    ({ db, as, app } = (await setupDemoWorld()) as never);
+    ({ db, as, app, relogin } = (await setupDemoWorld()) as never);
   });
   afterAll(async () => {
     await db?.close();
@@ -159,7 +161,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
     });
 
     it('refuses a deactivated target user', async () => {
-      await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm-old', 'Old PM', 'oldpm@test.local', 'x', 'Project Manager', false)`);
+      await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-pm-old', 'Old PM', 'oldpm@test.local', 'Project Manager', false)`);
       const res = await owner().post('/api/authority/rules').send(rule({ target_role: undefined, target_user_id: 'user-pm-old' }));
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/is deactivated/);
@@ -215,7 +217,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
     it('never extends an authority past its end date', async () => {
       const r = (await owner().post('/api/authority/rules').send(rule({ name: 'Short lived', max_value: 1000 })).expect(201)).body;
       await owner().post(`/api/authority/rules/${r.id}/deactivate`).send({ reason: 'done' }).expect(200);
-      await db.pool.query(`UPDATE delegated_authorities SET end_at = now() - interval '1 day', start_at = now() - interval '10 days' WHERE id = $1`, [r.id]);
+      await db.owner.query(`UPDATE delegated_authorities SET end_at = now() - interval '1 day', start_at = now() - interval '10 days' WHERE id = $1`, [r.id]);
       const res = await owner().post(`/api/authority/rules/${r.id}/reactivate`).send({ reason: 'again' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/create a new rule instead/);
@@ -277,9 +279,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
     });
 
     it('a deactivated user is refused', async () => {
-      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-admin'`);
+      await db.owner.query(`UPDATE users SET is_active = false WHERE id = 'user-admin'`);
       expect((await as['Admin'].get('/api/authority/rules')).status).toBe(401);
-      await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-admin'`);
+      await db.owner.query(`UPDATE users SET is_active = true WHERE id = 'user-admin'`);
+      await relogin('user-admin');
     });
   });
   // ---- Batch 1 review fixes -------------------------------------------------------------------
@@ -342,9 +345,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
       }
       expect((await owner().patch('/api/authority/rules/sys-sensitive-drawing').send({ priority: 1, change_reason: 'x' })).status).toBe(403);
       // Defence in depth: the database itself refuses to switch a locked row off or delete it.
-      await expect(db.pool.query(`UPDATE delegated_authorities SET active = false WHERE id = 'sys-sensitive-drawing'`)).rejects.toThrow(/locked/);
-      await expect(db.pool.query(`UPDATE delegated_authorities SET conditions = '{}' WHERE id = 'sys-strategic-drawing'`)).rejects.toThrow(/locked/);
-      await expect(db.pool.query(`DELETE FROM delegated_authorities WHERE id = 'sys-sensitive-purchase'`)).rejects.toThrow(/locked/);
+      await expect(db.owner.query(`UPDATE delegated_authorities SET active = false WHERE id = 'sys-sensitive-drawing'`)).rejects.toThrow(/locked/);
+      await expect(db.owner.query(`UPDATE delegated_authorities SET conditions = '{}' WHERE id = 'sys-strategic-drawing'`)).rejects.toThrow(/locked/);
+      await expect(db.owner.query(`DELETE FROM delegated_authorities WHERE id = 'sys-sensitive-purchase'`)).rejects.toThrow(/locked/);
       expect((await db.pool.query(`SELECT count(*)::int AS n FROM delegated_authorities WHERE locked AND active`)).rows[0].n).toBe(12);
       // Which types Sensitive protects is not editable through any API.
       const types = (await owner().get('/api/authority/decision-types').expect(200)).body as Row[];
@@ -391,11 +394,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
         expect(await gate('user-owner', t, dwgProject), t).toBe('owner');
       }
       // Including decision types added later (and unknown ones fail closed).
-      await db.pool.query(`INSERT INTO authority_decision_types (key, label, baseline_permission, has_value, sensitive_protected) VALUES ('site_instruction', 'Site instruction', 'drawings.review', false, false)`);
+      await db.owner.query(`INSERT INTO authority_decision_types (key, label, baseline_permission, has_value, sensitive_protected) VALUES ('site_instruction', 'Site instruction', 'drawings.review', false, false)`);
       expect(await gate('user-pm', 'site_instruction', dwgProject)).toBe('owner_required');
       expect(await gate('user-pm', 'site_instruction', 'proj-2')).toBe('rule_required');
       expect(await gate('user-pm', 'no_such_type', 'proj-2')).toBe('owner_required');
-      await db.pool.query(`DELETE FROM authority_decision_types WHERE key = 'site_instruction'`);
+      await db.owner.query(`DELETE FROM authority_decision_types WHERE key = 'site_instruction'`);
       for (const t of TYPES) {
         const target = t === 'invoice' ? 'Accountant' : 'Project Manager';
         const body = rule({ name: `Strategic ${t}`, decision_type: t, target_role: target, project_id: dwgProject, max_risk: undefined, ...(['drawing', 'ai_proposal'].includes(t) ? { min_value: undefined, max_value: undefined } : {}) });

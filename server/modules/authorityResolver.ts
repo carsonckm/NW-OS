@@ -620,6 +620,13 @@ export async function resolveApprovalAuthority(db: Db, ctx: AccessContext, input
   const action = input.action ?? 'approve';
   const stub = { decisionType: 'unknown', resourceKind: input.resource.kind, resourceId: input.resource.id };
   if (!ctx.user.is_active) return result(ctx, stub, action, now, { reasonCode: 'INVALID_AUTHORITY_CONTEXT', reason: 'Your account is deactivated' });
+  // Batch 12B: approval authority belongs to people. A background job, a messaging channel or a
+  // synthetic system user holds none, and the account must still be active with the same role.
+  if (ctx.background) return result(ctx, stub, action, now, { reasonCode: 'INVALID_AUTHORITY_CONTEXT', reason: 'Background jobs and messaging channels hold no approval authority' });
+  const live = (await db.query('SELECT role, is_active FROM users WHERE id = $1', [ctx.user.id])).rows[0];
+  if (!live || !live.is_active || live.role !== ctx.user.role) {
+    return result(ctx, stub, action, now, { reasonCode: 'INVALID_AUTHORITY_CONTEXT', reason: 'This account is not an active user with this role' });
+  }
   let facts: Facts;
   try {
     facts = await loadFacts(db, input);

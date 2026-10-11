@@ -1,3 +1,4 @@
+import { withUserTransaction } from '../auth/identity';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { ForbiddenError } from '../auth/access';
 import { attachUser, csrfGuard, loadAccess, requireUser } from '../auth/middleware';
@@ -271,14 +272,22 @@ export function createOpsRouter({ pool, store, engine = new AutomationEngine(poo
       needManage(req);
       const phone = normalizePhone(req.body?.phone);
       if (!phone) throw new ValidationError('Enter the phone number with country code, e.g. +60123456789');
-      const user = (await pool.query('SELECT id FROM users WHERE id = $1', [req.body?.user_id])).rows[0];
+      const user = (await pool.query('SELECT id, role FROM users WHERE id = $1', [req.body?.user_id])).rows[0];
       if (!user) throw new ValidationError('Choose an existing user');
-      await pool.query(
-        `INSERT INTO whatsapp_contacts (phone, user_id, verified, created_by) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (phone) DO UPDATE SET user_id = EXCLUDED.user_id, verified = EXCLUDED.verified`,
-        [phone, user.id, Boolean(req.body?.verified), req.auth!.user.id]
-      );
-      await writeAudit(pool, actorOf(req), { action: 'whatsapp.contact.register', entityType: 'whatsapp_contact', entityId: phone, after: { user_id: user.id } });
+      // A phone number is an identity (inbound messages act as its user): only the Owner maps
+      // one to an Owner or Admin account, or moves a number away from one (the database enforces it).
+      const current = (await pool.query('SELECT u.role FROM whatsapp_contacts c JOIN users u ON u.id = c.user_id WHERE c.phone = $1', [phone])).rows[0];
+      if (req.auth!.user.role !== 'Owner / CEO' && [user.role, current?.role].some((r) => r === 'Owner / CEO' || r === 'Admin')) {
+        throw new ForbiddenError('Only the Owner can register a number for an Owner or Admin account');
+      }
+      await withUserTransaction(pool, req.access!, async (db) => {
+        await db.query(
+          `INSERT INTO whatsapp_contacts (phone, user_id, verified, created_by) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (phone) DO UPDATE SET user_id = EXCLUDED.user_id, verified = EXCLUDED.verified`,
+          [phone, user.id, Boolean(req.body?.verified), req.auth!.user.id]
+        );
+        await writeAudit(db, actorOf(req), { action: 'whatsapp.contact.register', entityType: 'whatsapp_contact', entityId: phone, after: { user_id: user.id } });
+      });
       res.status(201).json({ phone, user_id: user.id });
     })
   );
@@ -287,9 +296,15 @@ export function createOpsRouter({ pool, store, engine = new AutomationEngine(poo
     wrap(async (req, res) => {
       needManage(req);
       const phone = normalizePhone(req.params.phone);
-      const r = await pool.query('DELETE FROM whatsapp_contacts WHERE phone = $1', [phone]);
-      if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Contact not registered' });
-      await writeAudit(pool, actorOf(req), { action: 'whatsapp.contact.remove', entityType: 'whatsapp_contact', entityId: String(phone) });
+      const current = (await pool.query('SELECT u.role FROM whatsapp_contacts c JOIN users u ON u.id = c.user_id WHERE c.phone = $1', [phone])).rows[0];
+      if (!current) return res.status(404).json({ error: 'not_found', message: 'Contact not registered' });
+      if (req.auth!.user.role !== 'Owner / CEO' && (current.role === 'Owner / CEO' || current.role === 'Admin')) {
+        throw new ForbiddenError('Only the Owner can remove the number of an Owner or Admin account');
+      }
+      await withUserTransaction(pool, req.access!, async (db) => {
+        await db.query('DELETE FROM whatsapp_contacts WHERE phone = $1', [phone]);
+        await writeAudit(db, actorOf(req), { action: 'whatsapp.contact.remove', entityType: 'whatsapp_contact', entityId: String(phone) });
+      });
       res.status(204).end();
     })
   );

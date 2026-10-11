@@ -24,7 +24,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 9: Owner Center correctness a
     let app: Parameters<typeof request>[0];
     ({ db, as, app } = (await setupDemoWorld()) as never);
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
-    await seedUsers(db.pool, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser9@test.local' }]);
+    await seedUsers(db.owner, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser9@test.local' }]);
     raiser = await signIn(app as never, 'raiser9@test.local');
     await ensureRules(db.pool);
     engine = new AutomationEngine(db.pool);
@@ -42,7 +42,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 9: Owner Center correctness a
   async function newProject(tag: string) {
     const id = next(`proj-b9${tag}`);
     await owner().post('/api/projects').send({ id, project_number: id.toUpperCase(), project_name: `B9 ${tag}`, client_id: 'client-2', site_address: 'KL', contract_value: 5000000, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
     return id;
   }
   const variation = async (projectId: string, amount: number) => {
@@ -145,11 +145,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 9: Owner Center correctness a
     });
 
     it('an unavailable (deactivated) delegate is handled the same way', async () => {
-      await seedUsers(db.pool, [{ id: 'user-acc2', role: 'Accountant', email: 'acc2@test.local' }]);
+      await seedUsers(db.owner, [{ id: 'user-acc2', role: 'Accountant', email: 'acc2@test.local' }]);
       const id = await approvalRequest('Major Purchase', P.deleg, 'Owner / CEO');
       const r = await routeOf('approval', id);
       await db.pool.query(`UPDATE approval_routes SET assigned_user_id = 'user-acc2' WHERE id = $1`, [r.id]);
-      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-acc2'`);
+      await db.owner.query(`UPDATE users SET is_active = false WHERE id = 'user-acc2'`);
       const c = await center();
       expect(c.decisions.find((d: Row) => d.id === `approval:${id}`)).toMatchObject({ severity: 'critical' });
       await withTransaction(db.pool, (cl) => reevaluateRoutes(cl, { name: 'test' }));

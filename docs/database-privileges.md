@@ -562,6 +562,16 @@ well-formed records needs controls outside the database:
 - **No row-level security:** the per-user scope checks stay in the server (`AccessContext`,
   `resolveApprovalAuthority`), as before.
 
+## 7b. Trusted identity (Batch 12B)
+
+Sessions, password verifiers and the per-transaction identity are owner-only tables that
+`nwos_app` cannot read or write; it uses seven `SECURITY DEFINER` authentication functions
+(the only definer functions it may call, each with a pinned `search_path`). Users, project
+assignments, authority rules, Owner absences, WhatsApp contact mappings, project sensitivity
+and legacy review decisions change only with a database-verified identity of the right role.
+`authority_decision_types` is read-only for `nwos_app`. The privilege report checks all of
+this. Details, attack-path results, recovery and rollout: `docs/trusted-identity.md`.
+
 ## 8. Approval policy finding: `SYS-REQUEST-ASSIGNEE-*`
 
 > **Batch 12A update (migrations 029, 030):** this is now changed. The requester

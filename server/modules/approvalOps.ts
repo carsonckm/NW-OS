@@ -10,6 +10,7 @@
  *     policy, SLA policies and safe snoozes. Nothing here decides an approval: deciding goes
  *     through the record's own endpoint, where the authority resolver checks again.
  */
+import { withUserTransaction } from '../auth/identity';
 import { ForbiddenError, AccessContext } from '../auth/access';
 import type { AuthUser } from '../auth/store';
 import { writeAudit, type AuditActor } from '../audit';
@@ -208,7 +209,7 @@ export async function setOwnerRoutingPolicy(pool: Pool, ctx: AccessContext, acto
     if (o.is_primary_owner) primaries++;
   }
   if (primaries > 1) throw new ValidationError('At most one primary Owner');
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     await db.query(`UPDATE users SET is_primary_owner = false WHERE role = $1 AND is_primary_owner AND NOT (id = ANY($2))`, [OWNER, list.filter((o: Row) => o.is_primary_owner).map((o: Row) => o.id)]);
     for (const o of list) await db.query('UPDATE users SET is_primary_owner = false WHERE id = $1', [o.id]);
     for (const o of list) await db.query('UPDATE users SET owner_priority = $2, is_primary_owner = $3, updated_at = now() WHERE id = $1', [o.id, o.owner_priority, o.is_primary_owner]);

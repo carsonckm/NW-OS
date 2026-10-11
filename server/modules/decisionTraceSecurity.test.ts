@@ -39,7 +39,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Batch 8 security: trace forgery, client con
     let app: Parameters<typeof request>[0];
     ({ db, as, app } = (await setupDemoWorld()) as never);
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
-    await seedUsers(db.pool, [
+    await seedUsers(db.owner, [
       { id: 'user-pur2', role: 'Purchasing', email: 'pur2@test.local' },
       { id: 'user-pm3', role: 'Project Manager', email: 'pm3@test.local' },
     ]);
@@ -174,7 +174,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Batch 8 security: trace forgery, client con
     // A pending variation on a project where PM and PM3 both hold authority; routed to one of them.
     const pid = next('proj-asg');
     await owner().post('/api/projects').send({ id: pid, project_number: pid.toUpperCase(), project_name: 'Assignee', client_id: 'client-2', site_address: 'KL', contract_value: 1000000, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm3') ON CONFLICT DO NOTHING`, [pid]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm3') ON CONFLICT DO NOTHING`, [pid]);
     for (const u of ['user-pm', 'user-pm3']) {
       await owner().post('/api/authority/rules').send({ name: `Asg ${u}`, description: 'Assignee test', effect: 'allow', decision_type: 'variation', target_user_id: u, project_id: pid, max_value: 9000, priority: 150 }).expect(201);
     }

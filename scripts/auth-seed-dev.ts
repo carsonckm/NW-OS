@@ -13,7 +13,7 @@ import { demoData } from '../server/modules/demo';
 import { DataService } from '../server/modules/service';
 import { passwordProblem } from '../server/auth/password';
 import { AuthStore } from '../server/auth/store';
-import { readDatabaseSettings } from '../server/db/config';
+import { readAccountAdminSettings, readDatabaseSettings } from '../server/db/config';
 import { pendingMigrations } from '../server/db/migrate';
 import { createPool } from '../server/db/pool';
 
@@ -36,19 +36,22 @@ async function main() {
   const settings = readDatabaseSettings();
   if (!settings.pool) throw new Error('DATABASE_URL is not set');
   const pool = createPool(settings.pool);
+  // Accounts are written on the migrator credential when it is set (migration 031).
+  const accounts = readAccountAdminSettings();
+  const adminPool = accounts.credential === 'DATABASE_URL' ? pool : createPool(accounts.pool!);
   try {
     const pending = await pendingMigrations(pool);
     if (pending.length) throw new Error(`Run npm run db:migrate first (pending: ${pending.join(', ')})`);
 
     if (process.argv.includes('--with-demo-data')) {
       const system = { ...DEMO_SYSTEM_USER, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-      const result = await new DataService(pool).importData(await AccessContext.load(pool, system), demoData(), {}, {
+      const result = await new DataService(pool).importData(await AccessContext.load(pool, system, { background: true }), demoData(), {}, {
         id: system.id, name: system.name, role: system.role,
       });
       if (!result.ok) throw new Error(`Demo data import failed: ${result.problems.join('; ')}`);
     }
 
-    const store = new AuthStore(pool);
+    const store = new AuthStore(adminPool);
     const projects = new Set((await pool.query('SELECT id FROM projects')).rows.map((r) => r.id));
     const clients = new Set((await pool.query('SELECT id FROM clients')).rows.map((r) => r.id));
     for (const demo of DEMO_USERS) {
@@ -69,18 +72,21 @@ async function main() {
         is_active: true,
         password,
       };
-      if (existing) await store.updateUser(demo.id, fields);
-      else await store.createUser({ id: demo.id, ...fields, is_dev_seed: true });
+      await store.withIdentity(undefined, async (db) => {
+        if (existing) await store.updateUser(db, demo.id, fields);
+        else await store.createUser(db, { id: demo.id, ...fields, is_dev_seed: true });
       // Explicit assignments only for roles scoped by them (PM / supervisor / contractor
       // scope also comes from the project and work package records themselves).
       const assigned = (demo.assigned_project_ids ?? []).filter((p) => projects.has(p));
       const scopedByAssignment = ['Production Staff', 'Production Manager', 'Project Manager', 'Site Supervisor'].includes(demo.role);
-      await store.setAssignments(demo.id, scopedByAssignment ? assigned : []);
+        await store.setAssignments(db, demo.id, scopedByAssignment ? assigned : []);
+      });
       console.log(`${demo.role.padEnd(20)} ${email}`);
     }
     console.log('\nDevelopment accounts ready (password from DEV_SEED_PASSWORD). Never run this against production.');
   } finally {
     await pool.end();
+    if (adminPool !== pool) await adminPool.end();
   }
 }
 
