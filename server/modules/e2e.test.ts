@@ -4,7 +4,7 @@
  * checked against what PostgreSQL holds (the next step only works because the previous one
  * was stored).
  */
-import type request from 'supertest';
+import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TEST_DATABASE_URL, type TestDb } from '../test/db';
 import { setupDemoWorld } from '../test/demoWorld';
@@ -191,7 +191,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     await ok(owner().post('/api/variations/e2e-vo/transition').send({ status: 'Client Approval' }), 200);
     expect((await as['Client'].get(`/api/variations/e2e-vo`)).status).toBe(404); // another client's project
     // The client (Horizon) signs in with their own account and approves it.
-    await ok(as['Admin'].post('/api/users').send({ name: 'Ms Lim', email: 'lim@horizon.test', role: 'Client', client_id: 'client-2', password: 'horizon-password-1' }), 201);
+    // Batch 12B: the Admin gets a single-use activation code; Ms Lim sets her own password with it.
+    const created = (await ok(as['Admin'].post('/api/users').send({ name: 'Ms Lim', email: 'lim@horizon.test', role: 'Client', client_id: 'client-2' }), 201)).body;
+    await ok(request(app).post('/api/auth/activate').send({ email: 'lim@horizon.test', code: created.activation.code, password: 'horizon-password-1' }), 200);
     const lim = await signIn(app, 'lim@horizon.test', 'horizon-password-1');
     const seen = (await ok(lim.get('/api/variations/e2e-vo'), 200)).body;
     expect(seen.estimated_cost).toBeUndefined(); // internal cost hidden from the client

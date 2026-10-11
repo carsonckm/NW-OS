@@ -358,17 +358,20 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       const admin = as['Admin'];
       const owner = await admin
         .post('/api/users')
-        .send({ name: 'New Owner', email: 'newowner@test.local', role: 'Owner / CEO', password: TEST_PASSWORD });
+        .send({ name: 'New Owner', email: 'newowner@test.local', role: 'Owner / CEO' });
       expect(owner.status).toBe(403);
       expect((await admin.patch('/api/users/user-admin').send({ role: 'Owner / CEO' })).status).toBe(403);
       expect((await admin.patch('/api/users/user-owner').send({ is_active: false })).status).toBe(403);
     });
 
-    it('rejects weak passwords', async () => {
-      const res = await as['Owner / CEO']
-        .post('/api/users')
-        .send({ name: 'Weak', email: 'weak@test.local', role: 'Admin', password: 'short' });
-      expect(res.status).toBe(400);
+    it('never takes a password from an administrator, and rejects weak passwords at activation', async () => {
+      const owner = as['Owner / CEO'];
+      expect((await owner.post('/api/users').send({ name: 'Pw', email: 'pw@test.local', role: 'Purchasing', password: TEST_PASSWORD })).status).toBe(400);
+      expect((await owner.patch('/api/users/user-site').send({ password: TEST_PASSWORD })).status).toBe(400);
+      const created = (await owner.post('/api/users').send({ name: 'Weak', email: 'weak@test.local', role: 'Purchasing' }).expect(201)).body;
+      const weak = await request(app).post('/api/auth/activate').send({ email: 'weak@test.local', code: created.activation.code, password: 'short' });
+      expect(weak.status).toBe(400);
+      await request(app).post('/api/auth/activate').send({ email: 'weak@test.local', code: created.activation.code, password: 'a-strong-enough-one' }).expect(200);
     });
   });
 

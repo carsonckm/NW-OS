@@ -36,11 +36,13 @@ export const READ_ONLY_TABLES = ['schema_migrations', 'authority_decision_types'
  * Credentials, sessions and the per-transaction identity (Batch 12B): the runtime role has no
  * privilege at all. It works with them only through AUTH_API_FUNCTIONS.
  */
-export const NO_ACCESS_TABLES = ['sessions', 'auth_credentials', 'auth_config', 'auth_login_failures', 'auth_tx_identity'];
+export const NO_ACCESS_TABLES = ['sessions', 'auth_credentials', 'auth_config', 'auth_login_failures', 'auth_tx_identity', 'auth_reset_tokens'];
 /**
  * The SECURITY DEFINER functions the runtime role may call (migration 031). Each verifies its
- * own evidence (a password-derived key, a session token, a verified identity) and pins its
- * search_path. No other NW OS function is callable by the runtime role.
+ * own evidence (a password-derived key, a session token, a single-use activation code, a
+ * verified identity) and pins its search_path. No other NW OS function is callable by the
+ * runtime role. (auth_set_password is not among them: only the migrator sets a password
+ * directly, for the development seed and test fixtures.)
  */
 export const AUTH_API_FUNCTIONS = [
   'auth_password_params(text)',
@@ -48,7 +50,9 @@ export const AUTH_API_FUNCTIONS = [
   'auth_session(text)',
   'auth_logout(text)',
   'auth_assume(text)',
-  'auth_set_password(text,jsonb,text,text)',
+  'auth_issue_reset(text,text,integer)',
+  'auth_activate(text,text,jsonb,text,text)',
+  'auth_account_status()',
   'auth_purge_expired()',
 ];
 

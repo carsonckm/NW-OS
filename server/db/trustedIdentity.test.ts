@@ -7,7 +7,7 @@
  *   2. no user can be promoted                   8. Admins cannot manage Admins (or Owners)
  *   3. no project assignment can be changed      9. background jobs cannot act as a person
  *   4. no authority record can be changed       10. identity never leaks between pooled transactions
- *   5. a forged session token is refused        11. existing passwords keep working after migration 031
+ *   5. a forged session token is refused        11. pre-031 hashes are not carried over (legacyCredentials.test.ts)
  *   6. the Owner can do what the Owner may do   12. a revoked session stops authorizing at once
  */
 import fs from 'node:fs';
@@ -201,7 +201,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
   // ------------------------------------------------------------------ 6
   describe('6. the legitimate Owner can do what the Owner may do (API, verified identity)', () => {
     it('create a user, change a role, assign projects, create a rule, change sensitivity', async () => {
-      const u = (await owner().post('/api/users').send({ name: 'New PM', email: 'newpm@test.local', role: 'Project Manager', password: 'a-long-password-123' }).expect(201)).body;
+      const u = (await owner().post('/api/users').send({ name: 'New PM', email: 'newpm@test.local', role: 'Project Manager' }).expect(201)).body;
+      expect(u.activation.code).toMatch(/^[0-9a-f]{64}$/);
       await owner().patch(`/api/users/${u.id}`).send({ role: 'Site Supervisor' }).expect(200);
       await owner().put(`/api/users/${u.id}/projects`).send({ project_ids: ['proj-1'] }).expect(200);
       const r = (await owner().post('/api/authority/rules').send({ name: 'B12B', description: 'x', effect: 'allow', decision_type: 'variation', target_role: 'Project Manager', project_id: 'proj-1', max_value: 1000, priority: 120 }).expect(201)).body;
@@ -239,7 +240,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       expect((await admin.patch('/api/users/user-admin2').send({ name: 'Renamed' })).status).toBe(403);
       expect((await admin.patch('/api/users/user-admin2').send({ password: 'another-password-123' })).status).toBe(403);
       expect((await admin.patch('/api/users/user-owner').send({ name: 'x' })).status).toBe(403);
-      expect((await admin.post('/api/users').send({ name: 'A3', email: 'a3@test.local', role: 'Admin', password: 'a-long-password-123' })).status).toBe(403);
+      expect((await admin.post('/api/users').send({ name: 'A3', email: 'a3@test.local', role: 'Admin' })).status).toBe(403);
+      expect((await admin.post('/api/users/user-admin2/reset-code').send({})).status).toBe(403);
+      expect((await admin.post('/api/users/user-owner/reset-code').send({})).status).toBe(403);
       expect((await admin.patch('/api/users/user-site').send({ role: 'Admin' })).status).toBe(403);
       expect((await admin.put('/api/users/user-admin2/projects').send({ project_ids: ['proj-1'] })).status).toBe(403);
       const adminToken = await token('admin@test.local');
@@ -325,8 +328,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
   });
 
   // ------------------------------------------------------------------ 11
-  describe('11. existing users log in after the password migration (no reset needed)', () => {
-    it('a pre-031 scrypt hash converts, and the same password signs in through the database', async () => {
+  describe('11. pre-031 password hashes are not carried over', () => {
+    it('a pre-031 hash gives no credential, and neither it nor the old password signs in', async () => {
       const schema = `test_mig_${randomUUID().replace(/-/g, '').slice(0, 10)}`;
       const admin = createPool({ connectionString: TEST_DATABASE_URL, max: 1 });
       await admin.query(`CREATE SCHEMA ${schema}`);
@@ -340,11 +343,14 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
         await pool.query(`INSERT INTO users (id, name, email, password_hash, role) VALUES ('user-legacy', 'Legacy', 'legacy@test.local', $1, 'Accountant')`, [legacy]);
         await pool.query(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('old', 'user-legacy', now() + interval '1 day')`);
         await migrate(pool);
-        // Cut-over: existing sessions ended; the hash converted.
+        // Cut-over: sessions ended, no credential, the account kept and waiting for a new password.
         expect((await pool.query(`SELECT count(*)::int AS n FROM sessions`)).rows[0].n).toBe(0);
+        expect((await pool.query(`SELECT count(*)::int AS n FROM auth_credentials`)).rows[0].n).toBe(0);
+        expect((await pool.query(`SELECT has_password FROM auth_account_status() WHERE user_id = 'user-legacy'`)).rows[0].has_password).toBe(false);
         const s = new AuthStore(pool);
-        expect((await s.login('legacy@test.local', 'an-existing-password-1', {})).status).toBe('ok');
-        expect((await s.login('legacy@test.local', 'a-wrong-password-1', {})).status).toBe('invalid');
+        expect((await s.login('legacy@test.local', 'an-existing-password-1', {})).status).toBe('invalid');
+        const key = Buffer.from(legacy.split('$')[5], 'base64url').toString('hex');
+        expect((await pool.query(`SELECT status FROM auth_login('legacy@test.local', $1, null, null)`, [key])).rows[0].status).toBe('invalid');
       } finally {
         await pool.end();
         fs.rmSync(dir, { recursive: true, force: true });

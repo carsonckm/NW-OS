@@ -21,13 +21,14 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 users, notifications, automation, k
   describe('user management', () => {
     it('lets only users.manage create users, never an Owner by an Admin, and audits role changes', async () => {
       expect((await as['Project Manager'].get('/api/users')).status).toBe(403);
-      expect((await admin().post('/api/users').send({ name: 'Boss 2', email: 'boss2@test.local', role: 'Owner / CEO', password: 'long-password-1' })).status).toBe(403);
-      const u = (await admin().post('/api/users').send({ name: 'New Site', email: 'newsite@test.local', role: 'Site Supervisor', password: 'long-password-1' }).expect(201)).body;
+      expect((await admin().post('/api/users').send({ name: 'Boss 2', email: 'boss2@test.local', role: 'Owner / CEO' })).status).toBe(403);
+      const u = (await admin().post('/api/users').send({ name: 'New Site', email: 'newsite@test.local', role: 'Site Supervisor' }).expect(201)).body;
       await admin().put(`/api/users/${u.id}/projects`).send({ project_ids: ['proj-2'] }).expect(200);
       await admin().patch(`/api/users/${u.id}`).send({ role: 'Project Manager' }).expect(200);
       expect((await admin().patch('/api/users/user-admin').send({ role: 'Owner / CEO' })).status).toBe(403);
       const actions = (await db.pool.query(`SELECT action FROM audit_logs WHERE entity_id = $1 ORDER BY id`, [u.id])).rows.map((r) => r.action);
-      expect(actions).toEqual(['user.create', 'user.assignments', 'user.role_change']);
+      // The activation code's issue is recorded by the database in the same transaction (never the code).
+      expect(actions).toEqual(['user.create', 'auth.code_issued', 'user.assignments', 'user.role_change']);
     });
   });
 

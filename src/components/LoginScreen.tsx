@@ -12,8 +12,12 @@ interface LoginScreenProps {
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onSignedIn, notice }) => {
+  // 'code': set a new password with an activation / reset code, then sign in with it.
+  const [mode, setMode] = useState<'signin' | 'code'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -22,6 +26,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSignedIn, notice }) 
     setBusy(true);
     setError(null);
     try {
+      if (mode === 'code') {
+        if (password !== confirm) throw new Error('The two passwords do not match');
+        await authApi.activate(email, code, password);
+      }
       onSignedIn(await authApi.login(email, password));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign-in failed');
@@ -45,8 +53,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSignedIn, notice }) 
 
         <form onSubmit={submit} className="bg-white border border-slate-200 rounded-2xl shadow-xl p-6 space-y-4">
           <div>
-            <h1 className="text-base font-bold text-slate-900">Sign in</h1>
-            <p className="text-xs text-slate-500 mt-0.5">Use your NW OS account.</p>
+            <h1 className="text-base font-bold text-slate-900">{mode === 'code' ? 'Set a new password' : 'Sign in'}</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {mode === 'code' ? 'Use the single-use code you were given for this account, then choose your own password.' : 'Use your NW OS account.'}
+            </p>
           </div>
 
           {notice && !error && (
@@ -70,17 +80,47 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSignedIn, notice }) 
             />
           </label>
 
+          {mode === 'code' && (
+            <label className="block">
+              <span className="block text-xs font-bold text-slate-700 mb-1">Code</span>
+              <input
+                type="text"
+                autoComplete="one-time-code"
+                spellCheck={false}
+                required
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+              />
+            </label>
+          )}
+
           <label className="block">
-            <span className="block text-xs font-bold text-slate-700 mb-1">Password</span>
+            <span className="block text-xs font-bold text-slate-700 mb-1">{mode === 'code' ? 'New password' : 'Password'}</span>
             <input
               type="password"
-              autoComplete="current-password"
+              autoComplete={mode === 'code' ? 'new-password' : 'current-password'}
               required
+              minLength={mode === 'code' ? 12 : undefined}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
             />
           </label>
+
+          {mode === 'code' && (
+            <label className="block">
+              <span className="block text-xs font-bold text-slate-700 mb-1">Repeat new password</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                required
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+              />
+            </label>
+          )}
 
           <button
             type="submit"
@@ -88,7 +128,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSignedIn, notice }) 
             className="w-full flex items-center justify-center space-x-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-bold text-sm rounded-xl py-2.5 transition-colors"
           >
             <LogIn className="w-4 h-4 text-amber-400" />
-            <span>{busy ? 'Signing in…' : 'Sign in'}</span>
+            <span>{busy ? 'Signing in…' : mode === 'code' ? 'Set password and sign in' : 'Sign in'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setMode(mode === 'code' ? 'signin' : 'code'); setError(null); setPassword(''); setConfirm(''); }}
+            className="w-full text-xs font-bold text-slate-600 hover:text-slate-900 underline-offset-2 hover:underline"
+          >
+            {mode === 'code' ? 'Back to sign in' : 'Set a new password with a code'}
           </button>
 
           <p className="flex items-center space-x-1.5 text-[11px] text-slate-400">

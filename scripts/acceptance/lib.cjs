@@ -16,13 +16,25 @@ const psqlAdmin = (sql) =>
   process.env.ACCEPTANCE_ADMIN_DATABASE_URL
     ? execSync(`psql "$ACCEPTANCE_ADMIN_DATABASE_URL" -tAc ${JSON.stringify(sql)}`).toString().trim()
     : psql(sql);
-async function open(account, browser) {
+// Signs in; with a code, first sets the account's password with it (Batch 12B: a new account has no
+// password until its holder sets one with the activation code an Owner or Admin was shown).
+async function open(account, browser, code) {
   const ctx = await browser.newContext({ viewport: { width: 1700, height: 1000 } });
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(e.message.split('\n')[0]));
   page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) page.errors.push(`${r.request().method()} ${new URL(r.url()).pathname} ${r.status()}`); });
   await page.goto(BASE, { waitUntil: 'networkidle' });
+  if (code) {
+    await page.getByRole('button', { name: 'Set a new password with a code' }).click();
+    await page.getByLabel('Email').fill(`${account}@dev.nwos.local`);
+    await page.getByLabel('Code').fill(code);
+    await page.getByLabel('New password', { exact: true }).fill('dev-password-123');
+    await page.getByLabel('Repeat new password').fill('dev-password-123');
+    await page.getByRole('button', { name: 'Set password and sign in' }).click();
+    await synced(page);
+    return page;
+  }
   await page.getByLabel('Email').fill(`${account}@dev.nwos.local`);
   await page.getByLabel('Password').fill('dev-password-123');
   await page.getByRole('button', { name: 'Sign in' }).click();

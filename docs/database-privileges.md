@@ -564,9 +564,11 @@ well-formed records needs controls outside the database:
 
 ## 7b. Trusted identity (Batch 12B)
 
-Sessions, password verifiers and the per-transaction identity are owner-only tables that
-`nwos_app` cannot read or write; it uses seven `SECURITY DEFINER` authentication functions
-(the only definer functions it may call, each with a pinned `search_path`). Users, project
+Sessions, password verifiers, activation / reset codes and the per-transaction identity are
+owner-only tables that `nwos_app` cannot read or write; it uses nine `SECURITY DEFINER`
+authentication functions (the only definer functions it may call, each with a pinned
+`search_path`). It cannot set a password directly: only the holder can, with a single-use code,
+and pre-031 password hashes were not carried over. Users, project
 assignments, authority rules, Owner absences, WhatsApp contact mappings, project sensitivity
 and legacy review decisions change only with a database-verified identity of the right role.
 `authority_decision_types` is read-only for `nwos_app`. The privilege report checks all of

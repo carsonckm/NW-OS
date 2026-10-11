@@ -39,6 +39,9 @@ export function sendError(res: Response, err: unknown) {
     console.warn('[api] exception lifecycle refused by the database:', pgErr.message);
     return res.status(409).json({ error: 'conflict', message: 'This exception changed while you were acting on it (it may have become critical). Reload and try again.' });
   }
+  // A refusal by the trusted-identity checks (migration 031): their messages name the rule, never
+  // a secret. The API checks the same rules first, so this is a defence in depth.
+  if (pgErr.code === 'NWA01') return res.status(403).json({ error: 'forbidden', message: pgErr.message });
   const mapped = pgErr.code && PG_ERRORS[pgErr.code];
   if (mapped) {
     return res.status(mapped[0]).json({

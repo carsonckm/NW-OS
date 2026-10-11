@@ -20,13 +20,29 @@ export interface AuthUser {
   last_login: string | null;
 }
 
-/** Shape returned to the browser: never includes password data. */
-export type PublicUser = AuthUser & { assigned_project_ids: string[] };
+/** Whether the account has a password, or waits for its holder to set one with a code. */
+export interface CredentialStatus {
+  has_credential: boolean;
+  credential_set_at: string | null;
+  code_purpose: CodePurpose | null;
+  code_expires_at: string | null;
+}
+
+/** Shape returned to the browser: never includes password data or codes. */
+export type PublicUser = AuthUser & { assigned_project_ids: string[]; credential: CredentialStatus };
+
+/** activation: a new account; reset: an Owner / Admin reset; owner_recovery: the operator's procedure. */
+export type CodePurpose = 'activation' | 'reset' | 'owner_recovery';
+/** How long a code is valid, in minutes (the database allows 5 minutes to 3 days). */
+export const CODE_VALID_MINUTES: Record<CodePurpose, number> = { activation: 72 * 60, reset: 24 * 60, owner_recovery: 60 };
+export type ActivateResult = 'ok' | 'invalid' | 'expired' | 'inactive';
 
 const USER_COLUMNS = `id, name, email, role, is_active, is_dev_seed, client_id, contractor_id, phone, department,
   title, created_at, updated_at, last_login`;
 
 export const SESSION_COOKIE = 'nwos_session';
+
+const NO_CREDENTIAL: CredentialStatus = { has_credential: false, credential_set_at: null, code_purpose: null, code_expires_at: null };
 
 type Db = Pool | PoolClient;
 export type LoginResult =
@@ -81,10 +97,35 @@ export class AuthStore {
   async listUsers(): Promise<PublicUser[]> {
     const res = await this.pool.query(`SELECT ${USER_COLUMNS} FROM users ORDER BY created_at, id`);
     const assignments = await this.pool.query('SELECT user_id, project_id FROM project_assignments');
+    const status = await this.credentialStatus();
     return res.rows.map((u: AuthUser) => ({
       ...u,
       assigned_project_ids: assignments.rows.filter((a) => a.user_id === u.id).map((a) => a.project_id),
+      credential: status.get(u.id) ?? NO_CREDENTIAL,
     }));
+  }
+
+  /** Password / pending-code status per account (no secrets): auth_account_status(). */
+  async credentialStatus(): Promise<Map<string, CredentialStatus>> {
+    const rows = (await this.pool.query('SELECT * FROM auth_account_status()')).rows;
+    const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
+    return new Map(rows.map((r) => [r.user_id as string, { has_credential: Boolean(r.has_password), credential_set_at: iso(r.password_set_at), code_purpose: r.code_purpose ?? null, code_expires_at: iso(r.code_expires_at) }]));
+  }
+
+  /**
+   * Issues a single-use code for an account (the database checks who may: the verified Owner, an
+   * Admin for ordinary staff, or the migrator). The account's password and sessions end at once.
+   * The code is returned once and never stored or logged.
+   */
+  async issueCode(db: Db, userId: string, purpose: CodePurpose, validMinutes = CODE_VALID_MINUTES[purpose]): Promise<{ code: string; expires_at: string }> {
+    const r = (await db.query('SELECT * FROM auth_issue_reset($1, $2, $3)', [userId, purpose, validMinutes])).rows[0];
+    return { code: r.token, expires_at: new Date(r.expires_at).toISOString() };
+  }
+
+  /** Sets the account's new password with its code (single use; checked in the database). */
+  async activate(email: string, code: string, password: string): Promise<ActivateResult> {
+    const k = await newPasswordKey(password);
+    return (await this.pool.query('SELECT auth_activate($1, $2, $3, $4, $5) AS status', [email, code, JSON.stringify(k.params), k.salt, k.keyHex])).rows[0].status;
   }
 
   async assignedProjectIds(userId: string): Promise<string[]> {
@@ -95,7 +136,7 @@ export class AuthStore {
   }
 
   async toPublic(user: AuthUser): Promise<PublicUser> {
-    return { ...user, assigned_project_ids: await this.assignedProjectIds(user.id) };
+    return { ...user, assigned_project_ids: await this.assignedProjectIds(user.id), credential: (await this.credentialStatus()).get(user.id) ?? NO_CREDENTIAL };
   }
 
   async createUser(db: Db, input: {
@@ -135,7 +176,10 @@ export class AuthStore {
     return user;
   }
 
-  /** Sets a password (the database checks who may, and ends the user's sessions). */
+  /**
+   * Sets a password directly. Only the migrator / administrator credential may (development seed,
+   * test fixtures); the runtime role is refused. People set theirs with a code (activate).
+   */
   async setPassword(db: Db, userId: string, password: string) {
     const k = await newPasswordKey(password);
     await db.query('SELECT auth_set_password($1, $2, $3, $4)', [userId, JSON.stringify(k.params), k.salt, k.keyHex]);
@@ -144,9 +188,7 @@ export class AuthStore {
   async updateUser(
     db: Db,
     id: string,
-    patch: Partial<Pick<AuthUser, 'name' | 'email' | 'role' | 'is_active' | 'client_id' | 'contractor_id' | 'phone' | 'department' | 'title'>> & {
-      password?: string;
-    }
+    patch: Partial<Pick<AuthUser, 'name' | 'email' | 'role' | 'is_active' | 'client_id' | 'contractor_id' | 'phone' | 'department' | 'title'>>
   ): Promise<AuthUser | undefined> {
     const allowed = ['name', 'email', 'role', 'is_active', 'client_id', 'contractor_id', 'phone', 'department', 'title'] as const;
     const sets: string[] = [];
@@ -160,8 +202,7 @@ export class AuthStore {
     sets.push('updated_at = now()');
     const res = await db.query(`UPDATE users SET ${sets.join(', ')} WHERE id = $1 RETURNING ${USER_COLUMNS}`, values);
     const user: AuthUser | undefined = res.rows[0];
-    // A changed role or deactivation ends the user's sessions (database trigger); so does a new password.
-    if (user && patch.password) await this.setPassword(db, id, patch.password);
+    // A changed role or deactivation ends the user's sessions (database trigger).
     return user;
   }
 

@@ -10,10 +10,16 @@
 --     auth_login, auth_session, auth_logout, auth_assume, auth_set_password, auth_purge_expired.
 --     A session is created only by auth_login, which verifies the password-derived key, and the
 --     token is generated inside the database. Failed attempts are limited in the database.
---  2. Passwords: the server derives a key with scrypt (as before, memory-hard); the database keeps
---     only sha256(derived key), salt and parameters, in auth_credentials. Existing scrypt hashes
---     convert losslessly here: nobody needs a new password. (pgcrypto is not used: an extension
---     is installed once per database, outside NW OS's schema, and is not needed for this.)
+--  2. Passwords: the server derives a key with scrypt (memory-hard); the database keeps only
+--     sha256(derived key), salt and parameters, in auth_credentials. Nothing stored there can be
+--     presented to auth_login. Existing password hashes are NOT carried over: before this
+--     migration users.password_hash held the scrypt key itself, readable with the runtime
+--     credential, and a converted hash would let anyone who copied it sign in. Every account
+--     therefore starts without a credential and sets a new password with an individual,
+--     single-use, expiring code (auth_reset_tokens): the Owner through the operator's recovery
+--     procedure (migrator credential), staff from codes the Owner (or an Admin, for ordinary
+--     staff) issues. (pgcrypto is not used: an extension is installed once per database, outside
+--     NW OS's schema, and is not needed for this.)
 --  3. Identity per transaction: auth_assume(session token) records, in an owner-only table keyed
 --     by (backend pid, transaction id), which signed-in user this transaction acts for. Nothing the
 --     application says about a user id or role is trusted, and an identity can never carry over to
@@ -26,7 +32,8 @@
 --     whose end time has passed. Roles that own the tables (migrator, administrator) are not
 --     checked: they could drop the triggers anyway, and they are never the runtime credential.
 --  5. audit_logs.actor_verified: true when the row's actor is the transaction's verified identity.
---  6. Cut-over: every existing session is ended; everyone signs in again.
+--  6. Cut-over: every existing session is ended, every old password hash is dropped, and every
+--     account needs a new password (activation code) before it can sign in.
 
 -- ---------------------------------------------------------------- owner-only tables
 CREATE TABLE auth_credentials (
@@ -39,15 +46,8 @@ CREATE TABLE auth_credentials (
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
--- Existing scrypt hashes ("scrypt$N$r$p$salt$key", base64url): same key, now kept as its digest.
-INSERT INTO auth_credentials (user_id, scheme, params, salt, verifier)
-SELECT u.id, 'scrypt',
-       jsonb_build_object('N', split_part(u.password_hash, '$', 2)::int, 'r', split_part(u.password_hash, '$', 3)::int, 'p', split_part(u.password_hash, '$', 4)::int,
-                          'keylen', length(decode(translate(split_part(u.password_hash, '$', 6), '-_', '+/') || repeat('=', (4 - length(split_part(u.password_hash, '$', 6)) % 4) % 4), 'base64'))),
-       split_part(u.password_hash, '$', 5),
-       encode(sha256(decode(translate(split_part(u.password_hash, '$', 6), '-_', '+/') || repeat('=', (4 - length(split_part(u.password_hash, '$', 6)) % 4) % 4), 'base64')), 'hex')
-  FROM users u
- WHERE u.password_hash LIKE 'scrypt$%$%$%$%$%';
+-- Old password hashes are dropped, never converted (see 2. above): every account needs a new
+-- password. Identities, roles, assignments and history are untouched.
 ALTER TABLE users DROP COLUMN password_hash;
 
 CREATE TABLE auth_config (key text PRIMARY KEY, value text NOT NULL);
@@ -59,6 +59,19 @@ CREATE TABLE auth_login_failures (
   at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX auth_login_failures_user_idx ON auth_login_failures (user_id, at);
+
+-- Activation / reset codes: individual, single-use, expiring. Only the code's sha256 is kept; the
+-- code itself is shown once to whoever issued it, to hand to the account holder.
+CREATE TABLE auth_reset_tokens (
+  token_hash  text PRIMARY KEY,
+  user_id     text NOT NULL REFERENCES users (id) ON UPDATE CASCADE ON DELETE CASCADE,
+  purpose     text NOT NULL CHECK (purpose IN ('activation', 'reset', 'owner_recovery')),
+  issued_by   text NOT NULL,
+  issued_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at  timestamptz NOT NULL,
+  used_at     timestamptz
+);
+CREATE INDEX auth_reset_tokens_user_idx ON auth_reset_tokens (user_id);
 
 CREATE UNLOGGED TABLE auth_tx_identity (
   backend_pid  integer NOT NULL,
@@ -192,33 +205,130 @@ BEGIN
   RETURN uid;
 END $$;
 
--- Sets a user's password-derived verifier. The Owner for anyone, an Admin for users who are
--- neither Owner nor Admin (or the migrator / administrator credential). Ends the user's sessions.
-CREATE FUNCTION auth_set_password(p_user_id text, p_params jsonb, p_salt text, p_key_hex text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+-- The scrypt parameters and key a new credential is made from, checked and normalized: never
+-- weaker than the server's own (N >= 2^15, r >= 8, p >= 1, a 32-128 byte key, a 16+ byte salt).
+CREATE FUNCTION auth_checked_params(p_params jsonb, p_salt text, p_key_hex text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
-  me record;
-  target users%ROWTYPE;
+  n int; r int; p int; k int;
 BEGIN
-  SELECT * INTO target FROM users WHERE id = p_user_id;
-  IF NOT FOUND THEN PERFORM auth_refuse('Unknown user'); END IF;
+  BEGIN
+    n := (p_params->>'N')::int; r := (p_params->>'r')::int; p := (p_params->>'p')::int; k := (p_params->>'keylen')::int;
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM auth_refuse('Invalid password parameters');
+  END;
+  IF n IS NULL OR r IS NULL OR p IS NULL OR k IS NULL OR n < 32768 OR (n & (n - 1)) <> 0 OR r < 8 OR p < 1 OR p > 16 OR k < 32 OR k > 128
+     OR coalesce(length(p_salt), 0) < 22 OR p_key_hex IS NULL OR p_key_hex !~ '^[0-9a-f]+$' OR length(p_key_hex) <> 2 * k THEN
+    PERFORM auth_refuse('Invalid password parameters');
+  END IF;
+  RETURN jsonb_build_object('N', n, 'r', r, 'p', p, 'keylen', k);
+END $$;
+
+-- An audit record written by the database itself (durable evidence of credential events).
+CREATE FUNCTION auth_audit(p_actor_id text, p_action text, p_user_id text, p_after jsonb) RETURNS void LANGUAGE sql AS $$
+  INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, after, details)
+  SELECT a.id, coalesce(a.name, 'operator ' || session_user), coalesce(a.role, 'database operator'), p_action, 'user', p_user_id, p_after,
+         CASE WHEN a.id IS NULL THEN 'by database role ' || session_user END
+    FROM (SELECT 1) one LEFT JOIN users a ON a.id = p_actor_id
+$$;
+
+-- Sets a password directly: only the roles that own the tables (development seed, test fixtures).
+-- People set their own password with an activation code (auth_activate).
+CREATE FUNCTION auth_set_password(p_user_id text, p_params jsonb, p_salt text, p_key_hex text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE params jsonb;
+BEGIN
   IF NOT auth_exempt('users'::regclass) THEN
-    SELECT * INTO me FROM auth_identity();
-    IF me.user_id IS NULL THEN PERFORM auth_refuse('Setting a password needs a signed-in Owner or Admin'); END IF;
-    IF me.role = 'Admin' THEN
-      IF target.role IN ('Owner / CEO', 'Admin') THEN PERFORM auth_refuse('An Admin cannot set the password of an Owner or Admin'); END IF;
-    ELSIF me.role <> 'Owner / CEO' THEN
-      PERFORM auth_refuse('Only an Owner or Admin can set passwords');
-    END IF;
+    PERFORM auth_refuse('Passwords are set by their owner with an activation code');
   END IF;
-  IF p_params IS NULL OR (p_params->>'N') IS NULL OR (p_params->>'r') IS NULL OR (p_params->>'p') IS NULL OR (p_params->>'keylen') IS NULL OR coalesce(p_salt, '') = '' THEN
-    PERFORM auth_refuse('Incomplete password parameters');
-  END IF;
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN PERFORM auth_refuse('Unknown user'); END IF;
+  params := auth_checked_params(p_params, p_salt, p_key_hex);
   INSERT INTO auth_credentials (user_id, scheme, params, salt, verifier, updated_at)
-  VALUES (p_user_id, 'scrypt', jsonb_build_object('N', (p_params->>'N')::int, 'r', (p_params->>'r')::int, 'p', (p_params->>'p')::int, 'keylen', (p_params->>'keylen')::int), p_salt, encode(sha256(decode(p_key_hex, 'hex')), 'hex'), now())
+  VALUES (p_user_id, 'scrypt', params, p_salt, encode(sha256(decode(p_key_hex, 'hex')), 'hex'), now())
   ON CONFLICT (user_id) DO UPDATE SET params = EXCLUDED.params, salt = EXCLUDED.salt, verifier = EXCLUDED.verifier, updated_at = now();
   DELETE FROM sessions WHERE sessions.user_id = p_user_id;
   DELETE FROM auth_login_failures WHERE auth_login_failures.user_id = p_user_id;
+  DELETE FROM auth_reset_tokens WHERE auth_reset_tokens.user_id = p_user_id AND used_at IS NULL;
 END $$;
+
+-- Issues an activation / reset code for an account and returns it once. The account's password
+-- and sessions end at once, and any earlier unused code is withdrawn: it signs in again only after
+-- its holder sets a new password with this code. Never changes a role or authority.
+--   The verified Owner: any other account. A verified Admin: other accounts that are neither Owner
+--   nor Admin. The migrator / administrator credential: any account (Owner recovery, new
+--   installations). Nobody else, and never one's own account (that is the recovery procedure).
+CREATE FUNCTION auth_issue_reset(p_user_id text, p_purpose text, p_valid_minutes integer,
+  OUT token text, OUT expires_at timestamptz) LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  me record;
+  target users%ROWTYPE;
+  issuer text;
+  actor text;
+BEGIN
+  SELECT * INTO target FROM users WHERE id = p_user_id;
+  IF NOT FOUND THEN PERFORM auth_refuse('Unknown user'); END IF;
+  IF p_purpose IS NULL OR p_purpose NOT IN ('activation', 'reset', 'owner_recovery') THEN PERFORM auth_refuse('Unknown code purpose'); END IF;
+  IF p_valid_minutes IS NULL OR p_valid_minutes < 5 OR p_valid_minutes > 4320 THEN PERFORM auth_refuse('A code is valid for 5 minutes to 3 days'); END IF;
+  IF auth_exempt('users'::regclass) THEN
+    issuer := 'operator ' || session_user;
+  ELSE
+    IF p_purpose = 'owner_recovery' THEN PERFORM auth_refuse('Owner recovery needs the operator''s administrative credential'); END IF;
+    SELECT * INTO me FROM auth_identity();
+    IF me.user_id IS NULL THEN PERFORM auth_refuse('Issuing a code needs a signed-in Owner or Admin (database-verified)'); END IF;
+    IF me.user_id = target.id THEN PERFORM auth_refuse('You cannot reset your own account'); END IF;
+    IF me.role = 'Admin' THEN
+      IF target.role IN ('Owner / CEO', 'Admin') THEN PERFORM auth_refuse('An Admin cannot reset an Owner or Admin'); END IF;
+    ELSIF me.role <> 'Owner / CEO' THEN
+      PERFORM auth_refuse('Only an Owner or Admin can reset accounts');
+    END IF;
+    issuer := me.user_id;
+    actor := me.user_id;
+  END IF;
+  IF NOT target.is_active THEN PERFORM auth_refuse('The account is deactivated: reactivate it first'); END IF;
+  DELETE FROM auth_credentials WHERE auth_credentials.user_id = target.id;
+  DELETE FROM sessions WHERE sessions.user_id = target.id;
+  DELETE FROM auth_reset_tokens WHERE auth_reset_tokens.user_id = target.id AND used_at IS NULL;
+  token := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+  expires_at := now() + make_interval(mins => p_valid_minutes);
+  INSERT INTO auth_reset_tokens (token_hash, user_id, purpose, issued_by, expires_at) VALUES (auth_token_hash(token), target.id, p_purpose, issuer, expires_at);
+  PERFORM auth_audit(actor, 'auth.code_issued', target.id,
+    jsonb_build_object('purpose', p_purpose, 'expires_at', expires_at, 'issued_by', issuer, 'password', '(removed)', 'sessions', '(ended)'));
+END $$;
+
+-- Sets the account's new password with an activation / reset code: the code must belong to this
+-- email, be unused and unexpired, and the account active. Single use; ends any sessions.
+-- Returns ok, invalid (unknown, used or another account's code), expired or inactive.
+CREATE FUNCTION auth_activate(p_email text, p_token text, p_params jsonb, p_salt text, p_key_hex text) RETURNS text LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  t auth_reset_tokens%ROWTYPE;
+  u users%ROWTYPE;
+  params jsonb;
+BEGIN
+  SELECT rt.* INTO t FROM auth_reset_tokens rt JOIN users us ON us.id = rt.user_id
+   WHERE rt.token_hash = auth_token_hash(coalesce(p_token, '')) AND lower(us.email) = lower(btrim(coalesce(p_email, '')))
+   FOR UPDATE OF rt;
+  IF NOT FOUND OR t.used_at IS NOT NULL THEN RETURN 'invalid'; END IF;
+  IF t.expires_at <= now() THEN RETURN 'expired'; END IF;
+  SELECT * INTO u FROM users WHERE id = t.user_id;
+  IF NOT u.is_active THEN RETURN 'inactive'; END IF;
+  params := auth_checked_params(p_params, p_salt, p_key_hex);
+  UPDATE auth_reset_tokens SET used_at = now() WHERE token_hash = t.token_hash;
+  DELETE FROM auth_reset_tokens WHERE auth_reset_tokens.user_id = u.id AND used_at IS NULL;
+  INSERT INTO auth_credentials (user_id, scheme, params, salt, verifier, updated_at)
+  VALUES (u.id, 'scrypt', params, p_salt, encode(sha256(decode(p_key_hex, 'hex')), 'hex'), now())
+  ON CONFLICT (user_id) DO UPDATE SET params = EXCLUDED.params, salt = EXCLUDED.salt, verifier = EXCLUDED.verifier, updated_at = now();
+  DELETE FROM sessions WHERE sessions.user_id = u.id;
+  DELETE FROM auth_login_failures WHERE auth_login_failures.user_id = u.id;
+  PERFORM auth_audit(u.id, 'auth.password_set', u.id, jsonb_build_object('purpose', t.purpose, 'code_issued_by', t.issued_by, 'code_issued_at', t.issued_at));
+  RETURN 'ok';
+END $$;
+
+-- Which accounts have a password, and which wait for an activation code (no secrets).
+CREATE FUNCTION auth_account_status() RETURNS TABLE (user_id text, has_password boolean, password_set_at timestamptz, code_purpose text, code_expires_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER AS $$
+  SELECT u.id, c.user_id IS NOT NULL, c.updated_at, t.purpose, t.expires_at
+    FROM users u
+    LEFT JOIN auth_credentials c ON c.user_id = u.id
+    LEFT JOIN LATERAL (SELECT rt.purpose, rt.expires_at FROM auth_reset_tokens rt WHERE rt.user_id = u.id AND rt.used_at IS NULL AND rt.expires_at > now() ORDER BY rt.issued_at DESC LIMIT 1) t ON true
+$$;
 
 CREATE FUNCTION auth_purge_expired() RETURNS integer LANGUAGE plpgsql SECURITY DEFINER AS $$
 DECLARE n integer;
@@ -226,6 +336,7 @@ BEGIN
   DELETE FROM sessions WHERE expires_at < now() OR created_at < now() - interval '7 days';
   GET DIAGNOSTICS n = ROW_COUNT;
   DELETE FROM auth_login_failures WHERE at < now() - interval '1 day';
+  DELETE FROM auth_reset_tokens WHERE (used_at IS NOT NULL AND used_at < now() - interval '30 days') OR expires_at < now() - interval '30 days';
   RETURN n;
 END $$;
 

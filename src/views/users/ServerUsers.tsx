@@ -5,7 +5,7 @@
  * audits every change. There is no role switching: a role is a property of the account.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Plus, UserCog } from 'lucide-react';
+import { KeyRound, Plus, UserCog } from 'lucide-react';
 import { useNW } from '../../context/NWContext';
 import { UserRole } from '../../types';
 import { api } from '../../services/coreApi';
@@ -28,14 +28,24 @@ export interface ServerUser {
   title: string | null;
   last_login: string | null;
   assigned_project_ids: string[];
+  credential?: { has_credential: boolean; credential_set_at: string | null; code_purpose: string | null; code_expires_at: string | null };
+}
+
+/** A single-use code, shown once to whoever issued it (Batch 12B). */
+interface IssuedCode {
+  name: string;
+  email: string;
+  code: string;
+  expires_at: string;
+  purpose: 'activation' | 'reset';
 }
 
 const ROLES = Object.keys(ROLE_DEFINITIONS) as UserRole[];
-const PROJECT_SCOPED: UserRole[] = ['Project Manager', 'Site Supervisor', 'Production Staff', 'Contractor', 'Client'];
-// Sees every project unless limited to the ones assigned here (server: AccessContext).
-const OPTIONALLY_SCOPED: UserRole[] = ['Production Manager'];
+// These roles see only the projects assigned here (server: AccessContext). A Production Manager
+// with no assignment sees no project (Batch 12B).
+const PROJECT_SCOPED: UserRole[] = ['Project Manager', 'Production Manager', 'Site Supervisor', 'Production Staff', 'Contractor', 'Client'];
 
-const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () => void }> = ({ user, onClose, onSaved }) => {
+const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: (issued?: IssuedCode) => void }> = ({ user, onClose, onSaved }) => {
   const { projects, clients, contractors } = useNW();
   const [f, setF] = useState({
     name: user?.name ?? '',
@@ -46,7 +56,6 @@ const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () =
     phone: user?.phone ?? '',
     client_id: user?.client_id ?? '',
     contractor_id: user?.contractor_id ?? '',
-    password: '',
   });
   const [assigned, setAssigned] = useState<string[]>(user?.assigned_project_ids ?? []);
   const [busy, setBusy] = useState(false);
@@ -66,12 +75,14 @@ const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () =
         client_id: f.role === 'Client' ? f.client_id || null : null,
         contractor_id: f.role === 'Contractor' ? f.contractor_id || null : null,
       };
-      if (f.password) body.password = f.password;
       if (user && user.role === f.role) delete body.role;
-      const saved = user ? await api.patch<ServerUser>(`/users/${encodeURIComponent(user.id)}`, body) : await api.post<ServerUser>('/users', body);
+      const saved = user
+        ? await api.patch<ServerUser>(`/users/${encodeURIComponent(user.id)}`, body)
+        : await api.post<ServerUser & { activation?: { code: string; expires_at: string } }>('/users', body);
       const before = [...(user?.assigned_project_ids ?? [])].sort().join();
       if ([...assigned].sort().join() !== before) await api.put(`/users/${encodeURIComponent(saved.id)}/projects`, { project_ids: assigned });
-      onSaved();
+      const activation = (saved as { activation?: { code: string; expires_at: string } }).activation;
+      onSaved(activation ? { name: saved.name, email: saved.email, code: activation.code, expires_at: activation.expires_at, purpose: 'activation' } : undefined);
       onClose();
     } catch (err) {
       setError(actionErrorOf(err).message);
@@ -108,9 +119,6 @@ const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () =
             ))}
           </Select>
         </Field>
-        <Field label={user ? 'New password (leave blank to keep)' : 'Initial password'} hint="At least 10 characters.">
-          <Input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} aria-label="Password" autoComplete="new-password" />
-        </Field>
         <Field label="Title">
           <Input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
         </Field>
@@ -145,8 +153,13 @@ const UserForm: React.FC<{ user?: ServerUser; onClose: () => void; onSaved: () =
           </Field>
         )}
       </div>
-      {(PROJECT_SCOPED.includes(f.role) || OPTIONALLY_SCOPED.includes(f.role)) && (
-        <Field label="Assigned projects" hint={OPTIONALLY_SCOPED.includes(f.role) ? 'Leave all unticked to see every project; ticking limits this user to those projects.' : 'This role only sees the projects assigned here.'}>
+      {!user && (
+        <p className="text-[11px] text-slate-500">
+          The account starts without a password. After you create it you get a single-use activation code to hand to its holder, who chooses their own password with it.
+        </p>
+      )}
+      {PROJECT_SCOPED.includes(f.role) && (
+        <Field label="Assigned projects" hint="This role only sees the projects assigned here (none ticked: no projects).">
           <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
             {projects.map((p) => (
               <label key={p.id} className="flex items-center gap-2 text-xs">
@@ -169,6 +182,7 @@ export const ServerUserManagement: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ServerUser | 'new' | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [issued, setIssued] = useState<IssuedCode | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -195,6 +209,28 @@ export const ServerUserManagement: React.FC = () => {
     }
   };
 
+  // A reset ends the account's password and sessions now; its holder sets a new one with the code.
+  const resetPassword = async (u: ServerUser) => {
+    if (!window.confirm(`Reset ${u.name}'s password? Their current password and sessions stop working now, and they need the code to set a new one.`)) return;
+    setBusy(u.id);
+    setError(null);
+    try {
+      const r = await api.post<{ code: string; expires_at: string }>(`/users/${encodeURIComponent(u.id)}/reset-code`, {});
+      setIssued({ name: u.name, email: u.email, code: r.code, expires_at: r.expires_at, purpose: 'reset' });
+      await load();
+    } catch (err) {
+      setError(actionErrorOf(err).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  // Only the Owner resets Owner and Admin accounts; nobody resets their own (server-enforced too).
+  const mayReset = (u: ServerUser) => u.id !== currentUser.id && u.is_active && (currentUser.role === 'Owner / CEO' || !['Owner / CEO', 'Admin'].includes(u.role));
+  const credentialLabel = (u: ServerUser) => {
+    if (!u.credential || u.credential.has_credential) return null;
+    return u.credential.code_expires_at ? `Needs password · code valid until ${new Date(u.credential.code_expires_at).toLocaleString()}` : 'Needs password · no valid code';
+  };
+
   const projectName = (id: string) => projects.find((p) => p.id === id)?.project_number ?? id;
 
   return (
@@ -214,6 +250,21 @@ export const ServerUserManagement: React.FC = () => {
         )}
       </div>
       <FormError error={error} onDismiss={() => setError(null)} />
+      {issued && (
+        <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-950" data-testid="issued-code" role="status">
+          <div className="flex items-center gap-2 font-black">
+            <KeyRound className="h-4 w-4" /> {issued.purpose === 'activation' ? 'Activation code' : 'Reset code'} for {issued.name} ({issued.email})
+          </div>
+          <div className="select-all break-all rounded-lg border border-amber-200 bg-white px-3 py-2 font-mono text-sm text-slate-900" data-testid="issued-code-value">
+            {issued.code}
+          </div>
+          <p>
+            Single use, valid until {new Date(issued.expires_at).toLocaleString()}. Hand it to {issued.name} over a trusted channel; on the sign-in screen they choose
+            “Set a new password with a code”. It is shown only now and is not stored.
+          </p>
+          <Button onClick={() => setIssued(null)}>Done</Button>
+        </div>
+      )}
       {users && (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -235,15 +286,21 @@ export const ServerUserManagement: React.FC = () => {
                     <div className="text-[11px] text-slate-500">{u.email}{u.is_dev_seed ? ' · dev seed' : ''}</div>
                   </td>
                   <td className="pr-3">{u.role}</td>
-                  <td className="pr-3 text-[11px]">{PROJECT_SCOPED.includes(u.role) ? u.assigned_project_ids.map(projectName).join(', ') || 'none' : OPTIONALLY_SCOPED.includes(u.role) && u.assigned_project_ids.length ? u.assigned_project_ids.map(projectName).join(', ') : 'all (company-wide)'}</td>
+                  <td className="pr-3 text-[11px]">{PROJECT_SCOPED.includes(u.role) ? u.assigned_project_ids.map(projectName).join(', ') || 'none' : 'all (company-wide)'}</td>
                   <td className="pr-3 text-[11px]">{u.last_login ? new Date(u.last_login).toLocaleString() : 'never'}</td>
                   <td className="pr-3">
                     <Pill tone={u.is_active ? 'good' : 'neutral'}>{u.is_active ? 'Active' : 'Deactivated'}</Pill>
+                    {credentialLabel(u) && <div className="mt-1 text-[10px] font-bold text-amber-700">{credentialLabel(u)}</div>}
                   </td>
                   <td className="space-x-1 whitespace-nowrap text-right">
                     {canManage && (
                       <>
                         <Button onClick={() => setEditing(u)}>Edit</Button>
+                        {mayReset(u) && (
+                          <Button busy={busy === u.id} onClick={() => resetPassword(u)}>
+                            Reset password
+                          </Button>
+                        )}
                         {u.id !== currentUser.id && (
                           <Button tone={u.is_active ? 'danger' : 'success'} busy={busy === u.id} onClick={() => toggleActive(u)}>
                             {u.is_active ? 'Deactivate' : 'Reactivate'}
@@ -258,7 +315,16 @@ export const ServerUserManagement: React.FC = () => {
           </table>
         </div>
       )}
-      {editing && <UserForm user={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} onSaved={load} />}
+      {editing && (
+        <UserForm
+          user={editing === 'new' ? undefined : editing}
+          onClose={() => setEditing(null)}
+          onSaved={(code) => {
+            if (code) setIssued(code);
+            void load();
+          }}
+        />
+      )}
     </div>
   );
 };
