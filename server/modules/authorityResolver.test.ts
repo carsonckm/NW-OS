@@ -165,11 +165,14 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       const id = await variation(projA, 5000);
       const lying = { query: (sql: string, args?: unknown[]) => (/SELECT sensitivity FROM projects/.test(sql) ? Promise.resolve({ rows: [{ sensitivity: 'Secret' }], rowCount: 1 }) : db.pool.query(sql, args as never)) } as unknown as Pool;
       expect(codesSeen(await resolve('user-pm', vo(id), lying))).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT', requiresOwner: true });
-      const req = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision', assigned_approver_role: 'Project Manager' });
+      const req = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision' });
+      // Batch 12A: a request is decided under the Owner's rules (no requester-chosen approver).
+      const pmRequests = await grant({ name: 'PM requests', decision_type: 'approval_request', project_id: projA });
       expect((await resolve('user-pm', { resource: { kind: 'approval', id: req } })).allowed).toBe(true);
       await db.pool.query(`UPDATE authority_decision_types SET active = false WHERE key = 'approval_request'`);
       expect(await resolve('user-pm', { resource: { kind: 'approval', id: req } })).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT', requiresOwner: true });
       await db.pool.query(`UPDATE authority_decision_types SET active = true WHERE key = 'approval_request'`);
+      await owner().post(`/api/authority/rules/${pmRequests.id}/deactivate`).send({ reason: 'test finished' }).expect(200);
       expect(await resolve('user-pm', vo('vo-nope'))).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT', requiresOwner: true });
     });
   });
@@ -341,18 +344,25 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       expect((await resolve('user-owner', { resource: { kind: 'invoice', id: theirs }, pending: { matchStatus: 'Exceeds PO' } })).allowed).toBe(true);
     });
 
-    it('approval requests: the assigned approver decides, never the requester; DAM needs approvals.decide', async () => {
-      const toPm = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision', assigned_approver_role: 'Project Manager' });
+    it('approval requests: decided under the authority rules, never by a requester-chosen approver (Batch 12A); never by the requester', async () => {
+      // Before Batch 12A (SYS-REQUEST-ASSIGNEE-APPROVAL-REQUEST) the named approver decided. A legacy
+      // request that still names one gives them nothing; the Owner (or an Owner rule) decides.
+      const toPm = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision' });
+      await legacyAssignee(toPm, 'Project Manager', 'user-pm');
+      expect((await decide('Project Manager', toPm)).status).toBe(403);
       expect((await decide('Production Manager', toPm)).status).toBe(403);
-      await decide('Project Manager', toPm, 'Changes Requested').expect(200);
-      const tech = await approvalRequest('Project Manager', { approval_type: 'Technical Change', assigned_approver_role: 'Owner / CEO' });
+      await decide('Owner / CEO', toPm, 'Changes Requested').expect(200);
+      const tech = await approvalRequest('Project Manager', { approval_type: 'Technical Change' });
       const pmgr = await decide('Production Manager', tech);
       expect(pmgr.status).toBe(403);
+      // SYS-TECHNICAL-PRODMGR names the Production Manager but needs approvals.decide.
       expect(pmgr.body.reason_code).toBe('CONDITION_NOT_MET');
       codesSeen(await resolve('user-prod-mgr', { resource: { kind: 'approval', id: tech } }));
-      const dam = await approvalRequest('Project Manager', { approval_type: 'Technical Change', assigned_approver_role: 'Designated Authorized Manager' });
+      const dam = await approvalRequest('Project Manager', { approval_type: 'Technical Change' });
+      await legacyAssignee(dam, 'Designated Authorized Manager');
       expect((await decide('Production Manager', dam)).status).toBe(403);
-      await decide('Accountant', dam).expect(200);
+      expect((await decide('Accountant', dam)).status).toBe(403);
+      await decide('Owner / CEO', dam).expect(200);
       const own = await approvalRequest('Accountant', { approval_type: 'Major Cost' });
       const selfDecision = await decide('Accountant', own);
       expect(selfDecision.status).toBe(403);
@@ -438,14 +448,15 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       expect(r).toMatchObject({ allowed: false, reasonCode: 'OUT_OF_SCOPE' });
       expect((await db.pool.query('SELECT decision FROM approvals WHERE id = $1', [x])).rows[0].decision).toBe('Pending');
       // Clients and contractors hold no internal approval authority even when assigned.
-      const assigned = await approvalRequest('Project Manager', { approval_type: 'Safety-Critical Decision', assigned_approver_role: 'Client' });
+      const assigned = await approvalRequest('Project Manager', { approval_type: 'Safety-Critical Decision' });
+      await legacyAssignee(assigned, 'Client');
       const c = await decide('Client', assigned);
       expect(c.status).toBe(403);
       expect(c.body.reason_code).toBe('INSUFFICIENT_PERMISSION');
     });
 
     it('direct API access without a session, or with a deactivated account, is refused', async () => {
-      const req = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision', assigned_approver_role: 'Project Manager' });
+      const req = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision' });
       expect((await request(app).post(`/api/approvals/${req}/decision`).send({ decision: 'Approved' })).status).toBe(401);
       await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-pm'`);
       expect((await decide('Project Manager', req)).status).toBe(401);
@@ -568,7 +579,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
 
     it('a record outside the user\'s projects: OUT_OF_SCOPE, and its sensitivity is not disclosed', async () => {
       await setSensitivity('proj-x', 'Strategic');
-      const x = await approvalRequest('Owner / CEO', { project_id: 'proj-x', approval_type: 'Safety-Critical Decision', assigned_approver_role: 'Project Manager' });
+      const x = await approvalRequest('Owner / CEO', { project_id: 'proj-x', approval_type: 'Safety-Critical Decision' });
       expect(await resolve('user-pm', { resource: { kind: 'approval', id: x } })).toMatchObject({ reasonCode: 'OUT_OF_SCOPE', projectSensitivity: null });
       await setSensitivity('proj-x', 'Normal');
     });
@@ -581,8 +592,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
 
     it('1. a Client user cannot decide an internal request just because it is assigned to the Client role', async () => {
       for (const type of ['Safety-Critical Decision', 'Technical Change', 'Major Purchase', 'Project Date Change']) {
-        const id = await approvalRequest('Project Manager', { approval_type: type, assigned_approver_role: type === 'Major Purchase' ? 'Owner / CEO' : 'Client' });
-        if (type === 'Major Purchase') await legacyAssignee(id, 'Client');
+        // Stored before Batch 12A (the API no longer accepts it).
+        const id = await approvalRequest('Project Manager', { approval_type: type });
+        await legacyAssignee(id, 'Client');
         // Before Phase 6 (the old rule, still in the browser for demo mode) this was allowed.
         expect(canEvaluateApproval(await clientUser(), await stored(id)).canApprove, type).toBe(true);
         for (const decision of ['Approved', 'Rejected', 'Changes Requested']) {

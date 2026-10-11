@@ -27,7 +27,7 @@ export interface RoleNames {
 export const DEFAULT_ROLES: RoleNames = { owner: 'nwos_owner', migrator: 'nwos_migrator', app: 'nwos_app' };
 
 /** History tables: the application may read and append, never change or remove. */
-export const APPEND_ONLY_TABLES = ['audit_logs', 'owner_exception_events', 'delivery_receipts'];
+export const APPEND_ONLY_TABLES = ['audit_logs', 'owner_exception_events', 'delivery_receipts', 'legacy_review_items', 'legacy_review_decisions'];
 /** Records the application updates but never deletes (their triggers refuse deletes too). */
 export const NO_DELETE_TABLES = ['owner_exception_states', 'owner_exception_snoozes', 'drawing_revisions', 'owner_exception_integrity_findings'];
 /** Managed by the migrator only. */

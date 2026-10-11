@@ -10,7 +10,6 @@ import {
   ApprovalItem,
   ApprovalType,
   ApprovalDecision,
-  UserRole,
 } from '../types';
 import {
   canEvaluateApproval,
@@ -78,9 +77,16 @@ export const ApprovalsView: React.FC = () => {
   const [newCostImpact, setNewCostImpact] = useState<number>(0);
   const [newScheduleImpact, setNewScheduleImpact] = useState<number>(0);
   const [newRisk, setNewRisk] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
-  const [newApproverRole, setNewApproverRole] = useState<UserRole>('Owner / CEO');
-  // Purchase decisions are routed by the authority rules; the requester does not choose the approver.
-  const routedByRules = (type: string) => type === 'Major Purchase' || type === 'Major Cost';
+  const [askClient, setAskClient] = useState(false);
+  // Requests are routed by the authority rules; the requester does not choose the approver
+  // (Batch 12A). A client-facing request may ask the client for consent.
+  const clientFacing = (type: string) => type === 'Variation' || type === 'Client Scope Change';
+  const approverLabel = (item: { approval_type: string; assigned_approver_role?: string; assigned_approver_name?: string }) =>
+    item.approval_type === 'AI Proposal'
+      ? item.assigned_approver_name ?? item.assigned_approver_role
+      : clientFacing(item.approval_type) && item.assigned_approver_role === 'Client'
+        ? 'Client (consent)'
+        : 'Routed by the authority rules';
 
   // Filtered approvals
   const filteredApprovals = approvals.filter((item) => {
@@ -149,7 +155,7 @@ export const ApprovalsView: React.FC = () => {
       requested_by_id: currentUser.id,
       requested_by_name: currentUser.name,
       requested_by_role: currentUser.role,
-      assigned_approver_role: routedByRules(newType) ? 'Owner / CEO' : newApproverRole,
+      assigned_approver_role: clientFacing(newType) && askClient ? 'Client' : 'Owner / CEO',
       date_requested: new Date().toISOString(),
       decision: 'Pending',
       impact_summary: {
@@ -374,7 +380,7 @@ export const ApprovalsView: React.FC = () => {
                       </div>
                       <div>
                         <span className="text-slate-400">Designated Approver: </span>
-                        <strong className="text-slate-800 font-semibold">{routedByRules(item.approval_type) ? 'Routed by the authority rules' : item.assigned_approver_role}</strong>
+                        <strong className="text-slate-800 font-semibold">{approverLabel(item)}</strong>
                       </div>
                       <div>
                         <span className="text-slate-400">Date: </span>
@@ -713,20 +719,12 @@ export const ApprovalsView: React.FC = () => {
                 </div>
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Assigned Approver</label>
-                  {routedByRules(newType) ? (
-                    <p className="text-xs text-slate-500">Routed by the authority rules (the requester does not choose the approver).</p>
-                  ) : (
-                  <select
-                    value={newApproverRole}
-                    onChange={(e) => setNewApproverRole(e.target.value as UserRole)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  >
-                    <option value="Owner / CEO">Owner / CEO</option>
-                    <option value="Project Manager">Project Manager</option>
-                    <option value="Production Manager">Production Manager</option>
-                    <option value="Accountant">Accountant</option>
-                    <option value="Client">Client</option>
-                  </select>
+                  <p className="text-xs text-slate-500">Routed by the authority rules (the requester does not choose the approver).</p>
+                  {clientFacing(newType) && (
+                    <label className="mt-1 flex items-center gap-2 text-xs text-slate-700">
+                      <input type="checkbox" checked={askClient} onChange={(e) => setAskClient(e.target.checked)} />
+                      Ask the client for consent
+                    </label>
                   )}
                 </div>
               </div>

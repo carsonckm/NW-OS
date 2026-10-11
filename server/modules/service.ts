@@ -8,6 +8,8 @@ import { withTransaction, type Pool, type PoolClient } from '../db/pool';
 import { findClientRevision } from './hooks/drawings';
 import { hasOpenFailedSiteQc } from './hooks/site';
 import { deriveWorkItem } from './workItemStatus';
+import { guardImportedRecord } from './importGuard';
+import { identifyLegacyRecords } from './legacyReview';
 import { MODULES, MODULE_BY_KEY } from './registry';
 import { inModuleScope, loadOrderInfo, requireAny, hasAny, type OrderInfo } from './scope';
 import { deleteRecord, findRecord, listRecords, recordId, validateRecord, writeRecord } from './store';
@@ -434,15 +436,17 @@ export class DataService {
               summary[def.key].skippedExisting++;
               continue;
             }
-            await this.writeModule(h, def, undefined, r);
+            await this.writeModule(h, def, undefined, await guardImportedRecord(h, def.key, r));
             summary[def.key].new++;
           }
         }
+        // Imported records in a protected state without approval evidence: the Owner's legacy review.
+        const legacy = await identifyLegacyRecords(h.db, 'import');
         await h.db.query(`
           UPDATE work_items w SET source_drawing_revision_id = r.id
           FROM drawing_revisions r
           WHERE w.source_drawing_revision_id IS NULL AND r.drawing_id = w.drawing_id AND r.kind = 'client' AND r.revision = w.drawing_revision`);
-        await writeAudit(h.db, actor, { action: 'import', entityType: 'data', details: JSON.stringify(summary) });
+        await writeAudit(h.db, actor, { action: 'import', entityType: 'data', details: JSON.stringify({ ...summary, legacy_review_identified: legacy }) });
         if (dryRun) {
           await h.db.query('SET CONSTRAINTS ALL IMMEDIATE');
           throw new DryRunRollback();

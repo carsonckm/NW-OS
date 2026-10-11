@@ -282,13 +282,22 @@ async function loadFacts(db: Db, input: ResolveInput): Promise<Facts> {
       const prior = r
         ? (
             await db.query(
-              `SELECT data->>'decision_by_role' AS role FROM approvals
-                WHERE related_entity_id = $1 AND related_entity_type = 'purchase' AND approval_type = 'Major Purchase' AND decision = 'Approved'
-                  AND project_id = $3
-                  AND data->'approved_facts'->>'po_id' = $1 AND data->'approved_facts'->>'project_id' = $3
-                  AND $4::numeric IS NOT NULL AND (data->'approved_facts'->>'total_amount')::numeric >= $4::numeric
-                  AND (NOT (data->'approved_facts' ? 'supplier_id') OR data->'approved_facts'->>'supplier_id' IS NOT DISTINCT FROM $5::text)
-                ORDER BY (data->>'decision_by_role' = $2) DESC LIMIT 1`,
+              // The approved facts: recorded when it was decided, or (a legacy approval without them)
+              // by the Owner's re-authorization in the legacy review (legacyReview.ts), never both.
+              `SELECT a.data->>'decision_by_role' AS role
+                 FROM approvals a
+                 CROSS JOIN LATERAL (
+                   SELECT coalesce(a.data->'approved_facts', (
+                     SELECT d.facts FROM legacy_review_items i JOIN legacy_review_decisions d ON d.item_id = i.id
+                      WHERE i.kind = 'purchase_approval' AND i.record_id = a.id AND d.decision = 'reauthorized')) AS f
+                 ) x
+                WHERE a.related_entity_id = $1 AND a.related_entity_type = 'purchase' AND a.approval_type = 'Major Purchase' AND a.decision = 'Approved'
+                  AND a.project_id = $3
+                  AND jsonb_typeof(x.f) = 'object'
+                  AND x.f->>'po_id' = $1 AND x.f->>'project_id' = $3
+                  AND $4::numeric IS NOT NULL AND (x.f->>'total_amount')::numeric >= $4::numeric
+                  AND (NOT (x.f ? 'supplier_id') OR x.f->>'supplier_id' IS NOT DISTINCT FROM $5::text)
+                ORDER BY (a.data->>'decision_by_role' = $2) DESC LIMIT 1`,
               [id, OWNER_ROLE, projectId, value, supplierId]
             )
           ).rows[0]
@@ -549,8 +558,9 @@ async function resolveOne(db: Db, ctx: AccessContext, facts: Facts, action: Deci
   }
   if (ceiling.outcome === 'denied') return out({ ...common, reasonCode: 'INSUFFICIENT_PERMISSION', reason: ceiling.reason });
 
-  // 7. Rules for this decision type (inactive ones too, to explain a near miss).
-  const rules = (await db.query('SELECT * FROM delegated_authorities WHERE decision_type = $1 ORDER BY priority DESC, kind DESC, code', [facts.decisionType])).rows;
+  // 7. Rules for this decision type (inactive ones too, to explain a near miss). A retired rule
+  // (locked and inactive: it can never be switched back on) is no near miss and is left out.
+  const rules = (await db.query('SELECT * FROM delegated_authorities WHERE decision_type = $1 AND NOT (locked AND NOT active) ORDER BY priority DESC, kind DESC, code', [facts.decisionType])).rows;
   let riskLevel: string | undefined;
   const risk = async () => (riskLevel ??= facts.projectId ? (await computeProjectRisk(db, facts.projectId, now, true)).level : 'Unknown');
   const checks: RuleCheck[] = [];

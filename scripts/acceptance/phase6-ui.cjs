@@ -146,10 +146,12 @@ const approvalScreen = async (page, number) => {
       await call(requester, 'POST', '/api/approvals', { id, approval_number: id.toUpperCase(), approval_type: type, title: `${type} ${RUN}`, description: 'UI acceptance', project_id: P, project_name: 'P6 UI', assigned_approver_role: approver, date_requested: '2026-10-06', decision: 'Pending', created_at: '', updated_at: '' }, 201);
       return { id, number: id.toUpperCase() };
     };
-    const internal = await req('Safety-Critical Decision', 'Client');
+    // Batch 12A: an internal request cannot be put to the Client (or anyone) by the requester.
+    const toClient = await call(pm, 'POST', '/api/approvals', { id: `apr-p6u-${RUN}-toclient`, approval_type: 'Safety-Critical Decision', title: 'x', project_id: P, decision: 'Pending', assigned_approver_role: 'Client' });
+    const internal = await req('Safety-Critical Decision', 'Owner / CEO');
     const c7 = await approvalScreen(client, internal.number);
     const a7 = await call(client, 'POST', `/api/approvals/${internal.id}/decision`, { decision: 'Approved' });
-    record(7, 'Client, internal request assigned to Client', `screen Approve: ${c7.approve} (${c7.code}); API ${a7.status} ${a7.body.reason_code}; decision ${q(`select decision from approvals where id='${internal.id}'`)}`, !c7.approve && ['INSUFFICIENT_PERMISSION', 'NO_APPROVALS_SCREEN'].includes(c7.code) && a7.status === 403 && a7.body.reason_code === 'INSUFFICIENT_PERMISSION' && q(`select decision from approvals where id='${internal.id}'`) === 'Pending');
+    record(7, 'Client, internal request (cannot be put to the Client)', `naming the Client: API ${toClient.status}; screen Approve: ${c7.approve} (${c7.code}); API ${a7.status} ${a7.body.reason_code}; decision ${q(`select decision from approvals where id='${internal.id}'`)}`, toClient.status === 403 && !c7.approve && ['INSUFFICIENT_PERMISSION', 'NO_APPROVALS_SCREEN'].includes(c7.code) && a7.status === 403 && a7.body.reason_code === 'INSUFFICIENT_PERMISSION' && q(`select decision from approvals where id='${internal.id}'`) === 'Pending');
     const consent = await req('Client Scope Change', 'Client');
     const r7b = (await call(client, 'GET', `/api/authority/resolve?items=approval:${consent.id}:approve`, undefined, 200)).body[0];
     const a7b = await call(client, 'POST', `/api/approvals/${consent.id}/decision`, { decision: 'Approved' });

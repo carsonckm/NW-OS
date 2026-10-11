@@ -6,6 +6,7 @@ import type { HookContext, ModuleHooks, Row } from '../types';
 import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
 import { decisionAudit } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
+import { invoiceReleased } from '../legacyReview';
 
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
 const qty = (n: unknown) => Math.max(0, Number(n) || 0);
@@ -55,13 +56,20 @@ export async function receivedByLine(db: PoolClient, poId: string, excludeGrnId?
   return out;
 }
 
+/** The PO value is always the sum of its lines. */
+export function withComputedTotal(incoming: Row): Row {
+  const items = poLines(incoming).map((it) => ({ ...it, total_price: money(qty(it.quantity) * (Number(it.unit_price) || 0)) }));
+  const total = money(items.reduce((s, it) => s + (it.total_price as number), 0));
+  return { ...incoming, items, total_amount: items.length ? total : money(incoming.total_amount) };
+}
+
+/** Whether a PO status means it was issued under a purchase decision. */
+export const isIssuedState = (status: unknown) => ISSUED_STATES.has(String(status));
+
 export const purchaseOrderHooks: ModuleHooks = {
   async beforeWrite(h, existing, incoming) {
     if (h.mode === 'import') return incoming;
-    // The PO value is always the sum of its lines.
-    const items = poLines(incoming).map((it) => ({ ...it, total_price: money(qty(it.quantity) * (Number(it.unit_price) || 0)) }));
-    const total = money(items.reduce((s, it) => s + (it.total_price as number), 0));
-    const next: Row = { ...incoming, items, total_amount: items.length ? total : money(incoming.total_amount) };
+    const next = withComputedTotal(incoming);
     const from = existing ? String(existing.status) : undefined;
     const to = String(next.status ?? 'Draft');
     if (!PO_STATES.has(to)) throw new ValidationError(`Unknown purchase order status ${to}`);
@@ -224,7 +232,7 @@ async function receivedValue(db: PoolClient, poId: string) {
  *   Partially Paid / Overdue    -> Partially Paid, Paid, Overdue
  *   Paid                        -> (final)
  */
-const INVOICE_NEXT: Record<string, string[]> = {
+export const INVOICE_NEXT: Record<string, string[]> = {
   Draft: ['Pending Approval', 'Approved'],
   'Pending Approval': ['Draft', 'Approved'],
   Approved: ['Partially Paid', 'Paid', 'Overdue'],
@@ -234,7 +242,7 @@ const INVOICE_NEXT: Record<string, string[]> = {
 };
 const INVOICE_PAYMENT_STATES = new Set(['Partially Paid', 'Paid']);
 
-function checkInvoiceLifecycle(h: HookContext, existing: Row | undefined, next: Row) {
+async function checkInvoiceLifecycle(h: HookContext, existing: Row | undefined, next: Row) {
   const to = String(next.status ?? 'Draft');
   if (!(to in INVOICE_NEXT)) throw new ValidationError(`Unknown invoice status ${to}`);
   if (!existing) {
@@ -248,9 +256,10 @@ function checkInvoiceLifecycle(h: HookContext, existing: Row | undefined, next: 
   if (from !== to && !(INVOICE_NEXT[from] ?? []).includes(to)) {
     throw new ForbiddenError(`An invoice cannot move from ${from} to ${to}${to === 'Paid' || to === 'Partially Paid' ? ' (it must be approved first)' : ''}`);
   }
-  if (from !== to && (to === 'Partially Paid' || to === 'Paid' || to === 'Overdue') && !existing.approved_at) {
-    // A legacy invoice in a post-approval state that was never approved through NW OS.
-    throw new ForbiddenError('This invoice has no recorded approval; it cannot be paid');
+  if ((from !== to || paidChanged) && (to === 'Partially Paid' || to === 'Paid' || to === 'Overdue') && !existing.approved_at && !(await invoiceReleased(h.db, String(existing.id)))) {
+    // A legacy invoice in a post-approval state that was never approved through NW OS: the Owner
+    // reviews it first (legacyReview.ts). A release is administrative, not a recorded approval.
+    throw new ForbiddenError('This invoice has no recorded approval; it cannot be paid until the Owner reviews and releases it');
   }
   if (paidChanged || INVOICE_PAYMENT_STATES.has(to)) {
     if (paidChanged && !['Approved', 'Partially Paid', 'Overdue'].includes(from)) throw new ForbiddenError(`Payments are recorded against an approved invoice (this one is ${from})`);
@@ -280,7 +289,7 @@ export const invoiceHooks: ModuleHooks = {
       total_amount: money(Number(incoming.amount_before_tax) + Number(incoming.tax_amount || 0)),
     };
     for (const f of ['recorded_by_id', 'approved_by_id', 'approved_by_name', 'approved_at', 'ledger_cost_id', 'approval_authority']) next[f] = existing?.[f];
-    checkInvoiceLifecycle(h, existing, next);
+    await checkInvoiceLifecycle(h, existing, next);
     if (!existing) {
       next.recorded_by_id = h.ctx.user.id;
       next.recorded_by_name = h.ctx.user.name;

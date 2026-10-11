@@ -289,37 +289,77 @@ describe.skipIf(!TEST_DATABASE_URL)('Batch 12A: approval integrity', () => {
     });
   });
 
-  // ================================================================ 4. Major Purchase approver
-  describe('4. the requester cannot choose who approves a Major Purchase / Major Cost request', () => {
-    it('attack: naming an accomplice (by user or role) when raising the request, or afterwards', async () => {
-      const po = await createPo(500_000);
-      for (const type of ['Major Purchase', 'Major Cost']) {
-        for (const named of [{ assigned_approver_id: 'user-pm' }, { assigned_approver_role: 'Project Manager' }, { assigned_approver_role: 'Designated Authorized Manager' }, { assigned_approver_id: 'user-owner', assigned_approver_role: 'Owner / CEO' }]) {
-          const res = await purchasing().post('/api/approvals').send({ id: next('apr-12a'), approval_type: type, title: 'x', project_id: PROJ, related_entity_type: 'purchase', related_entity_id: po, decision: 'Pending', ...named });
-          expect(res.status, `${type} ${JSON.stringify(named)}`).toBe(403);
-        }
+  // ================================================================ 4. Request approvers
+  describe('4. the requester cannot choose who approves any request', () => {
+    const TYPES = ['Drawing Approval', 'NW Production Drawing Approval', 'Technical Change', 'Variation', 'Major Purchase', 'Major Cost', 'Client Scope Change', 'Project Date Change', 'Safety-Critical Decision'];
+    const CLIENT_FACING = ['Variation', 'Client Scope Change'];
+    const raise = (agent: request.Agent, type: string, over: Row = {}) => agent.post('/api/approvals').send({ id: next('apr-12a'), approval_type: type, title: `${type} request`, description: 'x', project_id: PROJ, project_name: 'Horizon', decision: 'Pending', ...over });
+    const routeOf = async (id: string) => (await q(`SELECT assigned_user_id, routing_basis, authority_rule_code FROM approval_routes WHERE resource_kind = 'approval' AND resource_id = $1 AND status = 'open'`, [id]))[0];
+
+    it('attack, every request type: naming an approver (person or role) when raising the request is refused', async () => {
+      for (const type of TYPES) {
+        const named: Row[] = [{ assigned_approver_id: 'user-pm' }, { assigned_approver_role: 'Project Manager' }, { assigned_approver_role: 'Designated Authorized Manager' }, { assigned_approver_role: 'Accountant' }, { assigned_approver_role: 'Production Manager' }, { assigned_approver_id: 'user-owner', assigned_approver_role: 'Owner / CEO' }];
+        if (!CLIENT_FACING.includes(type)) named.push({ assigned_approver_role: 'Client' });
+        for (const n of named) expect((await raise(purchasing(), type, n)).status, `${type} ${JSON.stringify(n)}`).toBe(403);
       }
-      const apr = await majorPurchase(po);
-      expect((await purchasing().patch(`/api/approvals/${apr}`).send({ assigned_approver_role: 'Project Manager', assigned_approver_id: 'user-pm' })).status).toBe(403);
-      // Raised as another type with an approver, then turned into a Major Purchase.
-      const tech = next('apr-12a');
-      await purchasing().post('/api/approvals').send({ id: tech, approval_type: 'Technical Change', title: 'x', project_id: PROJ, decision: 'Pending', assigned_approver_role: 'Project Manager', assigned_approver_id: 'user-pm' }).expect(201);
-      expect((await purchasing().patch(`/api/approvals/${tech}`).send({ approval_type: 'Major Purchase', related_entity_type: 'purchase', related_entity_id: po })).status).toBe(403);
-      // The accomplice cannot decide it; it is routed by the resolver.
-      expect((await approve('Project Manager', apr)).status).toBe(403);
-      const route = (await q(`SELECT assigned_user_id, routing_basis, authority_rule_code FROM approval_routes WHERE resource_kind = 'approval' AND resource_id = $1 AND status = 'open'`, [apr]))[0];
-      expect(route).toMatchObject({ assigned_user_id: 'user-accountant', authority_rule_code: 'SYS-PURCHASE-ACCOUNTANT' });
-      await approve('Accountant', apr).expect(200);
     });
 
-    it('legitimate: no approver, or the Owner, may be named; other request types keep their assigned approver', async () => {
-      const po = await createPo(60_000);
-      await majorPurchase(po, { assigned_approver_role: 'Owner / CEO' });
-      const plain = await majorPurchase(po);
-      await purchasing().patch(`/api/approvals/${plain}`).send({ title: 'Plywood for level 3' }).expect(200);
-      const safety = next('apr-12a');
-      await as['Project Manager'].post('/api/approvals').send({ id: safety, approval_type: 'Safety-Critical Decision', title: 'x', project_id: PROJ, decision: 'Pending', assigned_approver_role: 'Accountant' }).expect(201);
-      await approve('Accountant', safety).expect(200);
+    it('attack, every request type: setting the approver afterwards (PATCH, bulk sync, changing the type) is refused', async () => {
+      for (const type of TYPES) {
+        const created = await raise(purchasing(), type);
+        expect(created.status, type).toBe(201);
+        const id = created.body.id;
+        expect((await purchasing().patch(`/api/approvals/${id}`).send({ assigned_approver_id: 'user-pm', assigned_approver_role: 'Project Manager' })).status, `${type} PATCH`).toBe(403);
+        expect((await owner().patch(`/api/approvals/${id}`).send({ assigned_approver_role: 'Accountant' })).status, `${type} Owner PATCH`).toBe(403);
+        const stored = (await purchasing().get(`/api/approvals/${id}`).expect(200)).body;
+        expect((await purchasing().post('/api/data/sync').send({ upserts: { approvals: [{ ...stored, assigned_approver_id: 'user-pm', assigned_approver_role: 'Project Manager' }] } })).status, `${type} sync`).toBe(403);
+        expect((await q('SELECT data FROM approvals WHERE id = $1', [id]))[0].data.assigned_approver_id).toBeUndefined();
+      }
+      // A client-facing request put to the Client, then turned into an internal type.
+      const consent = (await raise(as['Project Manager'], 'Variation', { assigned_approver_role: 'Client' })).body.id;
+      expect((await as['Project Manager'].patch(`/api/approvals/${consent}`).send({ approval_type: 'Technical Change' })).status).toBe(403);
+    });
+
+    it('attack: an AI proposal\'s approver (the person who asked) cannot be changed, by anyone', async () => {
+      const p = (await as['Site Supervisor'].post('/api/assistant/proposals').send({ action: 'create_task', params: { project_id: 'proj-1', title: 'Order hinges', assigned_user_id: 'user-purchasing' } }).expect(201)).body;
+      expect((await owner().patch(`/api/approvals/${p.id}`).send({ assigned_approver_id: 'user-pm', assigned_approver_role: 'Project Manager', assigned_approver_name: 'PM' })).status).toBe(403);
+      expect((await as['Site Supervisor'].patch(`/api/approvals/${p.id}`).send({ assigned_approver_id: 'user-pm' })).status).toBe(403);
+      expect((await q('SELECT data FROM approvals WHERE id = $1', [p.id]))[0].data.assigned_approver_id).toBe('user-site');
+    });
+
+    it('a legacy named approver decides nothing; requests are routed and decided under the authority rules', async () => {
+      for (const type of TYPES.filter((t) => !['Major Purchase', 'Major Cost'].includes(t))) {
+        const id = (await raise(purchasing(), type)).body.id;
+        await db.pool.query(`UPDATE approvals SET data = data || '{"assigned_approver_id": "user-pm", "assigned_approver_role": "Project Manager"}'::jsonb WHERE id = $1`, [id]);
+        expect((await approve('Project Manager', id)).status, type).toBe(403);
+        expect((await routeOf(id)).assigned_user_id, type).toBe('user-owner');
+        await approve('Owner / CEO', id).expect(200);
+      }
+      for (const type of ['Major Purchase', 'Major Cost']) {
+        const id = (await raise(purchasing(), type)).body.id;
+        await db.pool.query(`UPDATE approvals SET data = data || '{"assigned_approver_id": "user-pm", "assigned_approver_role": "Project Manager"}'::jsonb WHERE id = $1`, [id]);
+        expect((await approve('Project Manager', id)).status, type).toBe(403);
+        expect(await routeOf(id), type).toMatchObject({ assigned_user_id: 'user-accountant', authority_rule_code: 'SYS-PURCHASE-ACCOUNTANT' });
+        await approve('Accountant', id).expect(200);
+      }
+    });
+
+    it('legitimate: no approver or the Owner on any type; the Client on a client-facing request (client consent, unchanged)', async () => {
+      for (const type of TYPES) {
+        expect((await raise(purchasing(), type)).status, type).toBe(201);
+        expect((await raise(purchasing(), type, { assigned_approver_role: 'Owner / CEO' })).status, `${type} Owner`).toBe(201);
+      }
+      for (const type of CLIENT_FACING) {
+        const id = (await raise(as['Project Manager'], type, { project_id: 'proj-1', assigned_approver_role: 'Client' })).body.id;
+        expect(await routeOf(id), type).toMatchObject({ assigned_user_id: 'user-client', routing_basis: 'CLIENT_CONSENT' });
+        await approve('Client', id).expect(200);
+      }
+      // An Owner rule delegates requests: the delegate decides, through the resolver.
+      const rule = (await owner().post('/api/authority/rules').send({ name: 'PM requests 12A', description: 'Requests on Horizon', effect: 'allow', decision_type: 'approval_request', target_role: 'Project Manager', project_id: PROJ, priority: 200 }).expect(201)).body;
+      const id = (await raise(purchasing(), 'Safety-Critical Decision')).body.id;
+      expect((await routeOf(id)).assigned_user_id).toBe('user-pm');
+      await approve('Project Manager', id).expect(200);
+      await owner().post(`/api/authority/rules/${rule.id}/deactivate`).send({ reason: 'test finished' }).expect(200);
     });
   });
 });

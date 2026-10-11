@@ -58,25 +58,91 @@ Paid                       -> final
 - No new payment process was added: there is still no link from an invoice to a bank payment
   record (`payments`). That evidence link is an open item (see below).
 
-## 4. The requester does not choose a purchase approver
+## 4. The requester does not choose any approver
 
-- A Major Purchase / Major Cost request cannot name its approver: a named person
-  (`assigned_approver_id`) or any role other than the Owner is refused when the request is raised,
-  edited, or turned into a purchase request from another type. Naming the Owner is accepted; it
-  grants nothing the Owner does not already have.
-- System Policy `SYS-REQUEST-ASSIGNEE-PURCHASE` is retired (migration 029): inactive and locked,
-  so it cannot be switched back on. A legacy request that names someone gives them nothing.
-- Who decides and who receives the request come from the resolver and routing, unchanged:
-  `SYS-PURCHASE-ACCOUNTANT` (never the requester), the Owner's delegated rules, temporary
-  authority, Owner absence cover, escalation, the Sensitive / Strategic ceilings, and the Owner.
-- The approval form no longer offers an approver for these two types.
+- On **every request type** (Drawing Approval, NW Production Drawing Approval, Technical Change,
+  Variation, Major Purchase, Major Cost, Client Scope Change, Project Date Change, Safety-Critical
+  Decision) the requester cannot name the approver: a person (`assigned_approver_id`) or a role is
+  refused when the request is raised, edited (REST or `/api/data/sync`), or changed to another type.
+  Accepted because they grant nothing: no approver, the Owner, and `Client` on a client-facing
+  request (Variation / Client Scope Change), which asks for the client's consent.
+- System Policy `SYS-REQUEST-ASSIGNEE-PURCHASE` (migration 029) and
+  `SYS-REQUEST-ASSIGNEE-APPROVAL-REQUEST` (migration 030) are retired: inactive and locked. A
+  legacy request that still names someone gives them nothing. Retired rules (locked and inactive)
+  are left out of the resolver's evaluation, so they are never shown as a near miss.
+- Who decides and who receives a request come from the resolver and routing:
+  - Major Purchase / Major Cost: `SYS-PURCHASE-ACCOUNTANT` (never the requester), Owner rules, the Owner;
+  - every other request type: the Owner's delegated rules (decision type "other approval
+    request"), `SYS-TECHNICAL-PRODMGR` where it applies, and otherwise **the Owner** (routing's
+    Owner fallback). This is the visible effect of the change: requests that used to go to the
+    named approver now go to the Owner until the Owner delegates them.
+  - Delegation, temporary authority, Owner absence cover, escalation and the Sensitive / Strategic
+    ceilings are unchanged.
+- **Different governance, kept and documented:**
+  - **AI proposals:** the approver is set by the server (the person who asked the assistant) and
+    the proposal runs with that person's own permissions. Nobody, the Owner included, can change
+    it, and AI proposals cannot be raised through the approvals API or imported.
+  - **Client consent:** a client deciding a client-facing request on their own project gives
+    consent (not internal authority); it does not depend on the approver field.
+- The approval form no longer offers an approver; a client-facing request can ask the client.
+
+## 5. Owner review of legacy records (migration 030, `server/modules/legacyReview.ts`)
+
+Records in a protected state without the evidence NW OS now requires are identified (migration
+030 for data already present; `/api/data/import` for imported data) in `legacy_review_items`:
+
+| Kind | Identified when | Until reviewed |
+|---|---|---|
+| `invoice` | Approved / Partially Paid / Overdue / Paid with no recorded approval (`approved_at`) | cannot be paid (no payment status, no paid amount change) |
+| `purchase_approval` | an approved Major Purchase approval with no approved facts (no decision-time audit record), PO on the same project | does not count for issuing its PO |
+
+The Owner reviews them (`GET /api/legacy-reviews`, `POST /api/legacy-reviews/:kind/:id/decision`
+with `{ decision, reason }`):
+
+- `invoice`: **released** (Approved / Partially Paid / Overdue only), **acknowledged** (Paid
+  only), or **declined**. A release lets the invoice be paid; the payment still needs
+  `finance.record_payments` and passes every payment check. The invoice itself is not changed: no
+  status, no `approved_at`.
+- `purchase_approval`: **reauthorized** or **declined**. A re-authorization runs the authority
+  resolver for the Owner now and records the PO's current facts (PO, project, supplier, total).
+  The resolver then counts the approval for those facts, exactly as for an approval decided after
+  Batch 12A. The original approval record is not changed.
+
+Every decision is a new row in `legacy_review_decisions` (who, role, when, reason, facts, the
+authority resolution) plus an audit record (`legacy_review.<decision>`, `administrative: true`).
+A release is an administrative decision recorded now, not evidence that a historical approval
+happened; no historical approval or audit record is created or changed. Both tables are
+append-only for the app role (no UPDATE / DELETE grants, and triggers refuse it), and an item has
+at most one decision (a duplicate is a 409). Only identified records can be reviewed, so this is
+not a path for new invoices or approvals.
+
+Scope in the demo data (a non-production database): 3 invoices (2 Partially Paid, 1 Paid), 0
+purchase approvals. Production has not been assessed (no production data was read or changed).
+
+## 6. `/api/data/import` (`server/modules/importGuard.ts`)
+
+Import (Owner only, `settings.manage`) creates records only: an existing id is skipped, never
+overwritten, so an Issued PO or a decided request cannot be modified or re-pointed through it.
+The module hooks do not run in import mode, so these rules are applied to every imported record:
+
+- **purchase orders:** the total is computed from the lines; a PO imported as Issued / Partially
+  Received / Goods Received / Completed needs the importer's own authority to issue it (the
+  authority resolver, as the API would);
+- **approval requests:** AI proposals are refused; `approved_facts` are dropped (an imported
+  approved Major Purchase does not count until the Owner re-authorizes it); a named approver is
+  not kept as the approver (kept, for the record, as `imported_assigned_approver`);
+- **invoices:** approval evidence (`approved_at`, `approved_by_*`, `approval_authority`,
+  `ledger_cost_id`) is dropped, the recorder is the importer, the status must be known and the
+  paid amount must agree with it. An imported invoice in a protected status is listed for the
+  legacy review and stays blocked until released;
+- the legacy review tables are not importable.
 
 ## Not changed / open
 
-- Other request types (Technical Change, Safety-Critical, Date Change, ...) still name their
-  approver (`SYS-REQUEST-ASSIGNEE-APPROVAL-REQUEST`): open for the Owner's review.
-- Invoice payments are not linked to payment records; `invoice_type` (which decides whether the
-  3-way match applies) is fixed only after approval.
-- `/api/data/import` (settings.manage only) still writes without the business hooks, as before.
+- Invoice payments are not linked to payment records (`payments`): the paid amount is checked for
+  consistency, not against a bank record. `invoice_type` (which decides whether the 3-way match
+  applies) is fixed only after approval.
+- An imported Paid invoice is stored as Paid (legacy history, no approval evidence) and listed for
+  the Owner to acknowledge or decline; import does not refuse it.
 - Everything a stolen `nwos_app` credential can do (Batch 12 assessment) is unchanged: that is
   Batch 12B.

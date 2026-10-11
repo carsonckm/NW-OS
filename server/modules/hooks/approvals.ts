@@ -10,27 +10,35 @@ const FINAL = new Set(['Approved', 'Rejected']);
 // Fields only the requester (or an Owner) may change, and only while the request is undecided.
 const REQUEST_FIELDS = ['assigned_approver_role', 'assigned_approver_id', 'approval_type', 'related_entity_type', 'related_entity_id', 'project_id'];
 const DECISION_FIELDS = ['decision', 'decision_date', 'decision_by_id', 'decision_by_name', 'decision_by_role', 'is_owner_override', 'approved_facts'];
-/** Purchase decisions (decision type "purchase"): who decides comes from the authority rules only. */
-const PURCHASE_TYPES = new Set(['Major Purchase', 'Major Cost']);
 const OWNER_ROLE = 'Owner / CEO';
+/** Client-facing request types: marking one for the client asks for the client's consent (clientConsentAllowed). */
+const CLIENT_FACING = new Set(['Variation', 'Client Scope Change']);
 const changed = (a: unknown, b: unknown) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
 
 /**
- * A Major Purchase / Major Cost request is decided by whoever the authority resolver allows
- * (System Policy, the Owner's rules, the Owner), and routed by it. The requester cannot name the
- * approver: a named person or role would be a requester-chosen approver. Naming the Owner is
- * accepted (it grants nothing the Owner does not already have). A request's existing value is
- * left as it is (legacy requests); it is only refused when it is set or changed.
+ * Who decides a request comes from the authority resolver (System Policy, the Owner's rules,
+ * the Owner) and routing, never from the requester (Batch 12A). On any request type the
+ * requester cannot name a person (assigned_approver_id) or a role as the approver. Accepted,
+ * because they grant nothing: no approver, the Owner, and "Client" on a client-facing request
+ * (the client's consent, which does not depend on the field). An AI proposal's approver is set
+ * by the server (the person who asked the assistant) and never changes. A stored value is left
+ * as it is (legacy requests; it grants nothing); it is refused only when it is set or changed.
  */
 function checkApproverChoice(existing: Row | undefined, values: Row) {
-  if (!PURCHASE_TYPES.has(String(values.approval_type))) return;
+  const type = String(values.approval_type);
+  if (type === AI_PROPOSAL_TYPE) {
+    for (const f of ['assigned_approver_id', 'assigned_approver_role', 'assigned_approver_name']) {
+      if (existing && changed(existing[f], values[f])) throw new ForbiddenError('The approver of an AI proposal is the person who asked the assistant; it cannot change');
+    }
+    return;
+  }
   const typeChanged = existing && changed(existing.approval_type, values.approval_type);
   for (const f of ['assigned_approver_id', 'assigned_approver_role'] as const) {
     if (existing && !typeChanged && !changed(existing[f], values[f])) continue;
     const v = values[f];
     if (v === undefined || v === null || v === '') continue;
-    if (f === 'assigned_approver_role' && v === OWNER_ROLE) continue;
-    throw new ForbiddenError(`The approver of a ${String(values.approval_type)} request is decided by the authority rules, not chosen by the requester`);
+    if (f === 'assigned_approver_role' && (v === OWNER_ROLE || (v === 'Client' && CLIENT_FACING.has(type)))) continue;
+    throw new ForbiddenError(`The approver of a ${type} request is decided by the authority rules, not chosen by the requester`);
   }
 }
 
