@@ -36,7 +36,7 @@ three different roles.
 | Tables | SELECT | INSERT | UPDATE | DELETE |
 |---|---|---|---|---|
 | Every application table | ✓ | ✓ | ✓ | ✓ |
-| Append-only history: `audit_logs`, `owner_exception_events`, `delivery_receipts` | ✓ | ✓ | — | — |
+| Append-only history: `audit_logs`, `owner_exception_events`, `delivery_receipts`, `legacy_review_items`, `legacy_review_decisions` | ✓ | ✓ | — | — |
 | Never deleted: `owner_exception_states`, `owner_exception_snoozes`, `drawing_revisions` | ✓ | ✓ | ✓ | — |
 | `schema_migrations` | ✓ | — | — | — |
 
@@ -562,7 +562,15 @@ well-formed records needs controls outside the database:
 - **No row-level security:** the per-user scope checks stay in the server (`AccessContext`,
   `resolveApprovalAuthority`), as before.
 
-## 8. Approval policy finding: `SYS-REQUEST-ASSIGNEE-*` (reported, not changed)
+## 8. Approval policy finding: `SYS-REQUEST-ASSIGNEE-*`
+
+> **Batch 12A update (migrations 029, 030):** this is now changed. The requester
+> no longer chooses who approves a Major Purchase / Major Cost request: the API refuses a named
+> approver (a person, or any role other than the Owner), and `SYS-REQUEST-ASSIGNEE-PURCHASE` is
+> retired (inactive and locked). These requests are decided under `SYS-PURCHASE-ACCOUNTANT`, the
+> Owner's rules and the Owner, through the authority resolver. `SYS-REQUEST-ASSIGNEE-APPROVAL-REQUEST`
+> was retired as well in migration 030 (all request types). See
+> `docs/phase6-approval-integrity.md`. The text below describes the policy as found in Batch 10.
 
 **What it does.** Migration 018 (Batch 2) seeds one System Policy per decision type,
 `SYS-REQUEST-ASSIGNEE-<TYPE>`:

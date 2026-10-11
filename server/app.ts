@@ -11,6 +11,7 @@ import { withTransaction } from './db/pool';
 import { reevaluateRoutes } from './modules/approvalRouting';
 import { createApprovalRoutingRouter } from './modules/approvalRoutingRoutes';
 import { createDelegationRouter } from './modules/delegationRoutes';
+import { createLegacyReviewRouter } from './modules/legacyReviewRoutes';
 import { createAIRouter } from './ai/routes';
 import { createLegacyAIRouter } from './ai/legacy';
 import { createLegacyRulesRouter } from './ai/legacyRules';
@@ -65,6 +66,8 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   if (pool && store) app.use('/api', createApprovalRoutingRouter({ pool, store }));
   // Phase 6 Batch 5: Owner dependency and delegation recommendations.
   if (pool && store) app.use('/api', createDelegationRouter({ pool, store }));
+  // Phase 6 Batch 12A: the Owner's review of legacy records without approval evidence.
+  if (pool && store) app.use('/api', createLegacyReviewRouter({ pool, store }));
   // Phase 6 Batch 7: the AI operating layer (gateway, context engine, versioned tasks).
   if (pool && store) app.use('/api', createAIRouter({ pool, store }));
   // The pre-Phase 6 AI screens' routes: in database mode answered through the AI gateway from the

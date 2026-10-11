@@ -7,9 +7,48 @@ import { syncRoute } from '../approvalRouting';
 import type { HookContext, ModuleHooks, Row } from '../types';
 
 const FINAL = new Set(['Approved', 'Rejected']);
-// Fields only the requester (or an Owner) may change once a request exists.
+// Fields only the requester (or an Owner) may change, and only while the request is undecided.
 const REQUEST_FIELDS = ['assigned_approver_role', 'assigned_approver_id', 'approval_type', 'related_entity_type', 'related_entity_id', 'project_id'];
-const DECISION_FIELDS = ['decision', 'decision_date', 'decision_by_id', 'decision_by_name', 'decision_by_role', 'is_owner_override'];
+const DECISION_FIELDS = ['decision', 'decision_date', 'decision_by_id', 'decision_by_name', 'decision_by_role', 'is_owner_override', 'approved_facts'];
+const OWNER_ROLE = 'Owner / CEO';
+/** Client-facing request types: marking one for the client asks for the client's consent (clientConsentAllowed). */
+const CLIENT_FACING = new Set(['Variation', 'Client Scope Change']);
+const changed = (a: unknown, b: unknown) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+
+/**
+ * Who decides a request comes from the authority resolver (System Policy, the Owner's rules,
+ * the Owner) and routing, never from the requester (Batch 12A). On any request type the
+ * requester cannot name a person (assigned_approver_id) or a role as the approver. Accepted,
+ * because they grant nothing: no approver, the Owner, and "Client" on a client-facing request
+ * (the client's consent, which does not depend on the field). An AI proposal's approver is set
+ * by the server (the person who asked the assistant) and never changes. A stored value is left
+ * as it is (legacy requests; it grants nothing); it is refused only when it is set or changed.
+ */
+function checkApproverChoice(existing: Row | undefined, values: Row) {
+  const type = String(values.approval_type);
+  if (type === AI_PROPOSAL_TYPE) {
+    for (const f of ['assigned_approver_id', 'assigned_approver_role', 'assigned_approver_name']) {
+      if (existing && changed(existing[f], values[f])) throw new ForbiddenError('The approver of an AI proposal is the person who asked the assistant; it cannot change');
+    }
+    return;
+  }
+  const typeChanged = existing && changed(existing.approval_type, values.approval_type);
+  for (const f of ['assigned_approver_id', 'assigned_approver_role'] as const) {
+    if (existing && !typeChanged && !changed(existing[f], values[f])) continue;
+    const v = values[f];
+    if (v === undefined || v === null || v === '') continue;
+    if (f === 'assigned_approver_role' && (v === OWNER_ROLE || (v === 'Client' && CLIENT_FACING.has(type)))) continue;
+    throw new ForbiddenError(`The approver of a ${type} request is decided by the authority rules, not chosen by the requester`);
+  }
+}
+
+/** What a Major Purchase approval approved, read by the server from the purchase order (never the browser). */
+async function approvedFacts(h: HookContext, approval: Row) {
+  if (approval.approval_type !== 'Major Purchase' || approval.related_entity_type !== 'purchase' || !approval.related_entity_id) return null;
+  const po = (await h.db.query('SELECT id, project_id, supplier_id, data FROM purchase_orders WHERE id = $1 FOR SHARE', [approval.related_entity_id])).rows[0];
+  if (!po || po.project_id !== approval.project_id) return null;
+  return { po_id: po.id, project_id: po.project_id, supplier_id: po.supplier_id ?? null, total_amount: Math.round((Number(po.data.total_amount) || 0) * 100) / 100, recorded_at: new Date().toISOString() };
+}
 
 /**
  * Who may decide, evaluated on the server against the stored request (never the browser's
@@ -39,12 +78,17 @@ export async function applyDecision(h: HookContext, existing: Row, values: Row) 
   if (decision === 'Pending') {
     // Re-submitting after "Changes Requested" is the requester's step.
     if (existing.requested_by_id !== u.id && u.role !== 'Owner / CEO') throw new ForbiddenError('Only the requester can resubmit');
-    return { ...values, decision_date: undefined, decision_by_id: undefined, decision_by_name: undefined, decision_by_role: undefined };
+    return { ...values, decision_date: undefined, decision_by_id: undefined, decision_by_name: undefined, decision_by_role: undefined, approved_facts: undefined };
   }
-  const verdict = await evaluateDecision(h, existing, decision, values.project_id ? String(values.project_id) : undefined);
+  // The decision is taken on the request as stored: what it is about cannot change in the same write.
+  for (const f of REQUEST_FIELDS) {
+    if (changed(values[f], existing[f])) throw new ForbiddenError(`A request's ${f} cannot change while it is being decided`);
+  }
+  const verdict = await evaluateDecision(h, existing, decision);
   const decided = {
     ...values,
     decision,
+    approved_facts: decision === 'Approved' ? await approvedFacts(h, existing) : undefined,
     decision_date: new Date().toISOString(),
     decision_by_id: u.id,
     decision_by_name: u.name,
@@ -84,10 +128,12 @@ export const approvalHooks: ModuleHooks = {
     if (existing?.approval_type === AI_PROPOSAL_TYPE) {
       incoming = { ...incoming, proposal: existing.proposal, execution: existing.execution, title: existing.title, description: existing.description };
     }
+    checkApproverChoice(existing, incoming);
     if (!existing) {
       // The requester is whoever is signed in; a new request is always pending.
       return {
         ...incoming,
+        approved_facts: undefined,
         requested_by_id: u.id,
         requested_by_name: u.name,
         requested_by_role: u.role,
@@ -100,8 +146,10 @@ export const approvalHooks: ModuleHooks = {
     }
     const isRequester = existing.requested_by_id === u.id || u.role === 'Owner / CEO';
     for (const f of REQUEST_FIELDS) {
-      if (JSON.stringify(incoming[f]) !== JSON.stringify(existing[f]) && !isRequester) {
-        throw new ForbiddenError(`Only the requester can change ${f}`);
+      if (changed(incoming[f], existing[f])) {
+        if (!isRequester) throw new ForbiddenError(`Only the requester can change ${f}`);
+        // A decided request stays bound to what was decided (Batch 12A): a new request is a new decision.
+        if (FINAL.has(String(existing.decision))) throw new ForbiddenError(`This request was already ${String(existing.decision).toLowerCase()}; its ${f} cannot change`);
       }
     }
     // Who was asked and who decided can never come from the browser.

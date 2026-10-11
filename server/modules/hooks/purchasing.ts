@@ -2,10 +2,11 @@ import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { PoolClient } from '../../db/pool';
-import type { ModuleHooks, Row } from '../types';
+import type { HookContext, ModuleHooks, Row } from '../types';
 import { authorityAudit, requireAuthority, type AuthorityResolution } from '../authorityResolver';
 import { decisionAudit } from '../decisionTrace';
 import { syncRoute } from '../approvalRouting';
+import { invoiceReleased } from '../legacyReview';
 
 const money = (n: unknown) => Math.round((Number(n) || 0) * 100) / 100;
 const qty = (n: unknown) => Math.max(0, Number(n) || 0);
@@ -18,6 +19,24 @@ const qty = (n: unknown) => Math.max(0, Number(n) || 0);
 export const MAJOR_PURCHASE_THRESHOLD = 20000;
 /** PO statuses only goods-received records set. */
 const RECEIVED_STATES = new Set(['Partially Received', 'Goods Received']);
+/** A PO in one of these states was issued under a purchase decision. */
+const ISSUED_STATES = new Set(['Issued', 'Partially Received', 'Goods Received', 'Completed']);
+const PO_STATES = new Set(['Draft', 'Pending Approval', 'Issued', 'Partially Received', 'Goods Received', 'Completed', 'Cancelled']);
+
+/**
+ * What a purchase decision was taken on: the lines (what, how many, at what price), the total,
+ * the supplier and the project. Once a PO is issued these cannot change; to change them it goes
+ * back to Draft (only while nothing has been received) and is issued again, under authority.
+ */
+function poMaterialFacts(po: Row) {
+  return JSON.stringify({
+    lines: poLines(po).map((l) => ({ id: l.id ?? null, item: l.item_description ?? null, spec: l.specification ?? null, unit: l.unit ?? null, quantity: qty(l.quantity), unit_price: money(l.unit_price) })),
+    total: money(po.total_amount),
+    supplier_id: po.supplier_id ?? null,
+    supplier_name: po.supplier_name ?? null,
+    project_id: po.project_id ?? null,
+  });
+}
 
 function poLines(po: Row): Row[] {
   return (Array.isArray(po.items) ? po.items : []) as Row[];
@@ -37,15 +56,38 @@ export async function receivedByLine(db: PoolClient, poId: string, excludeGrnId?
   return out;
 }
 
+/** The PO value is always the sum of its lines. */
+export function withComputedTotal(incoming: Row): Row {
+  const items = poLines(incoming).map((it) => ({ ...it, total_price: money(qty(it.quantity) * (Number(it.unit_price) || 0)) }));
+  const total = money(items.reduce((s, it) => s + (it.total_price as number), 0));
+  return { ...incoming, items, total_amount: items.length ? total : money(incoming.total_amount) };
+}
+
+/** Whether a PO status means it was issued under a purchase decision. */
+export const isIssuedState = (status: unknown) => ISSUED_STATES.has(String(status));
+
 export const purchaseOrderHooks: ModuleHooks = {
   async beforeWrite(h, existing, incoming) {
     if (h.mode === 'import') return incoming;
-    // The PO value is always the sum of its lines.
-    const items = poLines(incoming).map((it) => ({ ...it, total_price: money(qty(it.quantity) * (Number(it.unit_price) || 0)) }));
-    const total = money(items.reduce((s, it) => s + (it.total_price as number), 0));
-    const next: Row = { ...incoming, items, total_amount: items.length ? total : money(incoming.total_amount) };
+    const next = withComputedTotal(incoming);
     const from = existing ? String(existing.status) : undefined;
     const to = String(next.status ?? 'Draft');
+    if (!PO_STATES.has(to)) throw new ValidationError(`Unknown purchase order status ${to}`);
+    if (to === 'Completed' && !ISSUED_STATES.has(from ?? '')) {
+      throw new ForbiddenError('A purchase order is completed only after it has been issued');
+    }
+    if (existing && (ISSUED_STATES.has(from!) || from === 'Cancelled') && poMaterialFacts(existing) !== poMaterialFacts(next)) {
+      // Changing what was ordered is a new purchase decision: back to Draft first, then issue again.
+      if (to !== 'Draft' || from !== 'Issued') {
+        throw new ForbiddenError(`The lines, total, supplier and project of a ${from} purchase order cannot change; return it to Draft (before any goods are received) and issue it again`);
+      }
+    }
+    if (existing && to === 'Draft' && from !== 'Draft') {
+      if (ISSUED_STATES.has(from!) && from !== 'Issued') throw new ForbiddenError(`A ${from} purchase order cannot return to Draft`);
+      if (from === 'Issued' && (await receivedByLine(h.db, String(existing.id))).size) {
+        throw new ForbiddenError('Goods have been received against this purchase order; it cannot return to Draft');
+      }
+    }
     if (from !== to) {
       if (RECEIVED_STATES.has(to)) {
         throw new ForbiddenError('A PO is marked received by recording goods received against it');
@@ -57,7 +99,7 @@ export const purchaseOrderHooks: ModuleHooks = {
         authority = await requireAuthority(
           h.db,
           h.ctx,
-          { resource: { kind: 'purchase_order', id: String(next.id) }, pending: { projectId: String(next.project_id), value: Number(next.total_amount) } },
+          { resource: { kind: 'purchase_order', id: String(next.id) }, pending: { projectId: String(next.project_id), value: Number(next.total_amount), supplierId: (next.supplier_id as string) ?? null } },
           (r) =>
             Number(next.total_amount) >= MAJOR_PURCHASE_THRESHOLD && (r.reasonCode === 'OWNER_REQUIRED' || r.reasonCode === 'NO_MATCHING_AUTHORITY' || r.reasonCode === 'VALUE_LIMIT_EXCEEDED')
               ? `A purchase order of RM ${MAJOR_PURCHASE_THRESHOLD.toLocaleString()} or more needs an approved Major Purchase approval (or the Owner) before it is issued`
@@ -182,6 +224,57 @@ async function receivedValue(db: PoolClient, poId: string) {
 }
 
 /**
+ * Invoice lifecycle (Batch 12A). An invoice is paid only after it was approved through the
+ * authority resolver; payment states are recorded by holders of finance.record_payments.
+ *   new                         -> Draft, Pending Approval
+ *   Draft / Pending Approval    -> Draft, Pending Approval, Approved (authority resolver)
+ *   Approved                    -> Partially Paid, Paid, Overdue
+ *   Partially Paid / Overdue    -> Partially Paid, Paid, Overdue
+ *   Paid                        -> (final)
+ */
+export const INVOICE_NEXT: Record<string, string[]> = {
+  Draft: ['Pending Approval', 'Approved'],
+  'Pending Approval': ['Draft', 'Approved'],
+  Approved: ['Partially Paid', 'Paid', 'Overdue'],
+  'Partially Paid': ['Paid', 'Overdue'],
+  Overdue: ['Partially Paid', 'Paid'],
+  Paid: [],
+};
+const INVOICE_PAYMENT_STATES = new Set(['Partially Paid', 'Paid']);
+
+async function checkInvoiceLifecycle(h: HookContext, existing: Row | undefined, next: Row) {
+  const to = String(next.status ?? 'Draft');
+  if (!(to in INVOICE_NEXT)) throw new ValidationError(`Unknown invoice status ${to}`);
+  if (!existing) {
+    if (to !== 'Draft' && to !== 'Pending Approval') throw new ForbiddenError('A new invoice is recorded as Draft or Pending Approval');
+    if (money(next.paid_amount) !== 0) throw new ForbiddenError('A new invoice has nothing paid against it');
+    return;
+  }
+  const from = String(existing.status);
+  const paidChanged = money(existing.paid_amount) !== money(next.paid_amount);
+  if (from === to && !paidChanged) return;
+  if (from !== to && !(INVOICE_NEXT[from] ?? []).includes(to)) {
+    throw new ForbiddenError(`An invoice cannot move from ${from} to ${to}${to === 'Paid' || to === 'Partially Paid' ? ' (it must be approved first)' : ''}`);
+  }
+  if ((from !== to || paidChanged) && (to === 'Partially Paid' || to === 'Paid' || to === 'Overdue') && !existing.approved_at && !(await invoiceReleased(h.db, String(existing.id)))) {
+    // A legacy invoice in a post-approval state that was never approved through NW OS: the Owner
+    // reviews it first (legacyReview.ts). A release is administrative, not a recorded approval.
+    throw new ForbiddenError('This invoice has no recorded approval; it cannot be paid until the Owner reviews and releases it');
+  }
+  if (paidChanged || INVOICE_PAYMENT_STATES.has(to)) {
+    if (paidChanged && !['Approved', 'Partially Paid', 'Overdue'].includes(from)) throw new ForbiddenError(`Payments are recorded against an approved invoice (this one is ${from})`);
+    if ((paidChanged || from !== to) && !h.ctx.can('finance.record_payments')) throw new ForbiddenError('Missing permission: finance.record_payments (record an invoice payment)');
+    const paid = money(next.paid_amount);
+    const total = money(next.total_amount);
+    if (paid < money(existing.paid_amount)) throw new ForbiddenError('The amount paid on an invoice cannot decrease');
+    if (paid > total) throw new ValidationError(`RM ${paid} paid is more than the invoice total of RM ${total}`);
+    if (to === 'Paid' && paid !== total) throw new ValidationError(`A paid invoice has its total of RM ${total} paid (recorded: RM ${paid})`);
+    if (to === 'Partially Paid' && !(paid > 0 && paid < total)) throw new ValidationError('A partially paid invoice has part of its total paid');
+    if (to === 'Approved' && paid > 0) throw new ValidationError('Record a payment as Partially Paid or Paid');
+  }
+}
+
+/**
  * Supplier invoices: matched against the PO and the goods received (3-way match), approved by
  * finance (not by whoever recorded it), and on approval posted once to actual cost (an
  * Incurred cost-ledger entry) in the same transaction.
@@ -196,11 +289,11 @@ export const invoiceHooks: ModuleHooks = {
       total_amount: money(Number(incoming.amount_before_tax) + Number(incoming.tax_amount || 0)),
     };
     for (const f of ['recorded_by_id', 'approved_by_id', 'approved_by_name', 'approved_at', 'ledger_cost_id', 'approval_authority']) next[f] = existing?.[f];
+    await checkInvoiceLifecycle(h, existing, next);
     if (!existing) {
       next.recorded_by_id = h.ctx.user.id;
       next.recorded_by_name = h.ctx.user.name;
-      if (next.status === 'Approved' || next.status === 'Paid') throw new ForbiddenError('A new invoice is recorded as Draft or Pending Approval');
-    } else if (['Approved', 'Partially Paid', 'Paid'].includes(String(existing.status))) {
+    } else if (['Approved', 'Partially Paid', 'Paid', 'Overdue'].includes(String(existing.status))) {
       for (const f of ['amount_before_tax', 'tax_amount', 'po_id', 'po_reference', 'project_id', 'invoice_type']) {
         if (JSON.stringify(existing[f]) !== JSON.stringify(next[f])) throw new ForbiddenError(`An approved invoice's ${f} cannot change`);
       }

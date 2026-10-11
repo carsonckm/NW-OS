@@ -290,7 +290,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
     it('client consent -> the client; an internal request assigned to Client -> never the client', async () => {
       const consent = await approvalRequest('Project Manager', { approval_type: 'Client Scope Change', assigned_approver_role: 'Client' });
       expect(await route('approval', consent)).toMatchObject({ assigned_user_id: 'user-client', routing_basis: 'CLIENT_CONSENT' });
-      const internal = await approvalRequest('Project Manager', { assigned_approver_role: 'Client' });
+      // Batch 12A: an internal request cannot be put to the Client (or anyone) by the requester.
+      expect((await as['Project Manager'].post('/api/approvals').send({ id: next('apr-rt'), approval_type: 'Safety-Critical Decision', title: 'x', project_id: projA, decision: 'Pending', assigned_approver_role: 'Client' })).status).toBe(403);
+      // A legacy request that names the Client: never routed to the client.
+      const internal = await approvalRequest('Project Manager');
+      await db.pool.query(`UPDATE approvals SET data = data || '{"assigned_approver_role": "Client"}'::jsonb WHERE id = $1`, [internal]);
+      await owner().post('/api/approval-routing/reevaluate').send({}).expect(200);
       expect(await route('approval', internal)).toMatchObject({ assigned_user_id: 'user-owner', routing_basis: 'OWNER_FALLBACK' });
       const clientInbox = await inbox('Client');
       expect(clientInbox.items.map((i) => i.resource_id)).toEqual([consent]);
@@ -299,12 +304,13 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
     });
 
     it('Changes Requested closes the route; resubmitting routes it again', async () => {
-      const id = await approvalRequest('Purchasing', { assigned_approver_role: 'Project Manager' });
-      expect((await route('approval', id))!.assigned_user_id).toBe('user-pm');
-      await as['Project Manager'].post(`/api/approvals/${id}/decision`).send({ decision: 'Changes Requested' }).expect(200);
+      // Batch 12A: no requester-chosen approver, so (without an Owner rule) the request is the Owner's.
+      const id = await approvalRequest('Purchasing');
+      expect((await route('approval', id))!.assigned_user_id).toBe('user-owner');
+      await owner().post(`/api/approvals/${id}/decision`).send({ decision: 'Changes Requested' }).expect(200);
       expect((await history('approval', id))[0]).toMatchObject({ status: 'completed', completion_result: 'changes_requested' });
       await as['Purchasing'].patch(`/api/approvals/${id}`).send({ decision: 'Pending' }).expect(200);
-      expect((await route('approval', id))!.assigned_user_id).toBe('user-pm');
+      expect((await route('approval', id))!.assigned_user_id).toBe('user-owner');
     });
   });
 
@@ -318,12 +324,18 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
 
     it('forged assignee, basis, rule and project fields change nothing; self-assignment never routes to the requester', async () => {
       const forged = { assigned_user_id: 'user-pm', routing_basis: 'USER_RULE', authority_rule_id: 'sys-drawing', authority_rule_code: 'SYS-DRAWING', project_sensitivity: 'Normal' };
-      const self = await approvalRequest('Project Manager', { assigned_approver_id: 'user-pm', assigned_approver_role: 'Project Manager', ...forged });
-      expect(await route('approval', self)).toMatchObject({ routing_basis: 'SYSTEM_POLICY' });
+      // Batch 12A: naming yourself (or anyone) as the approver is refused outright.
+      expect((await as['Project Manager'].post('/api/approvals').send({ id: next('apr-rt'), approval_type: 'Safety-Critical Decision', title: 'x', project_id: projA, decision: 'Pending', assigned_approver_id: 'user-pm', assigned_approver_role: 'Project Manager', ...forged })).status).toBe(403);
+      const self = await approvalRequest('Project Manager', forged);
+      expect(await route('approval', self)).toMatchObject({ routing_basis: 'OWNER_FALLBACK' });
       expect((await route('approval', self))!.assigned_user_id).not.toBe('user-pm');
       expect((await as['Project Manager'].post(`/api/approvals/${self}/decision`).send({ decision: 'Approved' })).status).toBe(403);
       // Assigned to someone who may not decide it: never routed to them.
-      const site = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', assigned_approver_id: 'user-site', assigned_approver_role: 'Site Supervisor' });
+      // Batch 12A: a Major Purchase requester cannot name the approver at all.
+      expect((await as['Purchasing'].post('/api/approvals').send({ id: next('apr-rt'), approval_type: 'Major Purchase', title: 'x', project_id: projA, decision: 'Pending', assigned_approver_id: 'user-site', assigned_approver_role: 'Site Supervisor' })).status).toBe(403);
+      const site = await approvalRequest('Purchasing', { approval_type: 'Major Purchase' });
+      // A legacy request that named someone who may not decide it: never routed to them.
+      await db.pool.query(`UPDATE approvals SET data = data || '{"assigned_approver_id": "user-site", "assigned_approver_role": "Site Supervisor"}'::jsonb WHERE id = $1`, [site]);
       expect((await route('approval', site))!.assigned_user_id).toBe('user-accountant');
       // The routing API takes no assignee and is not open to delegates; there is no route-writing API.
       expect((await as['Project Manager'].post('/api/approval-routing/route').send({ kind: 'approval', id: site, assigned_user_id: 'user-pm' })).status).toBe(403);

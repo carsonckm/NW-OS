@@ -43,7 +43,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
       // 19 rows from batch 1, plus batch 2 (migration 018): the approval_request type's two
       // sensitivity rows, SYS-PURCHASE-APPROVED and the two assigned-approver rows.
       expect(sys.length).toBe(24);
-      expect(sys.every((r) => r.granted_by === null && r.active)).toBe(true);
+      // Batch 12A (migrations 029, 030): the requester-chosen approver rules are retired (inactive, locked).
+      const retired = (code: string) => code === 'SYS-REQUEST-ASSIGNEE-PURCHASE' || code === 'SYS-REQUEST-ASSIGNEE-APPROVAL-REQUEST';
+      expect(sys.every((r) => r.granted_by === null)).toBe(true);
+      expect(sys.filter((r) => !retired(r.code)).every((r) => r.active)).toBe(true);
+      expect(sys.filter((r) => retired(r.code)).map((r) => [r.active, r.locked])).toEqual([[false, true], [false, true]]);
       const by = Object.fromEntries(sys.map((r) => [r.code, r]));
       expect(by['SYS-DRAWING']).toMatchObject({ effect: 'allow', target_permission: 'drawings.approve' });
       expect(by['SYS-VARIATION']).toMatchObject({ effect: 'allow', target_permission: 'variations.approve' });
@@ -56,7 +60,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 1: delegated authority data m
       const ceiling = (code: string) => code.startsWith('SYS-STRATEGIC-') || code.startsWith('SYS-SENSITIVE-');
       expect(sys.filter((r) => ceiling(r.code)).length).toBe(12);
       expect(sys.filter((r) => ceiling(r.code)).every((r) => r.locked)).toBe(true);
-      expect(sys.filter((r) => !ceiling(r.code)).every((r) => !r.locked)).toBe(true);
+      expect(sys.filter((r) => !ceiling(r.code) && !retired(r.code)).every((r) => !r.locked)).toBe(true);
       expect((await db.pool.query(`SELECT count(*)::int AS n FROM delegated_authorities WHERE kind = 'owner'`)).rows[0].n).toBe(0);
     });
 
