@@ -323,7 +323,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
       expect((await route('approval', self))!.assigned_user_id).not.toBe('user-pm');
       expect((await as['Project Manager'].post(`/api/approvals/${self}/decision`).send({ decision: 'Approved' })).status).toBe(403);
       // Assigned to someone who may not decide it: never routed to them.
-      const site = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', assigned_approver_id: 'user-site', assigned_approver_role: 'Site Supervisor' });
+      // Batch 12A: a Major Purchase requester cannot name the approver at all.
+      expect((await as['Purchasing'].post('/api/approvals').send({ id: next('apr-rt'), approval_type: 'Major Purchase', title: 'x', project_id: projA, decision: 'Pending', assigned_approver_id: 'user-site', assigned_approver_role: 'Site Supervisor' })).status).toBe(403);
+      const site = await approvalRequest('Purchasing', { approval_type: 'Major Purchase' });
+      // A legacy request that named someone who may not decide it: never routed to them.
+      await db.pool.query(`UPDATE approvals SET data = data || '{"assigned_approver_id": "user-site", "assigned_approver_role": "Site Supervisor"}'::jsonb WHERE id = $1`, [site]);
       expect((await route('approval', site))!.assigned_user_id).toBe('user-accountant');
       // The routing API takes no assignee and is not open to delegates; there is no route-writing API.
       expect((await as['Project Manager'].post('/api/approval-routing/route').send({ kind: 'approval', id: site, assigned_user_id: 'user-pm' })).status).toBe(403);

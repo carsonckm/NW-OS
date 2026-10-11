@@ -80,6 +80,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       .expect(201);
     return id;
   };
+  // A request stored before Batch 12A with a requester-chosen approver (no longer accepted by the API).
+  const legacyAssignee = async (id: string, role: string, userId?: string) =>
+    db.pool.query(`UPDATE approvals SET data = data || jsonb_build_object('assigned_approver_role', $2::text, 'assigned_approver_id', $3::text) WHERE id = $1`, [id, role, userId ?? null]);
   const decide = (role: string, id: string, decision = 'Approved', extra: Row = {}) => as[role].post(`/api/approvals/${id}/decision`).send({ decision, ...extra });
   const purchaseOrder = async (projectId: string, total: number) => {
     const id = next('po-r');
@@ -357,19 +360,28 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       await decide('Owner / CEO', own).expect(200);
     });
 
-    it('current System Policy SYS-REQUEST-ASSIGNEE-* (Batch 2; open for the Owner\'s review): the named approver decides at any value, within the baseline permission, scope, sensitivity and self-approval limits', async () => {
-      // Pins today's behaviour so any change to this policy is a visible, reviewed decision
-      // (docs/database-privileges.md §8). It is not an endorsement of the policy.
+    it('Batch 12A: the approver named on a Major Purchase request no longer decides it (SYS-REQUEST-ASSIGNEE-PURCHASE retired)', async () => {
+      // Before Batch 12A the requester could name any approvals.view holder, who then decided at any value.
       const po = await purchaseOrder(projA, 500_000);
-      const big = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', assigned_approver_role: 'Project Manager', related_entity_type: 'purchase', related_entity_id: po });
-      expect(await resolve('user-pm', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: true, matchedRuleCode: 'SYS-REQUEST-ASSIGNEE-PURCHASE', resourceValue: 500_000, matchedRule: { min_value: null, max_value: null, locked: false } });
-      // The limits that do hold.
+      const named = await as['Purchasing'].post('/api/approvals').send({ id: next('apr-r'), approval_type: 'Major Purchase', title: 'x', project_id: projA, decision: 'Pending', assigned_approver_role: 'Project Manager', related_entity_type: 'purchase', related_entity_id: po });
+      expect(named.status).toBe(403);
+      const big = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', related_entity_type: 'purchase', related_entity_id: po });
+      // Even a legacy request that names the PM gives the PM nothing.
+      await legacyAssignee(big, 'Project Manager', 'user-pm');
+      const pm = await resolve('user-pm', { resource: { kind: 'approval', id: big } });
+      expect(pm).toMatchObject({ allowed: false, resourceValue: 500_000 });
+      expect(pm.matchedRuleCode).not.toBe('SYS-PURCHASE-ACCOUNTANT');
+      expect((await decide('Project Manager', big)).status).toBe(403);
+      // The rules that do decide it are unchanged.
+      expect(await resolve('user-accountant', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: true, matchedRuleCode: 'SYS-PURCHASE-ACCOUNTANT' });
       expect(await resolve('user-purchasing', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: false, reasonCode: 'SELF_APPROVAL_BLOCKED' });
-      const toSite = await approvalRequest('Purchasing', { approval_type: 'Major Purchase', assigned_approver_role: 'Site Supervisor', related_entity_type: 'purchase', related_entity_id: po });
-      expect(await resolve('user-site', { resource: { kind: 'approval', id: toSite } })).toMatchObject({ allowed: false, reasonCode: 'INSUFFICIENT_PERMISSION' });
       await setSensitivity(projA, 'Sensitive');
-      expect(await resolve('user-pm', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: false, reasonCode: 'SENSITIVITY_BLOCKED' });
+      expect(await resolve('user-accountant', { resource: { kind: 'approval', id: big } })).toMatchObject({ allowed: false, reasonCode: 'SENSITIVITY_BLOCKED' });
       await setSensitivity(projA, 'Normal');
+      // The retired rule cannot be switched back on.
+      const rule = (await db.pool.query(`SELECT id, active, locked FROM delegated_authorities WHERE code = 'SYS-REQUEST-ASSIGNEE-PURCHASE'`)).rows[0];
+      expect(rule).toMatchObject({ active: false, locked: true });
+      expect((await owner().post(`/api/authority/rules/${rule.id}/reactivate`).send({ reason: 'Turn it back on' })).status).toBeGreaterThanOrEqual(400);
     });
 
     it('AI proposals: decided by the person they were put to, or the Owner', async () => {
@@ -569,7 +581,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
 
     it('1. a Client user cannot decide an internal request just because it is assigned to the Client role', async () => {
       for (const type of ['Safety-Critical Decision', 'Technical Change', 'Major Purchase', 'Project Date Change']) {
-        const id = await approvalRequest('Project Manager', { approval_type: type, assigned_approver_role: 'Client' });
+        const id = await approvalRequest('Project Manager', { approval_type: type, assigned_approver_role: type === 'Major Purchase' ? 'Owner / CEO' : 'Client' });
+        if (type === 'Major Purchase') await legacyAssignee(id, 'Client');
         // Before Phase 6 (the old rule, still in the browser for demo mode) this was allowed.
         expect(canEvaluateApproval(await clientUser(), await stored(id)).canApprove, type).toBe(true);
         for (const decision of ['Approved', 'Rejected', 'Changes Requested']) {
@@ -593,7 +606,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     it('2. a role without purchasing.view cannot decide a Major Purchase / Major Cost request, even when assigned', async () => {
       expect((await ctxOf('user-site')).can('purchasing.view')).toBe(false);
       for (const type of ['Major Purchase', 'Major Cost']) {
-        const id = await approvalRequest('Purchasing', { approval_type: type, assigned_approver_role: 'Site Supervisor' });
+        const id = await approvalRequest('Purchasing', { approval_type: type });
+        await legacyAssignee(id, 'Site Supervisor');
         const old = canEvaluateApproval(asProfile((await db.pool.query(`SELECT * FROM users WHERE id = 'user-site'`)).rows[0]), await stored(id));
         expect(old.canApprove, `${type}: allowed before Phase 6`).toBe(true);
         const res = await decide('Site Supervisor', id);

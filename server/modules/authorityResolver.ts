@@ -79,7 +79,7 @@ export interface ResolveInput {
    * authority: role, user, project sensitivity and rule ids always come from the database.
    * projectId: a record being created or moved; the ceiling is checked for it as well.
    */
-  pending?: { projectId?: string | null; value?: number | null; matchStatus?: string | null };
+  pending?: { projectId?: string | null; value?: number | null; matchStatus?: string | null; supplierId?: string | null };
   now?: Date;
 }
 
@@ -271,9 +271,27 @@ async function loadFacts(db: Db, input: ResolveInput): Promise<Facts> {
       break;
     }
     case 'purchase_order': {
-      const r = await one('SELECT project_id, data FROM purchase_orders WHERE id = $1');
+      const r = await one('SELECT project_id, supplier_id, data FROM purchase_orders WHERE id = $1');
+      // A Major Purchase approval counts only for what it approved (Batch 12A): this PO, on this
+      // project, from this supplier, for no more than the approved total. The approved facts are
+      // recorded by the server when the approval is decided (hooks/approvals.ts), never by the browser.
+      const p = input.pending;
+      const value = p?.value !== undefined && p.value !== null ? num(p.value) : num(r?.data?.total_amount);
+      const projectId = p?.projectId ?? r?.project_id ?? null;
+      const supplierId = p && 'supplierId' in p ? (p.supplierId ?? null) : (r?.supplier_id ?? null);
       const prior = r
-        ? (await db.query(`SELECT data->>'decision_by_role' AS role FROM approvals WHERE related_entity_id = $1 AND approval_type = 'Major Purchase' AND decision = 'Approved' ORDER BY (data->>'decision_by_role' = $2) DESC LIMIT 1`, [id, OWNER_ROLE])).rows[0]
+        ? (
+            await db.query(
+              `SELECT data->>'decision_by_role' AS role FROM approvals
+                WHERE related_entity_id = $1 AND related_entity_type = 'purchase' AND approval_type = 'Major Purchase' AND decision = 'Approved'
+                  AND project_id = $3
+                  AND data->'approved_facts'->>'po_id' = $1 AND data->'approved_facts'->>'project_id' = $3
+                  AND $4::numeric IS NOT NULL AND (data->'approved_facts'->>'total_amount')::numeric >= $4::numeric
+                  AND (NOT (data->'approved_facts' ? 'supplier_id') OR data->'approved_facts'->>'supplier_id' IS NOT DISTINCT FROM $5::text)
+                ORDER BY (data->>'decision_by_role' = $2) DESC LIMIT 1`,
+              [id, OWNER_ROLE, projectId, value, supplierId]
+            )
+          ).rows[0]
         : undefined;
       f = { ...base, decisionType: 'purchase', projectId: r?.project_id ?? null, value: num(r?.data?.total_amount), valueSource: 'PO total', priorApproval: prior ? { type: 'Major Purchase', decidedByRole: prior.role ?? null } : null };
       break;

@@ -155,11 +155,13 @@ const approvalScreen = async (page, number) => {
     const a7b = await call(client, 'POST', `/api/approvals/${consent.id}/decision`, { decision: 'Approved' });
     record('7b', 'Client consent unchanged (own project)', `resolver for the client: ${r7b.allowed} (${r7b.basis}); API ${a7b.status}; decision ${q(`select decision from approvals where id='${consent.id}'`)}`, r7b.allowed && r7b.basis === 'client_consent' && a7b.status === 200);
 
-    // 8. Major Purchase assigned to a role without purchasing.view.
-    const major = await req('Major Purchase', 'Site Supervisor', purchasing);
+    // 8. Major Purchase and a role without purchasing.view. Batch 12A: the requester cannot name
+    // the approver of a Major Purchase at all; the Site Supervisor still cannot decide it.
+    const named = await call(purchasing, 'POST', '/api/approvals', { id: `apr-p6u-${RUN}-named`, approval_type: 'Major Purchase', title: 'x', project_id: P, decision: 'Pending', assigned_approver_role: 'Site Supervisor' });
+    const major = await req('Major Purchase', 'Owner / CEO', purchasing);
     const s8 = await approvalScreen(site, major.number);
     const a8 = await call(site, 'POST', `/api/approvals/${major.id}/decision`, { decision: 'Approved' });
-    record(8, 'Major Purchase, Site Supervisor (no purchasing.view)', `screen Approve: ${s8.approve}, note ${s8.code}; API ${a8.status} ${a8.body.reason_code}`, !s8.approve && s8.code === 'INSUFFICIENT_PERMISSION' && a8.status === 403 && a8.body.reason_code === 'INSUFFICIENT_PERMISSION');
+    record(8, 'Major Purchase, Site Supervisor (no purchasing.view; approver not chosen by the requester)', `naming the Site Supervisor: API ${named.status}; screen Approve: ${s8.approve}, note ${s8.code}; API ${a8.status} ${a8.body.reason_code}`, named.status === 403 && !s8.approve && s8.code === 'INSUFFICIENT_PERMISSION' && a8.status === 403 && a8.body.reason_code === 'INSUFFICIENT_PERMISSION');
 
     // 9. Purchasing: Issue PO offered only when the server allows (RM 20,000 policy).
     const po = async (total) => {

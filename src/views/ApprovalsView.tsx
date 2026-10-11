@@ -79,6 +79,8 @@ export const ApprovalsView: React.FC = () => {
   const [newScheduleImpact, setNewScheduleImpact] = useState<number>(0);
   const [newRisk, setNewRisk] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
   const [newApproverRole, setNewApproverRole] = useState<UserRole>('Owner / CEO');
+  // Purchase decisions are routed by the authority rules; the requester does not choose the approver.
+  const routedByRules = (type: string) => type === 'Major Purchase' || type === 'Major Cost';
 
   // Filtered approvals
   const filteredApprovals = approvals.filter((item) => {
@@ -147,7 +149,7 @@ export const ApprovalsView: React.FC = () => {
       requested_by_id: currentUser.id,
       requested_by_name: currentUser.name,
       requested_by_role: currentUser.role,
-      assigned_approver_role: newApproverRole,
+      assigned_approver_role: routedByRules(newType) ? 'Owner / CEO' : newApproverRole,
       date_requested: new Date().toISOString(),
       decision: 'Pending',
       impact_summary: {
@@ -372,7 +374,7 @@ export const ApprovalsView: React.FC = () => {
                       </div>
                       <div>
                         <span className="text-slate-400">Designated Approver: </span>
-                        <strong className="text-slate-800 font-semibold">{item.assigned_approver_role}</strong>
+                        <strong className="text-slate-800 font-semibold">{routedByRules(item.approval_type) ? 'Routed by the authority rules' : item.assigned_approver_role}</strong>
                       </div>
                       <div>
                         <span className="text-slate-400">Date: </span>
@@ -711,6 +713,9 @@ export const ApprovalsView: React.FC = () => {
                 </div>
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Assigned Approver</label>
+                  {routedByRules(newType) ? (
+                    <p className="text-xs text-slate-500">Routed by the authority rules (the requester does not choose the approver).</p>
+                  ) : (
                   <select
                     value={newApproverRole}
                     onChange={(e) => setNewApproverRole(e.target.value as UserRole)}
@@ -722,6 +727,7 @@ export const ApprovalsView: React.FC = () => {
                     <option value="Accountant">Accountant</option>
                     <option value="Client">Client</option>
                   </select>
+                  )}
                 </div>
               </div>
 
