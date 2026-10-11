@@ -29,8 +29,39 @@ const fresh = async (page) => {
   await L.synced(page);
 };
 const route = (kind, id) => q(`select assigned_user_id || ' ' || routing_basis || ' ' || lifecycle_state || ' ' || route_reason || ' ' || coalesce(owner_reason_code, '-') from approval_routes where resource_kind = '${kind}' and resource_id = '${id}' and status = 'open'`);
-/** Moves the decision's clock back by `hours` (the test's only shortcut: simulated time). */
-const age = (kind, id, hours) => q(`update approval_routes set requested_at = now() - interval '${hours} hours', due_at = null, sla_business_days = null where resource_kind = '${kind}' and resource_id = '${id}' and status = 'open' returning id`);
+/**
+ * The instant `hours` of working time before `now`, on the server's business calendar (working
+ * days, UTC offset and holidays, read from the database). SLAs only run on working days, so moving
+ * a decision back by wall-clock hours depends on the day the test runs (on a Sunday 13 hours back
+ * is no working time at all). Moving it back by working time makes every step deterministic.
+ */
+const DAY_MS = 86400_000;
+/** Pure: the instant `hours` of working time before `now` on calendar `cal` ({ workingDays, offsetMs, holidays }). */
+const workingTimeBefore = (cal, now, hours) => {
+  const working = (localDayStart) => {
+    const d = new Date(localDayStart);
+    return cal.workingDays.has(d.getUTCDay() === 0 ? 7 : d.getUTCDay()) && !cal.holidays.has(d.toISOString().slice(0, 10));
+  };
+  let a = now + cal.offsetMs;
+  let remaining = hours * 3600_000;
+  for (let i = 0; remaining > 0 && i < 3700; i++) {
+    const dayStart = Math.floor((a - 1) / DAY_MS) * DAY_MS; // the local day the instant just before `a` falls on
+    if (working(dayStart)) {
+      const chunk = Math.min(remaining, a - dayStart);
+      remaining -= chunk;
+      a -= chunk;
+    } else a = dayStart;
+  }
+  return a - cal.offsetMs;
+};
+const businessHoursAgo = (hours) => {
+  const [days, offsetMinutes] = q(`select array_to_string(working_days, ',') || '|' || utc_offset_minutes from business_calendar where id = 1`).split('|');
+  const holidays = q(`select coalesce(string_agg(to_char(day, 'YYYY-MM-DD'), ','), '') from business_holidays`).split(',').filter(Boolean);
+  const cal = { workingDays: new Set(days.split(',').map(Number)), offsetMs: Number(offsetMinutes) * 60_000, holidays: new Set(holidays) };
+  return new Date(workingTimeBefore(cal, Date.now(), hours)).toISOString();
+};
+/** Moves the decision's clock back by `hours` of working time (the test's only shortcut: simulated time). */
+const age = (kind, id, hours) => q(`update approval_routes set requested_at = '${businessHoursAgo(hours)}'::timestamptz, due_at = null, sla_business_days = null where resource_kind = '${kind}' and resource_id = '${id}' and status = 'open' returning id`);
 const ownerExceptions = async (page) => {
   await fresh(page);
   await L.nav(page, 'Owner Dashboard');
