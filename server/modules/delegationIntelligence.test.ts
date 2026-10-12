@@ -22,7 +22,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 5: Owner dependency and deleg
     ({ db, as, app } = (await setupDemoWorld()) as never);
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
     // A second PM raises the variations, so the Owner (and a delegated PM) may decide them.
-    await seedUsers(db.pool, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
+    await seedUsers(db.owner, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
     raiser = await signIn(app as never, 'raiser@test.local');
     await ensureRules(db.pool);
     A = await newProject('a');
@@ -39,7 +39,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 5: Owner dependency and deleg
   async function newProject(tag: string) {
     const id = next(`proj-b5${tag}`);
     await owner().post('/api/projects').send({ id, project_number: id.toUpperCase(), project_name: `B5 ${tag.toUpperCase()}`, client_id: 'client-2', site_address: 'KL', contract_value: 5000000, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
     return id;
   }
   const route = async (kind: string, id: string) => (await db.pool.query(`SELECT * FROM approval_routes WHERE resource_kind = $1 AND resource_id = $2 ORDER BY id DESC LIMIT 1`, [kind, id])).rows[0] as Row;

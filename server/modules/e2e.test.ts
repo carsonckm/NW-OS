@@ -4,7 +4,7 @@
  * checked against what PostgreSQL holds (the next step only works because the previous one
  * was stored).
  */
-import type request from 'supertest';
+import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TEST_DATABASE_URL, type TestDb } from '../test/db';
 import { setupDemoWorld } from '../test/demoWorld';
@@ -78,6 +78,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     expect((await one(`SELECT status FROM client_enquiries WHERE id = 'e2e-enq'`)).status).toBe('Won');
     // Site team, production staff and the contractor work on this project from now on.
     await ok(owner().patch(`/api/projects/${s.project}`).send({ site_supervisor_id: 'user-site', project_status: 'Active' }), 200);
+    // Batch 12B: the Production Manager works on assigned projects only; the Owner assigns them.
+    await ok(owner().put('/api/users/user-prod-mgr/projects').send({ project_ids: ['proj-1', 'proj-2', s.project] }), 200);
     await ok(as['Admin'].put('/api/users/user-prod-staff/projects').send({ project_ids: ['proj-1', s.project] }), 200);
   });
 
@@ -189,7 +191,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     await ok(owner().post('/api/variations/e2e-vo/transition').send({ status: 'Client Approval' }), 200);
     expect((await as['Client'].get(`/api/variations/e2e-vo`)).status).toBe(404); // another client's project
     // The client (Horizon) signs in with their own account and approves it.
-    await ok(as['Admin'].post('/api/users').send({ name: 'Ms Lim', email: 'lim@horizon.test', role: 'Client', client_id: 'client-2', password: 'horizon-password-1' }), 201);
+    // Batch 12B: the Admin gets a single-use activation code; Ms Lim sets her own password with it.
+    const created = (await ok(as['Admin'].post('/api/users').send({ name: 'Ms Lim', email: 'lim@horizon.test', role: 'Client', client_id: 'client-2' }), 201)).body;
+    await ok(request(app).post('/api/auth/activate').send({ email: 'lim@horizon.test', code: created.activation.code, password: 'horizon-password-1' }), 200);
     const lim = await signIn(app, 'lim@horizon.test', 'horizon-password-1');
     const seen = (await ok(lim.get('/api/variations/e2e-vo'), 200)).body;
     expect(seen.estimated_cost).toBeUndefined(); // internal cost hidden from the client

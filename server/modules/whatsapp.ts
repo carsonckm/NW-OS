@@ -46,7 +46,7 @@ async function log(pool: Pool, direction: 'inbound' | 'outbound', phone: string,
 }
 
 async function replyFor(pool: Pool, user: AuthUser): Promise<string> {
-  const ctx = await AccessContext.load(pool, user);
+  const ctx = await AccessContext.load(pool, user, { background: true });
   const projects = (await pool.query('SELECT id, project_name, project_status FROM projects ORDER BY id')).rows.filter((p) => ctx.canSeeProject(p.id));
   if (user.role === 'Client') {
     // Clients get their project status only; nothing internal.
@@ -112,7 +112,7 @@ export function interpretMessage(text: string): Interpretation {
 async function proposeFromMessage(pool: Pool, service: DataService, user: AuthUser, text: string, i: Interpretation): Promise<{ reply: string; outcome: string }> {
   const ask = 'Please include the item code (e.g. CAR-003) and what happened or the % done, so your PM can confirm it.';
   if (i.confidence === 'Unknown' || !i.work_item_code) return { reply: `I couldn't tell exactly what to record. ${ask}`, outcome: 'needs_clarification' };
-  const ctx = await AccessContext.load(pool, user);
+  const ctx = await AccessContext.load(pool, user, { background: true });
   const items = (await pool.query('SELECT * FROM work_items WHERE item_code = $1 ORDER BY id', [i.work_item_code])).rows.filter((w) => ctx.canView('workItems', w));
   if (items.length !== 1) return { reply: `I can't find ${i.work_item_code} among your work items${items.length > 1 ? ' (more than one matches)' : ''}. ${ask}`, outcome: 'item_not_found' };
   const item = items[0];

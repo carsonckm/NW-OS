@@ -24,9 +24,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 6: delegation coverage, tempo
     let app: Parameters<typeof request>[0];
     ({ db, as, app } = (await setupDemoWorld()) as never);
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
-    await seedUsers(db.pool, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
+    await seedUsers(db.owner, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
     raiser = await signIn(app as never, 'raiser@test.local');
-    await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-gone', 'Former PM', 'gone@test.local', 'x', 'Project Manager', false)`);
+    await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-gone', 'Former PM', 'gone@test.local', 'Project Manager', false)`);
     await ensureRules(db.pool);
     engine = new AutomationEngine(db.pool);
     A = await newProject('a');
@@ -46,7 +46,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 6: delegation coverage, tempo
   async function newProject(tag: string) {
     const id = next(`proj-b6${tag}`);
     await owner().post('/api/projects').send({ id, project_number: id.toUpperCase(), project_name: `B6 ${tag.toUpperCase()}`, client_id: 'client-2', site_address: 'KL', contract_value: 5000000, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
     return id;
   }
   const variation = async (projectId: string, amount: number) => {
@@ -207,11 +207,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 6: delegation coverage, tempo
   let absence: Row;
   it('10. Absence: preview (delegated / not delegated / impact), confirm; configured decisions route to the backup, others stay with the Owner', async () => {
     const body = { backup_user_id: 'user-pm2', decision_types: ['variation', 'purchase'], max_value: 10000, max_risk: 'Attention', end_at: future(5 * DAY), reason: 'Overseas trip' };
-    await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm2', 'Backup PM', 'pm2@test.local', 'x', 'Project Manager', true)`);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2')`, [A]);
+    await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-pm2', 'Backup PM', 'pm2@test.local', 'Project Manager', true)`);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2')`, [A]);
     // The Owner's own extension above covers the PM on project A; use a project the PM rule does not cover.
     const B = await newProject('b');
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2')`, [B]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2')`, [B]);
     const waiting = await variation(B, 4000);
     expect((await route('variation', waiting)).assignee_role).toBe('Owner / CEO');
     const prev = (await owner().post('/api/authority/absence/preview').send(body).expect(200)).body;

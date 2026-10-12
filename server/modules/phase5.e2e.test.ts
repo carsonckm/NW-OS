@@ -53,6 +53,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 end-to-end acceptance: automation, 
     engine = new AutomationEngine(db.pool);
     // A healthy project with an approved drawing, a valid production order and installation under way.
     await owner().post('/api/projects').send({ id: P, project_number: 'NW-P5-1', project_name: 'Phase 5 Gallery', client_id: 'client-2', site_address: 'KL', contract_value: 80000, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
+    // Batch 12B: the Production Manager works on assigned projects only; the Owner assigns them.
+    await owner().put('/api/users/user-prod-mgr/projects').send({ project_ids: ['proj-1', 'proj-2', P] }).expect(200);
     await as['Admin'].put('/api/users/user-prod-staff/projects').send({ project_ids: ['proj-1', P] }).expect(200);
     await pm().post('/api/drawings').send({ id: 'p5-dwg', project_id: P, drawing_number: 'P5-101', title: 'Display wall', category: 'Carpentry', created_at: '2026-10-01', revisions: [], nw_production_drawings: [] }).expect(201);
     await pm().post('/api/drawings/p5-dwg/revisions').send({ id: 'p5-rev1', revision: 'Rev 1', title: 'Rev 1', file_url: '/p5.pdf', notes: '', drawing_type: 'Client / Designer Drawing' }).expect(201);

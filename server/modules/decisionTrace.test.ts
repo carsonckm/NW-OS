@@ -26,7 +26,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 8: approval traceability and 
     let app: Parameters<typeof request>[0];
     ({ db, as, app } = (await setupDemoWorld()) as never);
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
-    await seedUsers(db.pool, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
+    await seedUsers(db.owner, [{ id: 'user-raiser', role: 'Project Manager', email: 'raiser@test.local' }]);
     raiser = await signIn(app as never, 'raiser@test.local');
     await ensureRules(db.pool);
     engine = new AutomationEngine(db.pool);
@@ -47,7 +47,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 8: approval traceability and 
   async function newProject(tag: string) {
     const id = next(`proj-b8${tag}`);
     await owner().post('/api/projects').send({ id, project_number: id.toUpperCase(), project_name: `B8 ${tag}`, client_id: 'client-2', site_address: 'KL', contract_value: 5000000, project_status: 'Active', start_date: '2026-01-01', end_date: '2027-12-31', signed_date: '', project_manager_id: 'user-pm', site_supervisor_id: 'user-site', progress_percent: 0, description: '' }).expect(201);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-raiser') ON CONFLICT DO NOTHING`, [id]);
     return id;
   }
   const variation = async (projectId: string, amount: number) => {
@@ -179,7 +179,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 8: approval traceability and 
 
   // 9. Permission (role) change.
   it('9. changing the approver role later does not change the recorded role and permission', async () => {
-    await seedUsers(db.pool, [{ id: 'user-pm2', role: 'Project Manager', email: 'pm2@test.local' }]);
+    await seedUsers(db.owner, [{ id: 'user-pm2', role: 'Project Manager', email: 'pm2@test.local' }]);
     await db.pool.query(`UPDATE projects SET project_manager_id = 'user-pm2' WHERE id = $1`, [P.role]);
     const pm2 = await signIn((await import('../test/app')).buildApp(db.pool), 'pm2@test.local');
     const cr = await owner().post('/api/authority/rules').send({ name: 'PM2 on role project', description: 'Test', effect: 'allow', decision_type: 'variation', target_user_id: 'user-pm2', project_id: P.role, max_value: 9000, priority: 140 });

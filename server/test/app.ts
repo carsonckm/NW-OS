@@ -25,12 +25,18 @@ export interface SeedUser {
   assigned?: string[];
 }
 
+/**
+ * Test accounts, written like the account scripts do: on the administrative credential (db.owner;
+ * the runtime role cannot create accounts without a signed-in Owner or Admin, migration 031).
+ */
 export async function seedUsers(pool: Pool, users: SeedUser[]) {
   const store = new AuthStore(pool);
-  for (const u of users) {
-    await store.createUser({ ...u, name: u.role, password: TEST_PASSWORD });
-    if (u.assigned) await store.setAssignments(u.id, u.assigned);
-  }
+  await store.withIdentity(undefined, async (db) => {
+    for (const u of users) {
+      await store.createUser(db, { ...u, name: u.role, password: TEST_PASSWORD });
+      if (u.assigned) await store.setAssignments(db, u.id, u.assigned);
+    }
+  });
 }
 
 /** A supertest agent holding a session cookie for the given user. */

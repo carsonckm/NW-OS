@@ -26,7 +26,7 @@ async function main() {
   try {
     const pending = await pendingMigrations(pool);
     if (pending.length) throw new Error(`Run npm run db:migrate first (pending: ${pending.join(', ')})`);
-    const ctx = await AccessContext.load(pool, SYSTEM);
+    const ctx = await AccessContext.load(pool, SYSTEM, { background: true });
     const result = await new DataService(pool).importData(ctx, demoData(), { dryRun: process.argv.includes('--dry-run') }, {
       id: SYSTEM.id, name: SYSTEM.name, role: SYSTEM.role,
     });

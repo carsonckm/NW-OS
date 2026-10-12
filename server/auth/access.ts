@@ -68,6 +68,13 @@ const FINANCIAL_FIELDS: Partial<Record<CoreCollection, string[]>> = { projects: 
  * Everything the server needs to decide what one authenticated user may see and do
  * with core-chain records. Built per request from the database, never from the browser.
  */
+export interface AccessOptions {
+  /** The session cookie's token (never stored; used to prove identity to the database). */
+  sessionToken?: string;
+  /** Background job context: no approval authority, no database identity. */
+  background?: boolean;
+}
+
 export class AccessContext {
   readonly permissions: ReadonlySet<PermissionKey>;
   private constructor(
@@ -78,12 +85,23 @@ export class AccessContext {
     private packageContractor: Map<string, string>,
     private packageProject: Map<string, string>,
     /** work item id -> its project, package and contractor (for module record scoping). */
-    readonly workItemInfo: Map<string, { project_id: string; work_package_id: string; contractor_id: string }>
+    readonly workItemInfo: Map<string, { project_id: string; work_package_id: string; contractor_id: string }>,
+    readonly opts: AccessOptions = {}
   ) {
     this.permissions = permissionsFor(user.role);
   }
 
-  static async load(db: Pool | PoolClient, user: AuthUser): Promise<AccessContext> {
+  /** The signed-in session's token, for transactions the database must attribute (auth_assume). */
+  get sessionToken() {
+    return this.opts.sessionToken;
+  }
+
+  /** A background job's view: it holds no approval authority and no database identity. */
+  get background() {
+    return this.opts.background === true;
+  }
+
+  static async load(db: Pool | PoolClient, user: AuthUser, opts: AccessOptions = {}): Promise<AccessContext> {
     const [projects, packages, items, assignments] = await Promise.all([
       db.query('SELECT id, client_id, project_manager_id, site_supervisor_id FROM projects'),
       db.query('SELECT id, project_id, contractor_id FROM work_packages'),
@@ -104,8 +122,9 @@ export class AccessContext {
         visible = null;
         break;
       case 'Production Manager':
-        // Oversees all fabrication unless limited to specific projects.
-        visible = assigned.size ? assigned : null;
+        // Batch 12B: explicit project assignments only (no assignments, no projects), like
+        // Production Staff. Company-wide scope is never a default.
+        visible = assigned;
         break;
       case 'Project Manager':
         visible = new Set([...assigned, ...projects.rows.filter((p) => p.project_manager_id === user.id).map((p) => p.id)]);
@@ -128,7 +147,7 @@ export class AccessContext {
         visible = assigned;
     }
     const workItemInfo = new Map(items.rows.map((w) => [w.id as string, w]));
-    return new AccessContext(user, visible, projectClient, packageContractor, packageProject, workItemInfo);
+    return new AccessContext(user, visible, projectClient, packageContractor, packageProject, workItemInfo, opts);
   }
 
   get companyWide() {

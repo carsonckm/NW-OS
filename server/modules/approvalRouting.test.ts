@@ -10,17 +10,19 @@ type Row = Record<string, any>;
 describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner authority settings', () => {
   let db: TestDb;
   let as: Record<string, request.Agent> = {};
+  // Deactivation ends a user's sessions in the database (migration 031): sign them in again.
+  let relogin: (userId: string) => Promise<void>;
   let app: Parameters<typeof request>[0];
   const projA = 'proj-1';
   let projB = '';
   beforeAll(async () => {
-    ({ db, as, app } = (await setupDemoWorld()) as never);
+    ({ db, as, app, relogin } = (await setupDemoWorld()) as never);
     // Records imported before routing existed get their routes (what the server does at start).
     await withTransaction(db.pool, (c) => reevaluateRoutes(c, { name: 'test start' }));
     projB = (await db.pool.query(`SELECT p.id FROM projects p WHERE p.id NOT IN ('proj-1', 'proj-x') AND p.project_manager_id = 'user-pm' ORDER BY p.id LIMIT 1`)).rows[0]?.id ?? 'proj-2';
     // A second PM on project A, for the multiple-candidate scenario.
-    await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm2', 'Second PM', 'pm2@test.local', 'x', 'Project Manager', true)`);
-    await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2')`, [projA]);
+    await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-pm2', 'Second PM', 'pm2@test.local', 'Project Manager', true)`);
+    await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2')`, [projA]);
   });
   afterAll(async () => {
     await db?.close();
@@ -121,7 +123,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
       const short = await grant({ project_id: projB, name: 'Short PM authority' });
       const id = await variation(projB, 1000);
       expect((await route('variation', id))!.authority_rule_id).toBe(short.id);
-      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 minute' WHERE id = $1`, [short.id]);
+      await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 minute' WHERE id = $1`, [short.id]);
       const refused = await approveVo('Project Manager', id);
       expect(refused.status).toBe(403);
       expect(refused.body.reason_code).toBe('AUTHORITY_EXPIRED');
@@ -252,10 +254,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
       const pending = await mp();
       // (Directly in the test database, so the Accountant's session survives for later tests; the
       // users API triggers the same re-routing, see scenario J.)
-      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-accountant'`);
+      await db.owner.query(`UPDATE users SET is_active = false WHERE id = 'user-accountant'`);
       await owner().post('/api/approval-routing/reevaluate').send({}).expect(200);
       expect(await route('approval', pending)).toMatchObject({ assigned_user_id: 'user-owner', routing_basis: 'OWNER_FALLBACK' });
-      await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-accountant'`);
+      await db.owner.query(`UPDATE users SET is_active = true WHERE id = 'user-accountant'`);
+      await relogin('user-accountant');
       await owner().post('/api/approval-routing/reevaluate').send({}).expect(200);
       expect((await route('approval', pending))!.assigned_user_id).toBe('user-accountant');
       // The Accountant's System Policy switched off (Owner, reason): the Owner.
@@ -364,10 +367,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 3: approval routing and Owner
     });
 
     it('a decision cannot be created when no Owner exists to fall back on (no orphan)', async () => {
-      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-owner'`);
+      await db.owner.query(`UPDATE users SET is_active = false WHERE id = 'user-owner'`);
       const id = next('apr-rt');
       const res = await as['Purchasing'].post('/api/approvals').send({ id, approval_number: id, approval_type: 'Project Date Change', title: 'x', description: 'x', project_id: projA, project_name: 'P', assigned_approver_role: 'Owner / CEO', date_requested: '2026-10-05', decision: 'Pending', created_at: '', updated_at: '' });
-      await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-owner'`);
+      await db.owner.query(`UPDATE users SET is_active = true WHERE id = 'user-owner'`);
+      await relogin('user-owner');
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/No active Owner/);
       expect((await db.pool.query('SELECT 1 FROM approvals WHERE id = $1', [id])).rowCount).toBe(0);

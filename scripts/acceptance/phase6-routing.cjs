@@ -122,7 +122,7 @@ const route = (kind, id) => q(`select assigned_user_id || ' ' || routing_basis |
     record(4, 'Strategic → Normal', `Strategic: ${strategic}; PM lowering ${pmLower.status}; after Normal (Owner, reason): ${route('variation', v4)}; audit ${q(`select string_agg(before->>'sensitivity' || '->' || (after->>'sensitivity'), ', ' order by id) from audit_logs where action='project.sensitivity.change' and entity_id='${P}'`)}`, strategic.startsWith(`${ownerId} OWNER_FALLBACK`) && pmLower.status === 403 && route('variation', v4).startsWith(pmId));
 
     // 5. The authority expires while pending: the inbox says so; re-running routing hands it to the Owner.
-    q(`update delegated_authorities set start_at = now() - interval '9 days', end_at = now() - interval '1 minute' where id = '${rule.id}'`);
+    L.psqlAdmin(`update delegated_authorities set start_at = now() - interval '9 days', end_at = now() - interval '1 minute' where id = '${rule.id}'`);
     const pmBox5 = await inbox(pm);
     const stale = await pmBox5.getByTestId(`inbox-variation-${v4}`).getByTestId('inbox-stale').innerText().catch(() => '');
     const refused5 = await call(pm, 'POST', `/api/variations/${v4}/transition`, { status: 'Client Approval' });
@@ -132,7 +132,7 @@ const route = (kind, id) => q(`select assigned_user_id || ' ' || routing_basis |
     record(5, 'Authority expires while pending', `PM inbox: "${stale}"; PM API ${refused5.status} ${refused5.body.reason_code}; "${rerun}"; now ${route('variation', v4)}`, /AUTHORITY_EXPIRED/.test(stale) && refused5.body.reason_code === 'AUTHORITY_EXPIRED' && route('variation', v4) === `${ownerId} OWNER_FALLBACK - AUTHORITY_EXPIRED`);
 
     // 6. A fresh rule; the Owner deactivates it on the screen (impact first): routed to the Owner.
-    q(`update delegated_authorities set end_at = now() + interval '30 days' where id = '${rule.id}'`);
+    L.psqlAdmin(`update delegated_authorities set end_at = now() + interval '30 days' where id = '${rule.id}'`);
     await call(owner, 'POST', '/api/approval-routing/reevaluate', { project_id: P }, 200);
     const v6 = await variation(2000);
     const before6 = route('variation', v6);

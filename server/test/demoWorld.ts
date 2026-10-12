@@ -23,7 +23,8 @@ export const USERS: SeedUser[] = [
   { id: 'user-site', role: 'Site Supervisor', email: 'site@test.local' },
   { id: 'user-purchasing', role: 'Purchasing', email: 'purchasing@test.local' },
   { id: 'user-accountant', role: 'Accountant', email: 'accountant@test.local' },
-  { id: 'user-prod-mgr', role: 'Production Manager', email: 'prodmgr@test.local' },
+  // Batch 12B: a Production Manager sees only explicitly assigned projects.
+  { id: 'user-prod-mgr', role: 'Production Manager', email: 'prodmgr@test.local', assigned: ['proj-1', 'proj-2'] },
   { id: 'user-prod-staff', role: 'Production Staff', email: 'staff@test.local', assigned: ['proj-1'] },
   { id: 'user-contractor', role: 'Contractor', email: 'contractor@test.local', contractor_id: 'con-1' },
   { id: 'user-client', role: 'Client', email: 'client@test.local', client_id: 'client-1' },
@@ -52,20 +53,30 @@ export interface DemoWorld {
   db: TestDb;
   app: express.Express;
   as: Record<string, request.Agent>;
+  /**
+   * Signs a test user in again (in place in `as`). Deactivating a user or changing their role
+   * ends their sessions in the database (migration 031), as it does for a real account.
+   */
+  relogin: (userId: string) => Promise<void>;
 }
 
 export async function setupDemoWorld(opts: { restricted?: boolean } = {}): Promise<DemoWorld> {
   const db = await createTestDb(opts);
   const service = new DataService(db.pool);
-  const ctx = await AccessContext.load(db.pool, SYSTEM);
+  const ctx = await AccessContext.load(db.pool, SYSTEM, { background: true });
   const demo = demoData();
   const extra = unrelatedProject();
   for (const [k, rows] of Object.entries(extra)) demo[k] = [...(demo[k] ?? []), ...rows];
   const imported = await service.importData(ctx, demo, {}, { id: SYSTEM.id });
   expect(imported.problems).toEqual([]);
-  await seedUsers(db.pool, USERS);
+  await seedUsers(db.owner, USERS);
   const app = buildApp(db.pool);
   const as: Record<string, request.Agent> = {};
   for (const u of USERS) as[u.role] = await signIn(app, u.email);
-  return { db, app, as };
+  const relogin = async (userId: string) => {
+    const u = USERS.find((x) => x.id === userId);
+    if (!u) throw new Error(`relogin: unknown test user ${userId}`);
+    as[u.role] = await signIn(app, u.email);
+  };
+  return { db, app, as, relogin };
 }

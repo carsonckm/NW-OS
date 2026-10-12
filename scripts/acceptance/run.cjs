@@ -16,6 +16,11 @@ async function as(account) {
   const p = sessions[account];
   return p;
 }
+/** A new account's first sign-in: sets its password with the activation code, then signs in. */
+async function activated(account, code) {
+  sessions[account] = await L.open(account, browser, code);
+  return sessions[account];
+}
 async function fresh(account) {
   const p = await as(account);
   await p.reload({ waitUntil: 'networkidle' });
@@ -31,7 +36,7 @@ function record(step, via, evidence) {
   fs.appendFileSync(LOG, JSON.stringify(line) + '\n');
   console.log(`${step} [${via}] ${evidence}`);
 }
-const stages = require('./stages.cjs')({ L, S, save, dialog, field, as, fresh, commercialTab, record });
+const stages = require('./stages.cjs')({ L, S, save, dialog, field, as, fresh, activated, commercialTab, record });
 
 (async () => {
   const from = Number(process.argv[2] || 1);

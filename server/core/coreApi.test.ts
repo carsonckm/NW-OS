@@ -89,7 +89,7 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
 
   beforeAll(async () => {
     db = await createTestDb();
-    await seedUsers(db.pool, [OWNER]);
+    await seedUsers(db.owner, [OWNER]);
     app = await signIn(buildApp(db.pool), OWNER.email);
   });
   afterAll(async () => {

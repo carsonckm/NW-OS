@@ -15,6 +15,7 @@
  * Nothing here approves anything. Every rule goes through validateOwnerRule and insertOwnerRule
  * (audit, re-routing); the resolver decides every approval.
  */
+import { withUserTransaction } from '../auth/identity';
 import { createHash } from 'crypto';
 import { AccessContext, ForbiddenError } from '../auth/access';
 import { permissionsFor } from '../auth/permissions';
@@ -381,7 +382,7 @@ export async function createTemporary(pool: Pool, ctx: AccessContext, actor: Aud
   refuse(b, TEMP_FIELDS);
   const { r } = await buildTemporaryRule(pool, b, now);
   if (b.confirmation !== tempHash(b, r)) throw new ValidationError('Preview this temporary authority first, then confirm it (the confirmation does not match)');
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     const stored = await insertOwnerRule(db, ctx, actor, r, true, { authorityType: 'temporary' });
     await writeAudit(db, actor, { action: 'authority.temporary.create', entityType: 'delegated_authority', entityId: stored.id, projectId: r.project_id, after: { code: stored.code, start_at: r.start_at, end_at: r.end_at }, details: r.description });
     return stored;
@@ -421,7 +422,7 @@ export async function extendTemporary(pool: Pool, ctx: AccessContext, actor: Aud
   const b = asObject(body);
   const { old, r } = await buildExtension(pool, id, b, now);
   if (b.confirmation !== hash({ kind: 'extend', id, r: { ...r, start_at: 'now' } })) throw new ValidationError('Preview the extension first, then confirm it (the confirmation does not match)');
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     const locked = (await db.query('SELECT active FROM delegated_authorities WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!locked?.active) throw new ValidationError(`${old.code} was changed meanwhile`);
     await db.query(`UPDATE delegated_authorities SET active = false, deactivated_at = now(), deactivated_by = $2, deactivation_reason = $3, updated_at = now() WHERE id = $1`, [id, ctx.user.id, 'Replaced by its extension']);
@@ -566,7 +567,7 @@ export async function activateAbsence(pool: Pool, ctx: AccessContext, actor: Aud
   const a = await buildAbsence(pool, ctx, b, now);
   const expected = hash({ kind: 'absence', a: { b: a.backup.id, t: a.types, v: a.maxValue, r: a.maxRisk, s: a.startGiven, e: a.end, p: a.project_id, c: a.client_id, reason: a.reason } });
   if (b.confirmation !== expected) throw new ValidationError('Preview the absence first, then confirm it (the confirmation does not match)');
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     await db.query(`SELECT pg_advisory_xact_lock(hashtext('owner_absences'))`);
     const clash = (await db.query(`SELECT id FROM owner_absences WHERE status IN ('scheduled', 'active') AND start_at < $2 AND end_at > $1`, [a.start, a.end])).rows[0];
     if (clash) throw new ValidationError(`Another absence (${clash.id}) overlaps this period`);
@@ -597,7 +598,7 @@ export async function endAbsence(pool: Pool, ctx: AccessContext, actor: AuditAct
   refuse(b, ['reason']);
   const reason = typeof b.reason === 'string' ? b.reason.trim() : '';
   if (!reason) throw new ValidationError('A reason is required');
-  return withTransaction(pool, (db) => closeAbsence(db, actor, id, now, { by: ctx.user.id, reason }));
+  return withUserTransaction(pool, ctx, (db) => closeAbsence(db, actor, id, now, { by: ctx.user.id, reason }));
 }
 
 async function closeAbsence(db: PoolClient, actor: AuditActor, id: string, now: Date, opts: { by: string | null; reason: string }) {

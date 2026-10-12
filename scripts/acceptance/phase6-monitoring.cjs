@@ -153,7 +153,7 @@ const inbox = async (page) => {
     await call(pm, 'POST', `/api/drawings/dwg-p6m-${RUN}/revisions`, { id: rev, revision: 'Rev 1', title: 'Rev 1', file_url: '/p6m.pdf', notes: '', drawing_type: 'Client / Designer Drawing' }, 201);
     await call(pm, 'POST', `/api/drawings/dwg-p6m-${RUN}/revisions/${rev}/status`, { status: 'Internal Review' }, 200);
     const before = route('drawing_revision', rev);
-    q(`update delegated_authorities set start_at = now() - interval '9 days', end_at = now() - interval '1 minute' where id = '${rule.id}'`);
+    L.psqlAdmin(`update delegated_authorities set start_at = now() - interval '9 days', end_at = now() - interval '1 minute' where id = '${rule.id}'`);
     const refused = await L.api(pm, 'POST', `/api/drawings/dwg-p6m-${RUN}/revisions/${rev}/status`, { status: 'Approved' });
     await monitor();
     const after = route('drawing_revision', rev);

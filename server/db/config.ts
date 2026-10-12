@@ -39,3 +39,15 @@ export function readDatabaseSettings(env: NodeJS.ProcessEnv = process.env): Data
     },
   };
 }
+
+/**
+ * Account administration from the command line (first Owner, development seed, Owner recovery):
+ * the migrator credential (DATABASE_MIGRATION_URL) when it is set, because the runtime credential
+ * cannot create or change accounts without a signed-in Owner or Admin (migration 031). Falls back
+ * to DATABASE_URL for a development database that does not separate roles.
+ */
+export function readAccountAdminSettings(env: NodeJS.ProcessEnv = process.env): { pool?: DatabaseSettings['pool']; credential: string } {
+  const admin = env.DATABASE_MIGRATION_URL?.trim();
+  if (!admin) return { pool: readDatabaseSettings(env).pool, credential: 'DATABASE_URL' };
+  return { pool: readDatabaseSettings({ ...env, DATABASE_URL: admin }).pool, credential: 'DATABASE_MIGRATION_URL' };
+}

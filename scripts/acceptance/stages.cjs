@@ -1,5 +1,5 @@
 module.exports = (H) => {
-  const { L, S, dialog, field, as, fresh, commercialTab, record } = H;
+  const { L, S, dialog, field, as, fresh, activated, commercialTab, record } = H;
   const q = (sql) => L.psql(sql);
   const stages = [];
   const stage = (n, name, run) => stages.push({ n, name, run });
@@ -465,9 +465,10 @@ module.exports = (H) => {
     await dialog(admin).getByLabel('Email address').fill(`lim${S.RUN}@dev.nwos.local`);
     await dialog(admin).getByLabel('Role', { exact: true }).selectOption('Client');
     await dialog(admin).getByLabel('Client company').selectOption('client-2');
-    await dialog(admin).getByLabel('Password', { exact: true }).fill('dev-password-123');
     await dialog(admin).getByRole('button', { name: 'Create account' }).click(); await admin.waitForTimeout(1000);
-    const client = await as(`lim${S.RUN}`);
+    // Batch 12B: no password is set by the Admin; the account holder sets theirs with the code.
+    const code = (await admin.getByTestId('issued-code-value').innerText()).trim();
+    const client = await activated(`lim${S.RUN}`, code);
     await openVariation(client);
     const sees = await client.locator('body').innerText();
     await client.getByRole('button', { name: 'Accept variation' }).click(); await L.settle(client);

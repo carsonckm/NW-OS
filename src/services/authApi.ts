@@ -52,6 +52,13 @@ export const authApi = {
     return body.user;
   },
 
+  /** Sets a new password with an activation / reset code (no session needed). */
+  async activate(email: string, code: string, password: string): Promise<void> {
+    const res = await post('/api/auth/activate', { email, code, password });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || 'The code could not be used');
+  },
+
   async logout() {
     await post('/api/auth/logout').catch(() => undefined);
   },

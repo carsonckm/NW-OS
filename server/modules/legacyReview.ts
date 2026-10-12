@@ -22,7 +22,8 @@ import type { AccessContext } from '../auth/access';
 import { ForbiddenError } from '../auth/access';
 import { writeAudit, type AuditActor } from '../audit';
 import { NotFoundError, ValidationError } from '../core/repository';
-import { withTransaction, type Pool, type PoolClient } from '../db/pool';
+import { withUserTransaction } from '../auth/identity';
+import type { Pool, PoolClient } from '../db/pool';
 import { authorityAudit, requireAuthority } from './authorityResolver';
 
 type Db = Pool | PoolClient;
@@ -117,7 +118,7 @@ export async function decideLegacyReview(pool: Pool, ctx: AccessContext, actor: 
   const reason = typeof b.reason === 'string' ? b.reason.trim() : '';
   if (!reason) throw new ValidationError('A reason is required');
 
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     const notFound = () => Object.assign(new NotFoundError('clients', recordId), { message: `Legacy review ${kind} ${recordId} not found` });
     const item = (await db.query('SELECT * FROM legacy_review_items WHERE kind = $1 AND record_id = $2', [kind, recordId])).rows[0] as Row | undefined;
     if (!item || (item.project_id && !ctx.canSeeProject(item.project_id))) throw notFound();

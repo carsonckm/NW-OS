@@ -14,6 +14,8 @@ type Row = Record<string, any>;
 describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engine', () => {
   let db: TestDb;
   let as: Record<string, request.Agent> = {};
+  // Deactivation ends a user's sessions in the database (migration 031): sign them in again.
+  let relogin: (userId: string) => Promise<void>;
   let app: Parameters<typeof request>[0];
   /** Two Normal projects the PM works on, with their clients. */
   let projA = '';
@@ -22,7 +24,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
   let clientB = '';
   const seen = new Set<string>();
   beforeAll(async () => {
-    ({ db, as, app } = (await setupDemoWorld()) as never);
+    ({ db, as, app, relogin } = (await setupDemoWorld()) as never);
     const pm = await ctxOf('user-pm');
     const projects = (await db.pool.query(`SELECT id, client_id FROM projects WHERE id <> 'proj-x' ORDER BY id`)).rows.filter((p) => pm.canSeeProject(p.id));
     [projA, projB] = [projects[0].id, projects[1].id];
@@ -37,7 +39,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     // Routes that cite a rule keep it from being deleted (as they should); this file's tests
     // don't use routes, so clear them first (test database only).
     await db.pool.query(`DELETE FROM approval_routes`);
-    await db.pool.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
+    await db.owner.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
   });
 
   const owner = () => as['Owner / CEO'];
@@ -124,11 +126,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     });
 
     it('lets the Owner decide without any rule', async () => {
-      await db.pool.query(`UPDATE delegated_authorities SET active = false WHERE id = 'sys-variation'`);
+      await db.owner.query(`UPDATE delegated_authorities SET active = false WHERE id = 'sys-variation'`);
       const id = await variation(projB, 5000, 'Project Manager');
       const r = codesSeen(await resolve('user-owner', vo(id)));
       expect(r).toMatchObject({ allowed: true, reasonCode: 'ALLOWED', basis: 'owner', matchedRuleId: null });
-      await db.pool.query(`UPDATE delegated_authorities SET active = true WHERE id = 'sys-variation'`);
+      await db.owner.query(`UPDATE delegated_authorities SET active = true WHERE id = 'sys-variation'`);
     });
 
     it('keeps its decision types and reason codes stable', () => {
@@ -169,9 +171,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       // Batch 12A: a request is decided under the Owner's rules (no requester-chosen approver).
       const pmRequests = await grant({ name: 'PM requests', decision_type: 'approval_request', project_id: projA });
       expect((await resolve('user-pm', { resource: { kind: 'approval', id: req } })).allowed).toBe(true);
-      await db.pool.query(`UPDATE authority_decision_types SET active = false WHERE key = 'approval_request'`);
+      await db.owner.query(`UPDATE authority_decision_types SET active = false WHERE key = 'approval_request'`);
       expect(await resolve('user-pm', { resource: { kind: 'approval', id: req } })).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT', requiresOwner: true });
-      await db.pool.query(`UPDATE authority_decision_types SET active = true WHERE key = 'approval_request'`);
+      await db.owner.query(`UPDATE authority_decision_types SET active = true WHERE key = 'approval_request'`);
       await owner().post(`/api/authority/rules/${pmRequests.id}/deactivate`).send({ reason: 'test finished' }).expect(200);
       expect(await resolve('user-pm', vo('vo-nope'))).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT', requiresOwner: true });
     });
@@ -184,11 +186,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
 
     it('a rule without the baseline: denied', async () => {
       // A rule the API would refuse (Admin lacks drawings.review), as if the role had lost it.
-      await db.pool.query(`INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, target_role, granted_by) VALUES ('da-nobase', 'DA-NOBASE', 'Admin drawings', 'x', 'owner', 'allow', 'drawing', 'Admin', 'user-owner')`);
+      await db.owner.query(`INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, target_role, granted_by) VALUES ('da-nobase', 'DA-NOBASE', 'Admin drawings', 'x', 'owner', 'allow', 'drawing', 'Admin', 'user-owner')`);
       const r = codesSeen(await resolve('user-admin', { resource: { kind: 'drawing_revision', id: await revision() } }));
       expect(r).toMatchObject({ allowed: false, reasonCode: 'INSUFFICIENT_PERMISSION', baselinePermission: 'drawings.review' });
       await db.pool.query('DELETE FROM approval_routes');
-      await db.pool.query(`DELETE FROM delegated_authorities WHERE id = 'da-nobase'`);
+      await db.owner.query(`DELETE FROM delegated_authorities WHERE id = 'da-nobase'`);
     });
 
     it('both: allowed (subject to everything else)', async () => {
@@ -243,10 +245,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       const id = await variation(projA, 100);
       const later = await grant({ start_at: new Date(Date.now() + 86400_000).toISOString() });
       expect(codesSeen(await resolve('user-pm', vo(id)))).toMatchObject({ reasonCode: 'AUTHORITY_NOT_YET_ACTIVE', matchedRuleCode: later.code, evaluatedDates: { passed: false } });
-      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '10 days', end_at = now() - interval '1 day' WHERE id = $1`, [later.id]);
+      await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '10 days', end_at = now() - interval '1 day' WHERE id = $1`, [later.id]);
       expect(codesSeen(await resolve('user-pm', vo(id)))).toMatchObject({ reasonCode: 'AUTHORITY_EXPIRED', matchedRuleCode: later.code });
       await db.pool.query('DELETE FROM approval_routes');
-      await db.pool.query('DELETE FROM delegated_authorities WHERE id = $1', [later.id]);
+      await db.owner.query('DELETE FROM delegated_authorities WHERE id = $1', [later.id]);
       const off = await grant({ name: 'Paused' });
       await owner().post(`/api/authority/rules/${off.id}/deactivate`).send({ reason: 'PM on leave' }).expect(200);
       expect(codesSeen(await resolve('user-pm', vo(id)))).toMatchObject({ reasonCode: 'AUTHORITY_DEACTIVATED', matchedRuleCode: off.code });
@@ -265,8 +267,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     });
 
     it('user-specific and role-specific rules', async () => {
-      await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm2', 'Second PM', 'pm2@test.local', 'x', 'Project Manager', true) ON CONFLICT DO NOTHING`);
-      await db.pool.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2') ON CONFLICT DO NOTHING`, [projA]);
+      await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-pm2', 'Second PM', 'pm2@test.local', 'Project Manager', true) ON CONFLICT DO NOTHING`);
+      await db.owner.query(`INSERT INTO project_assignments (project_id, user_id) VALUES ($1, 'user-pm2') ON CONFLICT DO NOTHING`, [projA]);
       const id = await variation(projA, 100);
       await grant({ target_role: undefined, target_user_id: 'user-pm' });
       expect((await resolve('user-pm', vo(id))).allowed).toBe(true);
@@ -458,11 +460,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     it('direct API access without a session, or with a deactivated account, is refused', async () => {
       const req = await approvalRequest('Purchasing', { approval_type: 'Safety-Critical Decision' });
       expect((await request(app).post(`/api/approvals/${req}/decision`).send({ decision: 'Approved' })).status).toBe(401);
-      await db.pool.query(`UPDATE users SET is_active = false WHERE id = 'user-pm'`);
+      await db.owner.query(`UPDATE users SET is_active = false WHERE id = 'user-pm'`);
       expect((await decide('Project Manager', req)).status).toBe(401);
       const stale = await ctxOf('user-pm');
       expect(codesSeen(await resolveApprovalAuthority(db.pool, stale, { resource: { kind: 'approval', id: req } }))).toMatchObject({ allowed: false, reasonCode: 'INVALID_AUTHORITY_CONTEXT' });
-      await db.pool.query(`UPDATE users SET is_active = true WHERE id = 'user-pm'`);
+      await db.owner.query(`UPDATE users SET is_active = true WHERE id = 'user-pm'`);
+      await relogin('user-pm');
     });
   });
 
@@ -492,7 +495,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
     });
 
     it('a matching rule without the baseline permission -> INSUFFICIENT_PERMISSION', async () => {
-      await db.pool.query(`INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, target_role, project_id, granted_by) VALUES ('da-nobase2', 'DA-NOBASE2', 'Admin variations', 'x', 'owner', 'allow', 'variation', 'Admin', $1, 'user-owner')`, [projA]);
+      await db.owner.query(`INSERT INTO delegated_authorities (id, code, name, description, kind, effect, decision_type, target_role, project_id, granted_by) VALUES ('da-nobase2', 'DA-NOBASE2', 'Admin variations', 'x', 'owner', 'allow', 'variation', 'Admin', $1, 'user-owner')`, [projA]);
       expect((await resolve('user-admin', vo(await variation(projA, 100)))).reasonCode).toBe('INSUFFICIENT_PERMISSION');
     });
 
@@ -511,7 +514,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       await owner().post(`/api/authority/rules/${elsewhere.id}/deactivate`).send({ reason: 'x' }).expect(200);
       expect((await resolve('user-pm', vo(id))).reasonCode).toBe('NO_MATCHING_AUTHORITY');
       const expired = await grant({ project_id: projB, name: 'Expired elsewhere' });
-      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [expired.id]);
+      await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [expired.id]);
       expect((await resolve('user-pm', vo(id))).reasonCode).toBe('NO_MATCHING_AUTHORITY');
     });
 
@@ -525,9 +528,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       const off = await grant({ project_id: projB, name: 'Other project, off', priority: 800 });
       await owner().post(`/api/authority/rules/${off.id}/deactivate`).send({ reason: 'x' }).expect(200);
       const old = await grant({ project_id: projB, name: 'Other project, expired', priority: 800 });
-      await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [old.id]);
+      await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [old.id]);
       await grant({ target_role: 'Production Manager', decision_type: 'drawing', name: 'Someone else, drawings', priority: 800 });
-      await db.pool.query(`INSERT INTO users (id, name, email, password_hash, role, is_active) VALUES ('user-pm3', 'Third PM', 'pm3@test.local', 'x', 'Project Manager', true) ON CONFLICT DO NOTHING`);
+      await db.owner.query(`INSERT INTO users (id, name, email, role, is_active) VALUES ('user-pm3', 'Third PM', 'pm3@test.local', 'Project Manager', true) ON CONFLICT DO NOTHING`);
       await grant({ target_role: undefined, target_user_id: 'user-pm3', name: 'Another PM', priority: 800 });
       await grant({ decision_type: 'drawing', name: 'PM drawings', priority: 800 });
       const after = await resolve('user-pm', vo(id));
@@ -538,11 +541,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 6 batch 2: authority resolution engin
       const id = await variation(projA, 5000);
       const run = async (order: 'value-first' | 'expired-first') => {
         await db.pool.query(`DELETE FROM approval_routes`);
-        await db.pool.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
+        await db.owner.query(`DELETE FROM delegated_authorities WHERE kind = 'owner'`);
         const make = async (k: string) => {
           if (k === 'value') return grant({ max_value: 1000, priority: 600, name: 'Value' });
           const r = await grant({ priority: 100, name: 'Expired' });
-          await db.pool.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [r.id]);
+          await db.owner.query(`UPDATE delegated_authorities SET start_at = now() - interval '9 days', end_at = now() - interval '1 day' WHERE id = $1`, [r.id]);
           return r;
         };
         const [first, second] = order === 'value-first' ? ['value', 'expired'] : ['expired', 'value'];

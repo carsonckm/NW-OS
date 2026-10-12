@@ -62,7 +62,7 @@ export function requireUser(req: Request, res: Response, next: NextFunction) {
 export function loadAccess(pool: Pool) {
   return async (req: Request, _res: Response, next: NextFunction) => {
     try {
-      req.access = await AccessContext.load(pool, req.auth!.user);
+      req.access = await AccessContext.load(pool, req.auth!.user, { sessionToken: req.auth!.token });
       next();
     } catch (err) {
       next(err);

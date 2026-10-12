@@ -84,11 +84,23 @@ Rules enforced on the server, whatever the browser sends:
 
 ## Accounts
 
-- **First real account (production):**
-  `NEW_USER_PASSWORD='…' npm run auth:create-user -- --email you@company.com --name "Your Name" --role "Owner / CEO"`
+- **Passwords are only ever set by the account holder** (Batch 12B), with an individual,
+  single-use, expiring code: no administrator chooses or sees anyone's password, and there is
+  no default password. See `docs/trusted-identity.md` §4–§5.
+- **First real account (production):** on the migrator credential,
+  `npm run auth:create-user -- --email you@company.com --name "Your Name" --role "Owner / CEO"`
+  prints an activation code once (valid 3 days); the holder uses it on the sign-in screen
+  ("Set a new password with a code").
 - **More accounts:** `POST /api/users` (needs `users.manage`; only an Owner can create or
-  change Owner accounts; nobody can change their own role or deactivate themselves).
-  Assign projects with `PUT /api/users/:id/projects`.
+  change Owner or Admin accounts; nobody can change their own role or deactivate themselves).
+  The response carries the new account's activation code, shown once. Assign projects with
+  `PUT /api/users/:id/projects`.
+- **Password resets:** `POST /api/users/:id/reset-code` (the Owner for any other account; an
+  Admin for accounts that are neither Owner nor Admin). The account's password and sessions end
+  at once; the holder sets a new password with the code (valid 24 hours). The holder submits it
+  with `POST /api/auth/activate` (`email`, `code`, `password`).
+- **Owner recovery:** `npm run auth:recover-owner` on the migrator credential only
+  (`docs/trusted-identity.md` §5).
 - **Development accounts:** `DEV_SEED_PASSWORD='…' npm run auth:seed-dev -- --with-demo-data`
   creates one `<role>@dev.nwos.local` account per role, flagged `is_dev_seed`. The script
   refuses to run with `NODE_ENV=production`, has no built-in password, and the server
@@ -100,5 +112,4 @@ Rules enforced on the server, whatever the browser sends:
   (see the Phase 3 report). Demo data for the server is shipped in the JavaScript bundle
   for demo mode; in database mode the server only returns what the user may see.
 - The login rate limit is in memory, per server process.
-- The User Management screen still edits browser-side demo users; real accounts are managed
-  through the API or the CLI.
+- Codes are handed over by whoever issued them (no email delivery is built in).

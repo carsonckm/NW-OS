@@ -502,7 +502,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('Phase 6 batch 1
       const locked = (await appPool.query(`SELECT id, code FROM delegated_authorities WHERE locked LIMIT 1`)).rows[0];
       expect(locked).toBeDefined();
       await refused(`UPDATE delegated_authorities SET active = false WHERE id = '${locked.id}'`, /is locked/);
-      await refused(`DELETE FROM delegated_authorities WHERE id = '${locked.id}'`, /is locked/);
+      await refused(`DELETE FROM delegated_authorities WHERE id = '${locked.id}'`, /is locked|needs the signed-in Owner/);
       await refused(`ALTER TABLE delegated_authorities DISABLE TRIGGER delegated_authorities_locked_guard`);
     });
   });

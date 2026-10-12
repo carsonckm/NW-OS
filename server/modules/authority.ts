@@ -12,12 +12,13 @@
  * created, changed or reactivated onto a project whose sensitivity reserves that decision for
  * the Owner, and the Sensitive / Strategic System Policy rows are locked.
  */
+import { withUserTransaction } from '../auth/identity';
 import { randomUUID } from 'crypto';
 import { ForbiddenError, type AccessContext } from '../auth/access';
 import { isRole, permissionsFor } from '../auth/permissions';
 import { writeAudit, type AuditActor } from '../audit';
 import { NotFoundError, ValidationError } from '../core/repository';
-import { withTransaction, type Pool, type PoolClient } from '../db/pool';
+import type { Pool, PoolClient } from '../db/pool';
 import { ruleExceedsCeiling } from './authorityCeiling';
 import { reevaluateRoutes } from './approvalRouting';
 import type { PermissionKey, UserRole } from '../../src/types';
@@ -269,7 +270,7 @@ export async function createRule(pool: Pool, ctx: AccessContext, actor: AuditAct
   const r = await validateOwnerRule(pool, body, now, { creating: true });
   const active = body.active === undefined ? true : body.active;
   if (typeof active !== 'boolean') throw new ValidationError('active must be true or false');
-  return withTransaction(pool, (db) => insertOwnerRule(db, ctx, actor, r, active));
+  return withUserTransaction(pool, ctx, (db) => insertOwnerRule(db, ctx, actor, r, active));
 }
 
 /**
@@ -308,7 +309,7 @@ export async function updateRule(pool: Pool, ctx: AccessContext, actor: AuditAct
   refuseUnknown(body, [...UPDATABLE, 'change_reason']);
   const reason = str(body.change_reason);
   if (!reason) throw new ValidationError('change_reason is required');
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     const existing = (await db.query('SELECT * FROM delegated_authorities WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!existing) throw notFound(`Authority rule ${id}`);
     if (existing.kind === 'system') {
@@ -348,7 +349,7 @@ export async function setRuleActive(pool: Pool, ctx: AccessContext, actor: Audit
   refuseUnknown(b, ['reason']);
   const reason = str(b.reason);
   if (!reason) throw new ValidationError(`A reason is required to ${active ? 'reactivate' : 'deactivate'} a rule`);
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     const existing = (await db.query('SELECT * FROM delegated_authorities WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!existing) throw notFound(`Authority rule ${id}`);
     if (existing.active === active) throw new ValidationError(`Rule ${existing.code} is already ${active ? 'active' : 'inactive'}`);
@@ -408,7 +409,7 @@ export async function setProjectSensitivity(pool: Pool, ctx: AccessContext, acto
   const reason = str(b.reason);
   if (!reason) throw new ValidationError('A reason is required to change project sensitivity');
   if (!ctx.canSeeProject(projectId)) throw notFound(`Project ${projectId}`);
-  return withTransaction(pool, async (db) => {
+  return withUserTransaction(pool, ctx, async (db) => {
     const p = (await db.query('SELECT id, project_name, sensitivity FROM projects WHERE id = $1 FOR UPDATE', [projectId])).rows[0];
     if (!p) throw notFound(`Project ${projectId}`);
     if (p.sensitivity === b.sensitivity) return { project_id: p.id, project_name: p.project_name, sensitivity: p.sensitivity, changed: false, rules_above_ceiling: [] };

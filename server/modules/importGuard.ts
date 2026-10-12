@@ -35,7 +35,10 @@ export async function guardImportedRecord(h: HookContext, collection: string, re
   switch (collection) {
     case 'purchaseOrders': {
       const po = withComputedTotal(record);
-      if (isIssuedState(po.status)) {
+      // A server-side administrative import (the demo seed, run with database credentials) has
+      // no person behind it: it is recorded as such, and grants nothing. Imports through the API
+      // carry the signed-in importer, whose authority decides.
+      if (isIssuedState(po.status) && !h.ctx.background) {
         await requireAuthority(
           h.db,
           h.ctx,
