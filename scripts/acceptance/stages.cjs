@@ -128,10 +128,12 @@ module.exports = (H) => {
     await pm.getByPlaceholder('e.g. A-103').fill(S.dwgNumber);
     await pm.getByPlaceholder('e.g. Checkout Counter Detailed Joinery Plan').fill('Sky Lounge bar counter');
     await pm.getByPlaceholder(/Issued for tender review/).fill('Client designer drawing, bar counter 3600mm');
+    // The real drawing file: stored privately on the server and linked to the revision.
+    await pm.getByLabel('Drawing file').setInputFiles({ name: `${S.dwgNumber}_Rev1.pdf`, mimeType: 'application/pdf', buffer: Buffer.from(`%PDF-1.7\n% ${S.dwgNumber} bar counter\n%%EOF\n`) });
     await pm.getByRole('button', { name: 'Upload & Register Drawing' }).click();
     await L.settle(pm);
     S.dwg = q(`select id from drawings where data->>'drawing_number'='${S.dwgNumber}'`);
-    record(8, 'UI: Drawings › + Upload New Drawing (PM)', `drawing ${S.dwg} project=${q(`select project_id from drawings where id='${S.dwg}'`)}; revisions ${q(`select string_agg(revision||':'||approval_status||':current='||is_current, ', ') from drawing_revisions where drawing_id='${S.dwg}'`)}`);
+    record(8, 'UI: Drawings › + Upload New Drawing (PM)', `drawing ${S.dwg} project=${q(`select project_id from drawings where id='${S.dwg}'`)}; revisions ${q(`select string_agg(revision||':'||approval_status||':current='||is_current, ', ') from drawing_revisions where drawing_id='${S.dwg}'`)}; stored file ${q(`select file_name||' '||size_bytes||' bytes, revision '||coalesce(revision_id,'-') from files where record_id='${S.dwg}'`)}`);
   });
 
   stage(9, 'Drawing review', async () => {
