@@ -1,0 +1,33 @@
+# The release step: runs the database migrations (and re-applies the runtime grants) with the
+# migrator credential, which the service never has. Run before every new service revision:
+#   gcloud run jobs replace deploy/cloudrun/staging-migrate-job.yaml --region asia-southeast1 --project PROJECT_ID
+#   gcloud run jobs execute nwos-staging-migrate --region asia-southeast1 --project PROJECT_ID --wait
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: nwos-staging-migrate
+  labels:
+    app: nwos
+    env: staging
+spec:
+  template:
+    spec:
+      taskCount: 1
+      template:
+        spec:
+          serviceAccountName: nwos-staging-release@PROJECT_ID.iam.gserviceaccount.com
+          maxRetries: 0
+          timeoutSeconds: 900
+          containers:
+            - image: asia-southeast1-docker.pkg.dev/PROJECT_ID/nwos/nwos:IMAGE_TAG
+              command: ["node", "dist/tools/db-migrate.cjs"]
+              env:
+                - name: DATABASE_SSL
+                  value: require
+                # Session-mode connection (Supabase: the session pooler or direct connection on
+                # port 5432, not the transaction pooler): migrations use SET ROLE and a session lock.
+                - name: DATABASE_MIGRATION_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: nwos-staging-database-url-migrator
+                      key: latest

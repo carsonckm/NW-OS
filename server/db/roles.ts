@@ -27,9 +27,9 @@ export interface RoleNames {
 export const DEFAULT_ROLES: RoleNames = { owner: 'nwos_owner', migrator: 'nwos_migrator', app: 'nwos_app' };
 
 /** History tables: the application may read and append, never change or remove. */
-export const APPEND_ONLY_TABLES = ['audit_logs', 'owner_exception_events', 'delivery_receipts', 'legacy_review_items', 'legacy_review_decisions'];
+export const APPEND_ONLY_TABLES = ['audit_logs', 'owner_exception_events', 'delivery_receipts', 'legacy_review_items', 'legacy_review_decisions', 'file_contents'];
 /** Records the application updates but never deletes (their triggers refuse deletes too). */
-export const NO_DELETE_TABLES = ['owner_exception_states', 'owner_exception_snoozes', 'drawing_revisions', 'owner_exception_integrity_findings'];
+export const NO_DELETE_TABLES = ['owner_exception_states', 'owner_exception_snoozes', 'drawing_revisions', 'owner_exception_integrity_findings', 'files', 'contractors'];
 /** Managed by the migrator only. */
 export const READ_ONLY_TABLES = ['schema_migrations', 'authority_decision_types'];
 /**
@@ -55,6 +55,13 @@ export const AUTH_API_FUNCTIONS = [
   'auth_account_status()',
   'auth_purge_expired()',
 ];
+
+/**
+ * Supabase's Data API (PostgREST) roles. NW OS never uses the Data API; whatever access these
+ * roles have to NW OS's tables would bypass every protection in the server, so the runtime grants
+ * revoke it and the privilege report fails while any remains (docs/staging.md).
+ */
+export const PLATFORM_API_ROLES = ['anon', 'authenticated', 'service_role'];
 
 const NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 export function roleNamesFromEnv(env: NodeJS.ProcessEnv = process.env): RoleNames {
@@ -105,6 +112,14 @@ export async function applyRuntimeGrants(db: Db, schema: string, roles: RoleName
     `ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA ${s} REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`,
   ].filter(Boolean) as string[];
   for (const q of stmts) await db.query(q);
+  // Supabase Data API roles: no access to NW OS's tables, sequences or functions.
+  const platform = (await db.query('SELECT rolname FROM pg_roles WHERE rolname = ANY($1)', [PLATFORM_API_ROLES])).rows.map((r) => ident(r.rolname as string));
+  if (platform.length) {
+    for (const kind of ['TABLES', 'SEQUENCES', 'FUNCTIONS']) {
+      await db.query(`REVOKE ALL ON ALL ${kind} IN SCHEMA ${s} FROM ${platform.join(', ')}`);
+      await db.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA ${s} REVOKE ALL ON ${kind} FROM ${platform.join(', ')}`);
+    }
+  }
   // NW OS's own functions are trigger functions: they fire without EXECUTE and nobody needs to
   // call them. Functions that belong to an extension installed in the schema (pgcrypto, citext,
   // ...) are the extension's, not NW OS's: their privileges are left as the extension set them.
@@ -215,6 +230,16 @@ export async function runtimePrivilegeReport(db: Db, schema?: string): Promise<P
       if (sel || p.ins || p.up || p.de) issues.push(`can read or write ${t.relname} directly`);
     }
   }
+  // Supabase Data API roles must not reach any NW OS table (applyRuntimeGrants revokes it).
+  const exposed = (await db.query(
+    `SELECT r.rolname, count(*)::int AS n FROM pg_roles r
+       CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE r.rolname = ANY($2) AND n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm')
+        AND has_table_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+      GROUP BY r.rolname ORDER BY r.rolname`,
+    [sch, PLATFORM_API_ROLES]
+  )).rows;
+  for (const e of exposed) issues.push(`the Supabase Data API role ${e.rolname} can read or write ${e.n} NW OS table(s): disable the Data API and re-run the migrations (runtime grants)`);
   const predefined = (await db.query(`SELECT rolname FROM pg_roles WHERE rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program', 'pg_signal_backend', 'pg_write_all_data') AND pg_has_role(current_user, oid, 'MEMBER')`)).rows.map((x) => x.rolname);
   if (predefined.length) issues.push(`holds server roles: ${predefined.join(', ')}`);
   return { user: who.u, schema: sch, issues };

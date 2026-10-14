@@ -147,6 +147,17 @@ export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStor
   const ownerGuard = (actor: AuthUser, target: AuthUser | undefined, role: unknown) =>
     actor.role === 'Owner / CEO' || (!MANAGED_BY_OWNER.has(String(target?.role)) && !MANAGED_BY_OWNER.has(String(role)));
 
+  // A Contractor account belongs to a subcontractor in the shared register (migration 032).
+  const contractorProblem = async (role: unknown, contractorId: unknown) => {
+    if (role !== 'Contractor') return undefined;
+    if (typeof contractorId !== 'string' || !contractorId.trim()) return 'A Contractor account needs a subcontractor (contractor_id)';
+    const c = (await pool.query(`SELECT is_active, data->>'needs_details' = 'true' AS placeholder FROM contractors WHERE id = $1`, [contractorId])).rows[0];
+    if (!c) return `Unknown subcontractor ${contractorId}: add it to the subcontractor register first`;
+    if (!c.is_active) return `Subcontractor ${contractorId} is inactive`;
+    if (c.placeholder) return `Subcontractor ${contractorId} is an unverified placeholder: record its contact person and phone or email first`;
+    return undefined;
+  };
+
   router.get(
     '/',
     wrap(async (req, res) => {
@@ -166,6 +177,8 @@ export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStor
       }
       if ('password' in body) return res.status(400).json(NO_ADMIN_PASSWORDS);
       if (!ownerGuard(req.auth!.user, undefined, body.role)) return forbid(res, 'Only an Owner can create Owner or Admin accounts');
+      const linkProblem = await contractorProblem(body.role, body.contractor_id);
+      if (linkProblem) return res.status(400).json({ error: 'validation_error', message: linkProblem });
       // The account starts without a password; its holder sets one with the activation code,
       // which is shown once to the creator here and never stored or logged.
       let activation: { code: string; expires_at: string } | undefined;
@@ -203,6 +216,10 @@ export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStor
         return forbid(res, 'You cannot change your own role or deactivate yourself');
       }
       if ('password' in body) return res.status(400).json(NO_ADMIN_PASSWORDS);
+      if ('role' in body || 'contractor_id' in body) {
+        const linkProblem = await contractorProblem(body.role ?? target.role, 'contractor_id' in body ? body.contractor_id : target.contractor_id);
+        if (linkProblem) return res.status(400).json({ error: 'validation_error', message: linkProblem });
+      }
       const patch: Record<string, unknown> = {};
       for (const f of USER_FIELDS) if (f in body) patch[f] = body[f];
       const auditPatch = patch;

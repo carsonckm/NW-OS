@@ -10,6 +10,7 @@ import { HandoverRecord, SiteQCInspection } from '../../types';
 import { useRecords } from '../../services/records';
 import { navigateTo } from '../../services/navigation';
 import { FormError } from '../../components/ui/FormError';
+import { FILE_ACCEPT, uploadFile } from '../../services/files';
 import { Button, Field, Input, Modal, Pill, Select, TextArea, addDays, newId, today } from '../../components/ui/forms';
 
 const FAIL = 'Fail / Rectification Required';
@@ -48,6 +49,8 @@ export const SiteQCForm: React.FC<{ onClose: () => void; installationJobId?: str
   const [defects, setDefects] = useState('');
   const [comments, setComments] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
+  // Database mode: the photos themselves, stored privately with the installation job.
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [date, setDate] = useState(today());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +100,13 @@ export const SiteQCForm: React.FC<{ onClose: () => void; installationJobId?: str
       if (!records.live) {
         setSaved(recordSiteQCInspection(inspection));
         return;
+      }
+      if (photoFiles.length) {
+        const urls: string[] = [];
+        for (const f of photoFiles) urls.push((await uploadFile(f, { purpose: 'site_photo', recordCollection: 'installationJobs', recordId: job.id })).url);
+        const rec = inspection as unknown as { photos: string[]; snag_items: { photos_before: string[] }[] };
+        rec.photos = urls;
+        for (const snag of rec.snag_items) snag.photos_before = urls;
       }
       const stored = await records.create<SiteQCInspection>('siteQCInspections', inspection);
       if (stored.result === FAIL) await records.refresh('issues');
@@ -187,7 +197,17 @@ export const SiteQCForm: React.FC<{ onClose: () => void; installationJobId?: str
           </Select>
         </Field>
         <Field label="Photos" hint={photos.length ? photos.join(', ') : 'Attach site photos of the inspected item.'}>
-          <Input type="file" multiple accept="image/*" onChange={(e) => setPhotos(Array.from(e.target.files ?? []).map((f) => f.name))} />
+          <Input
+            type="file"
+            multiple
+            accept={FILE_ACCEPT.site_photo}
+            aria-label="Site photos"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              setPhotoFiles(files);
+              setPhotos(files.map((f) => f.name));
+            }}
+          />
         </Field>
       </div>
       {effective !== 'Pass' && (

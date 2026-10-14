@@ -904,7 +904,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   // Database sync for the core chain; a no-op unless the server runs with CORE_DATA_SOURCE=database.
   // Collections backed by PostgreSQL in database mode (see services/syncedCollections.ts).
   const syncedData = {
-    clients, projects, workPackages, workItems,
+    clients, projects, workPackages, workItems, contractors,
     drawings, documents, issues, tasks, escalations, approvals, variations, clientChangeRequests, qcRecords,
     siteMeasurements, productionOrders, productionParts, cncJobs, assemblyJobs, finishingJobs, factoryQCInspections,
     packingPackages, productionIssues, cncFileVersions, productionMaterials, deliveryRecords, installationJobs,
@@ -916,6 +916,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     () =>
       ({
         clients: setClients, projects: setProjects, workPackages: setWorkPackages, workItems: setWorkItems,
+        contractors: setContractors,
         drawings: setDrawings, documents: setDocuments, issues: setIssues, tasks: setTasks, escalations: setEscalations,
         approvals: setApprovals, variations: setVariations, clientChangeRequests: setClientChangeRequests,
         qcRecords: setQcRecords, siteMeasurements: setSiteMeasurements, productionOrders: setProductionOrders,

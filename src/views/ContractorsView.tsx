@@ -421,6 +421,14 @@ export const ContractorsView: React.FC<ContractorsViewProps> = ({ onNavigateToWo
                     <h3 className="text-base font-bold text-slate-900 group-hover:text-amber-700 transition-colors line-clamp-1">
                       {contractor.company_name}
                     </h3>
+                    {contractor.needs_details && (
+                      <span
+                        className="mt-1 inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-300 uppercase"
+                        title="Created automatically for an id that was referenced but never registered. Record the contact person and a phone or email; no Contractor account can be linked until then."
+                      >
+                        Unverified placeholder: needs details
+                      </span>
+                    )}
                     {contractor.registration_number && (
                       <div className="text-[11px] font-mono text-slate-400 mt-0.5">
                         SSM: {contractor.registration_number}

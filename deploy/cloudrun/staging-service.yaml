@@ -1,0 +1,69 @@
+# NW OS staging service on Cloud Run (Singapore). Apply with:
+#   gcloud run services replace deploy/cloudrun/staging-service.yaml --region asia-southeast1 --project PROJECT_ID
+# Replace PROJECT_ID and IMAGE_TAG first. Nothing here is a secret: the database URL comes from
+# Secret Manager. See docs/staging.md.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: nwos-staging
+  labels:
+    app: nwos
+    env: staging
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        # One instance is always running, with its CPU always allocated (instance-based
+        # billing): the automation scheduler (SLA escalation, delegation expiry, Owner exception
+        # lifecycle) runs inside the server and must not be frozen between requests. A second
+        # instance is safe: rule runs are leased in the database (migration 015).
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "2"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/startup-cpu-boost: "true"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      serviceAccountName: nwos-staging-runtime@PROJECT_ID.iam.gserviceaccount.com
+      containerConcurrency: 40
+      timeoutSeconds: 120
+      containers:
+        - image: asia-southeast1-docker.pkg.dev/PROJECT_ID/nwos/nwos:IMAGE_TAG
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              # Uploads (at most 25 MB each) are held in memory while they are checked and stored.
+              memory: 1Gi
+          env:
+            - name: CORE_DATA_SOURCE
+              value: database
+            - name: DATABASE_SSL
+              value: require
+            - name: DATABASE_POOL_MAX
+              value: "8"
+            # Cloud Run's front end adds the client address to X-Forwarded-For. Verify the hop count
+            # in staging (docs/staging.md, step 9) before relying on recorded addresses.
+            - name: TRUST_PROXY
+              value: "1"
+            - name: FILE_MAX_BYTES
+              value: "26214400"
+            # The restricted runtime login (nwos_app). Never the migrator or administrator URL:
+            # the server refuses to start in production with either.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nwos-staging-database-url-app
+                  key: latest
+          startupProbe:
+            httpGet:
+              path: /api/health/live
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+            periodSeconds: 30
+            failureThreshold: 3

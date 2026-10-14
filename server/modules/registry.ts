@@ -9,6 +9,7 @@ import { quotationHooks } from './hooks/commercial';
 import { handoverHooks, issueHooks, taskHooks } from './hooks/workflow';
 import { goodsReceivedHooks, invoiceHooks, purchaseOrderHooks } from './hooks/purchasing';
 import { knowledgeHooks } from './hooks/knowledge';
+import { contractorHooks } from './hooks/contractors';
 import type { ModuleDef } from './types';
 
 /**
@@ -19,6 +20,20 @@ import type { ModuleDef } from './types';
 const num = (f: string) => (r: Record<string, unknown>) => (typeof r[f] === 'number' ? r[f] : Number(r[f]) || 0);
 
 export const MODULES: ModuleDef[] = [
+  // ---------------- Subcontractor register (migration 032) ----------------
+  {
+    key: 'contractors',
+    table: 'contractors',
+    path: 'contractors',
+    idField: 'id',
+    columns: [{ col: 'company_name' }, { col: 'trade' }, { col: 'is_active', from: (r) => r.is_active !== false, kind: 'bool' }],
+    scope: { kind: 'contractor' },
+    perms: { view: 'contractors.view', create: 'contractors.create', edit: 'contractors.edit', delete: null },
+    required: ['company_name'],
+    orderBy: 'company_name',
+    hooks: contractorHooks,
+  },
+
   // ---------------- Group A: drawings & documents ----------------
   {
     key: 'drawings',

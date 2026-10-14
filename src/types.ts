@@ -123,6 +123,12 @@ export interface Contractor {
   is_active?: boolean;
   preferred_languages?: ('English' | 'Bahasa Malaysia' | 'Chinese')[];
   rating?: number;
+  /** Server (database mode): projects this subcontractor is explicitly assigned to, editable. */
+  assigned_project_ids?: string[];
+  /** Server: those plus every project where it has work; read-only, limited to the reader's projects. */
+  project_ids?: string[];
+  /** Server: an unverified placeholder (migration 032); no Contractor account may be linked to it. */
+  needs_details?: boolean;
   created_at?: string;
   updated_at?: string;
 }
