@@ -56,6 +56,10 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       workItems: [...INITIAL_WORK_ITEMS, itemX],
     });
     expect(imported.ok).toBe(true);
+    // A Contractor account works only while its subcontractor is registered and active.
+    for (const id of ['con-1', 'con-9']) {
+      await db.owner.query(`INSERT INTO contractors (id, company_name, data) VALUES ($1, $1, jsonb_build_object('id', $1::text, 'company_name', $1::text, 'is_active', true))`, [id]);
+    }
     await seedUsers(db.owner, USERS);
     app = buildApp(db.pool);
     for (const u of USERS) as[u.role] = await signIn(app, u.email);

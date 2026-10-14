@@ -101,6 +101,9 @@ export class AccessContext {
     return this.opts.background === true;
   }
 
+  /** A Contractor account whose subcontractor is missing or deactivated: no records at all. */
+  suspended = false;
+
   static async load(db: Pool | PoolClient, user: AuthUser, opts: AccessOptions = {}): Promise<AccessContext> {
     const [projects, packages, items, assignments] = await Promise.all([
       db.query('SELECT id, client_id, project_manager_id, site_supervisor_id FROM projects'),
@@ -132,12 +135,20 @@ export class AccessContext {
       case 'Site Supervisor':
         visible = new Set([...assigned, ...projects.rows.filter((p) => p.site_supervisor_id === user.id).map((p) => p.id)]);
         break;
-      case 'Contractor':
-        visible = new Set([
-          ...assigned,
-          ...packages.rows.filter((w) => user.contractor_id && w.contractor_id === user.contractor_id).map((w) => w.project_id),
-        ]);
+      case 'Contractor': {
+        // A Contractor account sees nothing while its subcontractor is missing or deactivated,
+        // whatever project assignments or work packages still name it.
+        const link = user.contractor_id
+          ? (await db.query('SELECT is_active FROM contractors WHERE id = $1', [user.contractor_id])).rows[0]
+          : undefined;
+        if (!link?.is_active) {
+          const ctx = new AccessContext(user, new Set(), projectClient, packageContractor, packageProject, new Map(), opts);
+          ctx.suspended = true;
+          return ctx;
+        }
+        visible = new Set([...assigned, ...packages.rows.filter((w) => w.contractor_id === user.contractor_id).map((w) => w.project_id)]);
         break;
+      }
       case 'Client':
         visible = new Set(projects.rows.filter((p) => user.client_id && p.client_id === user.client_id).map((p) => p.id));
         break;
@@ -179,6 +190,7 @@ export class AccessContext {
 
   /** Whether a stored record is inside this user's scope (ignores permissions). */
   inScope(collection: CoreCollection, row: Row): boolean {
+    if (this.suspended) return false;
     const contractor = this.user.role === 'Contractor' ? this.user.contractor_id : undefined;
     switch (collection) {
       case 'clients':

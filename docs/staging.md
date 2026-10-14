@@ -56,6 +56,15 @@ pages before approving**; Cloud Run's Singapore (tier 2) rates come from a third
 | Gemini (optional; staging can run without AI) | RM 0–20 | RM 0–10 |
 | **Total** | **≈ RM 380–430 / month** | **≈ RM 120–180 / month** |
 
+File storage and backups (in addition to the above; prices from Supabase's and Google's pricing
+pages as found in October 2026, **confirm before approving**):
+
+| Item | Estimate |
+|---|---|
+| Database disk: Pro includes 8 GB per project, then ~USD 0.125 per GB-month | the pilot (a few hundred drawings and photos, ≤ 2 GB) stays inside the 8 GB: **RM 0**. Every further 10 GB of files ≈ RM 5–6 / month |
+| Supabase daily backups (7 days, Pro) | included |
+| Weekly `pg_dump` copy in Cloud Storage, Singapore, 4–5 copies kept (~USD 0.02–0.03 per GB-month) | 2 GB database → 10 GB stored: **≤ RM 1.5 / month** |
+
 Production later adds a second Supabase project (~USD 10 compute on the same Pro organisation,
 about RM 45) and its own Cloud Run service (about RM 260–280); point-in-time recovery, if wanted,
 about RM 420–450 more.
@@ -139,7 +148,47 @@ code. Synthetic pilot accounts only (docs/pilot/segar-mart-outlet-12.md).
   `auth.password_set`, `security.owner_recovery`, `security.database_privilege_denied`,
   `file.upload` volume, rows with `actor_verified = false` for people.
 
-## 4. Rollback and recovery
+## 4. File storage: capacity, backups and restore
+
+Files live in the database (`file_contents.bytes`, at most 25 MB each), so they share its disk,
+its backups and its restores. What that means in practice:
+
+- **Capacity.** Uploads count against the Supabase project's disk (8 GB included on Pro; the
+  disk grows automatically and is billed per GB beyond that). Each file is stored once; a new
+  drawing revision is a new file, and files are never deleted (`files` and `file_contents` are
+  append-only for the runtime role), so the size only grows. Check monthly:
+  `SELECT pg_size_pretty(sum(size_bytes)) AS files, count(*) FROM files;` and
+  `SELECT pg_size_pretty(pg_database_size(current_database()));`. Plan a move to object storage
+  if files pass about 20 GB or single uploads routinely approach the 25 MB limit.
+- **Backups.** Supabase's daily backups include the files automatically. The weekly `pg_dump`
+  grows with them (compressed images and PDFs barely compress further): budget the bucket for
+  roughly the database size × copies kept, and use `pg_dump -Fc` (one file, restorable per table).
+- **Restore time.** A restore copies every file's bytes, so it takes longer as files accumulate:
+  measure it in the restore drill (§3 step 10) and record database size and duration together;
+  repeat the drill whenever the database has doubled. Restoring is all-or-nothing for the
+  database: there is no restore of a single file (an earlier revision's file is still there,
+  files are never overwritten).
+- **Integrity.** Every stored file has its SHA-256 (checked by the database on insert). After a
+  restore, as the migrator:
+  `SELECT count(*) FROM files f JOIN file_contents c ON c.file_id = f.id WHERE encode(sha256(c.bytes), 'hex') <> f.sha256;`
+  must return 0, and `SELECT count(*) FROM files f LEFT JOIN file_contents c ON c.file_id = f.id WHERE c.file_id IS NULL;` must return 0.
+- **Failed uploads** leave nothing behind: the metadata, the bytes and the audit row are written in
+  one transaction. A drawing file uploaded but not yet attached to a revision is visible only to
+  its uploader and staff who may upload drawings.
+
+## 5. Subcontractor accounts
+
+- A Contractor account works only while its subcontractor is **active**: deactivating a
+  subcontractor immediately hides every record from its accounts, whatever project assignments or
+  work packages still name it. Reactivating restores access. (Deactivate the person's account in
+  Users as well when they leave.)
+- Upgrading an existing database creates **placeholder** subcontractors for ids that work records
+  referenced but that were never registered (company name "Unregistered subcontractor …",
+  shown with an "Unverified placeholder" badge). They are not verified companies: no Contractor
+  account can be linked to one until its contact person and a phone or email are recorded, which
+  clears the flag. Existing accounts already linked to such an id keep working; review them first.
+
+## 6. Rollback and recovery
 
 - Application: redeploy the previous image tag (`gcloud run services update-traffic … --to-revisions`),
   only if its migrations are the same.

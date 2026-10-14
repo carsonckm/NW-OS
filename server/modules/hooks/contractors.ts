@@ -6,6 +6,7 @@
  * project_ids decides who sees the subcontractor (scope 'contractor'); both lists are cut down to
  * the reader's own projects. A writer changes only the assignments on projects they can see; the
  * others are kept. Subcontractors are deactivated (is_active false), never deleted.
+ * needs_details marks an unverified placeholder (see beforeWrite).
  */
 import { ForbiddenError } from '../../auth/access';
 import { ValidationError } from '../../core/repository';
@@ -74,6 +75,11 @@ export const contractorHooks: ModuleHooks = {
       trade: text(incoming.trade, 100),
       is_active: incoming.is_active !== false,
     };
+    // A placeholder created by migration 032 for an id that was referenced but never registered
+    // stays flagged until someone records who the subcontractor is (contact person, and a phone or
+    // email). No Contractor account can be linked to it meanwhile (server/auth/routes.ts).
+    const placeholder = existing?.needs_details === true || (h.mode === 'import' && incoming.needs_details === true);
+    values.needs_details = placeholder && !(values.contact_person && (values.phone || values.email));
     // Assignments: the writer changes only projects they can see; the rest are kept as they are.
     const before = strings(existing?.assigned_project_ids);
     const requested = 'assigned_project_ids' in incoming ? strings(incoming.assigned_project_ids) : before.filter((p) => h.ctx.canSeeProject(p));

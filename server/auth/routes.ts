@@ -151,9 +151,10 @@ export function createUsersRouter({ pool, store }: { pool: Pool; store: AuthStor
   const contractorProblem = async (role: unknown, contractorId: unknown) => {
     if (role !== 'Contractor') return undefined;
     if (typeof contractorId !== 'string' || !contractorId.trim()) return 'A Contractor account needs a subcontractor (contractor_id)';
-    const c = (await pool.query('SELECT is_active FROM contractors WHERE id = $1', [contractorId])).rows[0];
+    const c = (await pool.query(`SELECT is_active, data->>'needs_details' = 'true' AS placeholder FROM contractors WHERE id = $1`, [contractorId])).rows[0];
     if (!c) return `Unknown subcontractor ${contractorId}: add it to the subcontractor register first`;
     if (!c.is_active) return `Subcontractor ${contractorId} is inactive`;
+    if (c.placeholder) return `Subcontractor ${contractorId} is an unverified placeholder: record its contact person and phone or email first`;
     return undefined;
   };
 

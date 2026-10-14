@@ -48,6 +48,7 @@ export function projectOf(def: ModuleDef, record: Row, orders: OrderInfo): strin
  * their work items or packages, or their production orders.
  */
 export function inModuleScope(ctx: AccessContext, def: ModuleDef, record: Row, orders: OrderInfo): boolean {
+  if (ctx.suspended) return false;
   const scope = def.scope;
   if (scope.kind === 'company') return true;
   if (scope.kind === 'contractor') {

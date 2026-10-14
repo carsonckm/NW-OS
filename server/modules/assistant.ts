@@ -296,7 +296,7 @@ export class Assistant {
     const today = now.toISOString().slice(0, 10);
     const rows = (
       await this.pool.query(`SELECT id, project_id, due_date, status, priority, data->>'title' AS title FROM tasks WHERE assigned_user_id = $1 AND status NOT IN ('Completed', 'Cancelled') ORDER BY due_date NULLS LAST LIMIT 20`, [ctx.user.id])
-    ).rows.filter((t) => !t.project_id || ctx.canSeeProject(t.project_id));
+    ).rows.filter((t) => !ctx.suspended && (!t.project_id || ctx.canSeeProject(t.project_id)));
     const late = rows.filter((t) => t.due_date && t.due_date < today);
     out.answer = rows.length ? `You have ${rows.length} open task(s), ${late.length} overdue.` : 'You have no open tasks.';
     for (const t of rows) out.facts.push({ text: `${t.title} — ${t.status}, ${t.priority}${t.due_date ? `, due ${t.due_date}${t.due_date < today ? ' (overdue)' : ''}` : ''}`, confidence: 'Confirmed', source: { type: 'task', id: t.id, tab: 'automation', project_id: t.project_id } });

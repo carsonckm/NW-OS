@@ -52,12 +52,14 @@ async function replyFor(pool: Pool, user: AuthUser): Promise<string> {
     // Clients get their project status only; nothing internal.
     return [`Hello ${user.name}.`, ...projects.map((p) => `${p.project_name}: ${p.project_status}`), 'For details please contact your NW project manager.'].join('\n');
   }
-  const tasks = (
-    await pool.query(
-      `SELECT data->>'title' AS title, due_date FROM tasks WHERE assigned_user_id = $1 AND status NOT IN ('Completed', 'Cancelled') ORDER BY due_date NULLS LAST LIMIT 5`,
-      [user.id]
-    )
-  ).rows;
+  const tasks = ctx.suspended
+    ? []
+    : (
+        await pool.query(
+          `SELECT data->>'title' AS title, due_date FROM tasks WHERE assigned_user_id = $1 AND status NOT IN ('Completed', 'Cancelled') ORDER BY due_date NULLS LAST LIMIT 5`,
+          [user.id]
+        )
+      ).rows;
   const lines = [`Hello ${user.name} (${user.role}).`];
   lines.push(tasks.length ? `Your open tasks:\n${tasks.map((t) => `- ${t.title}${t.due_date ? ` (due ${t.due_date})` : ''}`).join('\n')}` : 'You have no open tasks.');
   if (ctx.can('issues.view') && projects.length) {
