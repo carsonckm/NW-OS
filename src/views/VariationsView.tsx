@@ -19,6 +19,7 @@ import { FormError } from '../components/ui/FormError';
 import { AuthorityNote } from '../components/AuthorityNote';
 import { authorityItem, useAuthority } from '../services/authority';
 import { DecisionTrace } from '../components/DecisionTrace';
+import { RecordFiles } from '../components/RecordFiles';
 import { Button, Field, Input, Modal, newId, Pill, rm, Section, Select, TextArea } from '../components/ui/forms';
 
 const FLOW = ['Identified', 'Costing', 'Internal Approval', 'Client Approval', 'Approved', 'Implemented', 'Closed'];
@@ -256,6 +257,7 @@ const VariationDetail: React.FC<{ v: Variation }> = ({ v }) => {
             {preApproval && stage !== 'Client Approval' && can('variations.create') && <Button onClick={() => setEditing(true)}>Edit</Button>}
           </div>
           <FormError error={error} onDismiss={() => setError(null)} />
+          <RecordFiles collection="variations" recordId={v.id} canUpload={can('variations.create') || can('variations.approve') || can('variations.client_approve')} />
         </div>
       )}
 

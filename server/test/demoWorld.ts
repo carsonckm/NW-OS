@@ -45,7 +45,8 @@ export function unrelatedProject(): Record<string, Row[]> {
     revisions: [{ id: 'rev-x1', drawing_id: 'dwg-x', revision: 'Rev 1', title: 'X', file_url: '/x.pdf', uploaded_date: '2026-01-01', uploaded_by: 'PM', approved_status: 'Approved', notes: '', is_current: true, drawing_type: 'Client / Designer Drawing', markups: [] }],
   };
   const delivery = { id: 'del-x', delivery_number: 'DEL-X', project_id: 'proj-x', project_name: 'Unrelated', work_package_id: 'wp-x', work_package_name: 'X', work_item_ids: ['item-x'], work_item_codes: ['X'], production_order_ids: [], contractor_id: 'con-9', contractor_name: 'Other', driver_name: '', driver_contact: '', vehicle_plate: '', vehicle_type: '', delivery_date: '2026-10-10', delivery_time: '10:00', estimated_arrival: '11:00', destination_site: 'X', special_instructions: '', package_count: 1, status: 'Scheduled', status_history: [], loading_checklist: {}, scanned_packages: [], qr_code: 'X', barcode: 'X', photos: [] };
-  return { projects: [project], workPackages: [wp], workItems: [item], drawings: [drawing], deliveryRecords: [delivery] };
+  const contractor = { id: 'con-9', company_name: 'Unrelated Subcontractor Sdn Bhd', contact_person: 'X', phone: '0', trade: 'Ceiling', is_active: true };
+  return { projects: [project], workPackages: [wp], workItems: [item], drawings: [drawing], deliveryRecords: [delivery], contractors: [contractor] };
 }
 
 

@@ -16,6 +16,7 @@ export function demoData(): Record<string, Row[]> {
     projects: rows(D.INITIAL_PROJECTS),
     workPackages: rows(D.INITIAL_WORK_PACKAGES),
     workItems: rows(D.INITIAL_WORK_ITEMS),
+    contractors: rows(D.INITIAL_CONTRACTORS),
     drawings: rows(D.INITIAL_DRAWINGS),
     documents: rows(D.INITIAL_DOCUMENTS),
     issues: rows(D.INITIAL_ISSUES),

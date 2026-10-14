@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { linkDrawingRevisionFile } from '../../files/link';
 import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
@@ -187,6 +188,8 @@ async function upsertRevision(h: HookContext, drawingId: string, kind: 'client' 
         JSON.stringify(data), h.actor.id ?? null,
       ]
     );
+    // A revision made from an uploaded file takes that file (server/files).
+    if (!importing) await linkDrawingRevisionFile(h.db, drawingId, rev.id, rev.file_url);
     if (!importing) {
       await writeAudit(h.db, h.actor, {
         action: 'drawing.revision.create',

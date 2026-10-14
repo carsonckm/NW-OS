@@ -18,6 +18,9 @@ import { createLegacyRulesRouter } from './ai/legacyRules';
 import type { CoreDataSource } from './db/config';
 import type { Pool } from './db/pool';
 import { setPrivilegeDenialMonitor } from './http/errors';
+import { configureTrustProxy } from './http/proxy';
+import { createHealthRouter } from './http/health';
+import { createFilesRouter } from './files/routes';
 import { writeAudit } from './audit';
 
 /**
@@ -26,7 +29,11 @@ import { writeAudit } from './audit';
  * Without a pool the app runs in demo mode: no sign-in, data in browser localStorage.
  */
 export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool; dataSource: CoreDataSource }) {
+  // The client address recorded in sessions and the audit trail (TRUST_PROXY; server/http/proxy.ts).
+  configureTrustProxy(app);
   const store = pool ? new AuthStore(pool) : undefined;
+  let engine: AutomationEngine | undefined;
+  app.use('/api', createHealthRouter({ pool, scheduler: () => (engine ? engine.schedulerState() : pool ? 'off' : 'not_configured') }));
   // Phase 6 Batch 10: a request the database refuses for lack of privilege is a security event.
   if (pool) {
     setPrivilegeDenialMonitor(app, async (d) => {
@@ -76,11 +83,13 @@ export function mountSecureApi(app: Express, { pool, dataSource }: { pool?: Pool
   if (pool && store) app.use('/api', createLegacyAIRouter({ pool, store }));
   app.use(createLegacyRulesRouter());
   app.use('/api', createCoreRouter({ pool, store, dataSource }));
+  // Pilot: private project files (drawings, revisions, site photographs, attachments).
+  if (pool && store) app.use('/api', createFilesRouter({ pool, store }));
   // Phase 3 modules (drawings, workflow, production, delivery/site, commercial).
   if (pool && store) app.use('/api', createModuleRouter({ pool, store }));
   // Phase 4: notifications, automation, WhatsApp gateway.
   if (pool && store) {
-    const engine = new AutomationEngine(pool);
+    engine = new AutomationEngine(pool);
     app.use('/api', createOpsRouter({ pool, store, engine }));
     // The scheduler runs on the server, whether or not anyone has the app open. Tests drive
     // the engine directly instead; AUTOMATION_SCHEDULER=off disables it (e.g. read replicas).

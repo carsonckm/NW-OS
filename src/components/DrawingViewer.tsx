@@ -7,6 +7,7 @@
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { hasPermission } from '../utils/permissions';
+import { FILE_ACCEPT, filesAvailable, isStoredFileUrl, uploadFile } from '../services/files';
 import {
   Drawing,
   DrawingRevision,
@@ -88,6 +89,9 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
   const [newRevNumber, setNewRevNumber] = useState('Rev 5');
   const [newRevTitle, setNewRevTitle] = useState('Architectural Shop Drawing — Coordinated Mall M&E Set');
   const [newRevNotes, setNewRevNotes] = useState('Coordinated with Mall tenant guidelines and Level 2 hoist clearances.');
+  // The new revision's file (database mode: stored privately on the server).
+  const [newRevFile, setNewRevFile] = useState<File | null>(null);
+  const [newRevError, setNewRevError] = useState<string | null>(null);
 
   // AI Analysis State
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
@@ -152,12 +156,23 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
     setIsAddingMarkup(false);
   };
 
-  const handleCreateRevision = (e: React.FormEvent) => {
+  const handleCreateRevision = async (e: React.FormEvent) => {
     e.preventDefault();
+    setNewRevError(null);
+    let fileUrl = `/assets/drawings/${drawing.drawing_number}-${newRevNumber}.svg`;
+    if (await filesAvailable()) {
+      if (!newRevFile) return setNewRevError('Choose the revision file to upload');
+      try {
+        fileUrl = (await uploadFile(newRevFile, { purpose: 'drawing', projectId: drawing.project_id })).url;
+      } catch (err) {
+        return setNewRevError(err instanceof Error ? err.message : 'The file could not be uploaded');
+      }
+    }
+    setNewRevFile(null);
     addDrawingRevision(drawing.id, {
       revision: newRevNumber,
       title: newRevTitle,
-      file_url: `/assets/drawings/${drawing.drawing_number}-${newRevNumber}.svg`,
+      file_url: fileUrl,
       notes: newRevNotes,
       supersedes_revision: currentRev.revision,
       drawing_type: 'Client / Designer Drawing',
@@ -229,6 +244,11 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
             <span>Trade: <strong className="text-slate-300 font-semibold">{drawing.category}</strong></span>
             <span>•</span>
             <span>Active Revision: <strong className="text-amber-400 font-mono font-bold">{currentRev.revision}</strong></span>
+            {isStoredFileUrl(currentRev.file_url) && (
+              <a href={currentRev.file_url} target="_blank" rel="noopener noreferrer" className="ml-2 underline text-amber-300 hover:text-amber-200" data-testid="revision-file-link">
+                Open drawing file
+              </a>
+            )}
             <span>•</span>
             <span className="text-[11px] text-slate-400 font-medium">({currentRev.drawing_type})</span>
           </p>
@@ -1514,6 +1534,18 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
                   required
                 />
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Revision file (PDF, image, DWG or DXF, up to 25 MB)</label>
+                <input
+                  type="file"
+                  accept={FILE_ACCEPT.drawing}
+                  aria-label="Revision file"
+                  onChange={(e) => setNewRevFile(e.target.files?.[0] ?? null)}
+                  className="w-full text-xs text-slate-300"
+                />
+              </div>
+              {newRevError && <div role="alert" className="text-xs text-rose-300">{newRevError}</div>}
 
               <div className="flex justify-end space-x-2 pt-2">
                 <button

@@ -17,6 +17,8 @@ export const SYNCED_COLLECTIONS: SyncedCollection[] = [
   { key: 'projects', storageKey: 'projects', idField: 'id', path: 'projects' },
   { key: 'workPackages', storageKey: 'workPackages', idField: 'id', path: 'work-packages' },
   { key: 'workItems', storageKey: 'workItems', idField: 'id', path: 'work-items' },
+  // Subcontractor register (shared; before this each browser kept its own list)
+  { key: 'contractors', storageKey: 'contractors', idField: 'id', path: 'contractors' },
   // Phase 3 modules
   { key: 'drawings', storageKey: 'drawings', idField: 'id', path: 'drawings' },
   { key: 'documents', storageKey: 'documents', idField: 'id', path: 'documents' },

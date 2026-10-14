@@ -37,6 +37,7 @@ export function projectOf(def: ModuleDef, record: Row, orders: OrderInfo): strin
     case 'client':
       return (record.project_id as string) || undefined;
     case 'company':
+    case 'contractor':
       return undefined;
   }
 }
@@ -49,6 +50,12 @@ export function projectOf(def: ModuleDef, record: Row, orders: OrderInfo): strin
 export function inModuleScope(ctx: AccessContext, def: ModuleDef, record: Row, orders: OrderInfo): boolean {
   const scope = def.scope;
   if (scope.kind === 'company') return true;
+  if (scope.kind === 'contractor') {
+    if (ctx.user.role === 'Contractor') return Boolean(ctx.user.contractor_id) && record.id === ctx.user.contractor_id;
+    if (ctx.companyWide) return true;
+    const projects = Array.isArray(record.project_ids) ? (record.project_ids as unknown[]) : [];
+    return projects.some((p) => ctx.canSeeProject(p));
+  }
   if (scope.kind === 'client') {
     if (record.project_id) return ctx.canSeeProject(record.project_id);
     return ctx.inScope('clients', { id: record.client_id });

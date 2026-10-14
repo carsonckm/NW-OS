@@ -19,12 +19,16 @@ export interface ColumnSpec {
  *  order   - through its production order
  *  client  - pre-project commercial records tied to a client (project once awarded)
  *  company - company-wide catalogues, gated by permission only
+ *  contractor - the subcontractor register: staff with access to every project see all of it,
+ *            project-scoped staff the subcontractors on their projects (record.project_ids),
+ *            a Contractor account only its own company
  */
 export type Scope =
   | { kind: 'project'; field?: string; optional?: boolean }
   | { kind: 'order' }
   | { kind: 'client' }
-  | { kind: 'company' };
+  | { kind: 'company' }
+  | { kind: 'contractor' };
 
 type Perm = PermissionKey | PermissionKey[];
 
@@ -62,6 +66,8 @@ export interface ModuleHooks {
   serialize?: (record: Row) => Row;
   /** Rebuild app records from stored rows (e.g. attach revisions). */
   hydrate?: (db: PoolClient | import('../db/pool').Pool, records: Row[]) => Promise<Row[]>;
+  /** Removes what this reader may not see from a record in scope (e.g. other projects' ids). */
+  redact?: (ctx: AccessContext, record: Row) => Row;
   /** Called before a delete is allowed (e.g. to protect history). */
   beforeDelete?: (h: HookContext, existing: Row) => Promise<void>;
 }

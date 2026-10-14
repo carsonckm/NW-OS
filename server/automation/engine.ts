@@ -270,6 +270,7 @@ export class AutomationEngine {
       this.tickPromise = (async () => {
         try {
           await this.runDue();
+          this.lastTickAt = Date.now();
         } catch (err) {
           console.error('automation scheduler tick failed:', err);
         } finally {
@@ -279,6 +280,7 @@ export class AutomationEngine {
       await this.tickPromise;
     };
     this.intervalMs = intervalMs;
+    this.startedAt = Date.now();
     this.timer = setInterval(() => void tick(), intervalMs);
     this.timer.unref?.();
     void tick();
@@ -287,6 +289,20 @@ export class AutomationEngine {
   isRunning() {
     return !!this.timer;
   }
+
+  /** When the scheduler last completed a tick (ms since epoch), or undefined. */
+  lastTickAt?: number;
+
+  /**
+   * For the health check: off (not started in this process), starting (no tick yet), running,
+   * or stale (no completed tick for three intervals: stuck, or the database is failing).
+   */
+  schedulerState(now = Date.now()): 'off' | 'starting' | 'running' | 'stale' {
+    if (!this.timer) return 'off';
+    if (this.lastTickAt === undefined) return now - (this.startedAt ?? now) > 3 * this.intervalMs ? 'stale' : 'starting';
+    return now - this.lastTickAt > 3 * this.intervalMs ? 'stale' : 'running';
+  }
+  private startedAt?: number;
 
   tickSeconds() {
     return this.intervalMs / 1000;

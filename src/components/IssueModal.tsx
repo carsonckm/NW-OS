@@ -9,6 +9,8 @@ import { Issue, IssueCategory, EscalationLevel } from '../types';
 import { useRecords } from '../services/records';
 import { FormError } from './ui/FormError';
 import { IssueTasksPanel, openTasksOf } from './IssueTasks';
+import { RecordFiles } from './RecordFiles';
+import { hasPermission } from '../utils/permissions';
 import {
   AlertTriangle,
   Sparkles,
@@ -195,6 +197,12 @@ export const IssueModal: React.FC<IssueModalProps> = ({
             </div>
 
             <IssueTasksPanel issue={existingIssue} />
+
+            <RecordFiles
+              collection="issues"
+              recordId={existingIssue.id}
+              canUpload={hasPermission(currentUser, 'issues.create') || hasPermission(currentUser, 'issues.assign') || hasPermission(currentUser, 'issues.resolve')}
+            />
 
             {isClosed && existingIssue.resolution_notes && (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">

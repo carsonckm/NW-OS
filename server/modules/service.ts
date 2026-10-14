@@ -70,8 +70,10 @@ export class DataService {
 
   /** Removes the module's hidden fields for users without the permission to see them. */
   redact<T extends Row | undefined>(ctx: AccessContext, def: ModuleDef, record: T): T {
-    if (!record || !def.hiddenFields || ctx.can(def.hiddenFields.permission)) return record;
-    const out: Row = { ...record };
+    if (!record) return record;
+    let out: Row = def.hooks?.redact ? def.hooks.redact(ctx, record) : record;
+    if (!def.hiddenFields || ctx.can(def.hiddenFields.permission)) return out as T;
+    out = { ...out };
     for (const f of def.hiddenFields.fields) delete out[f];
     return out as T;
   }

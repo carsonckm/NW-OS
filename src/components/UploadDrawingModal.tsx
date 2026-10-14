@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { DrawingType, KnowledgeCategory } from '../types';
 import { Upload, X, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
+import { FILE_ACCEPT, filesAvailable, uploadFile } from '../services/files';
 
 interface UploadDrawingModalProps {
   isOpen: boolean;
@@ -25,16 +26,27 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
   const [notes, setNotes] = useState('Initial architectural detail issued for contractor review and shop drawing preparation.');
   const [fileName, setFileName] = useState('A-105_Rev1_Wall_Cladding.pdf');
   const [fileSize, setFileSize] = useState('4.2 MB');
+  // The chosen file; in database mode its bytes are stored on the server (private, per project).
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setError(null);
 
     try {
+      // Database mode: the drawing file itself is uploaded first; the revision refers to it.
+      // Demo mode (no server database) keeps the illustrative path.
+      let fileUrl = `/drawings/${drawingNumber}_${revision}.pdf`;
+      if (await filesAvailable()) {
+        if (!file) throw new Error('Choose the drawing file to upload');
+        fileUrl = (await uploadFile(file, { purpose: 'drawing', projectId })).url;
+      }
       const created = uploadDrawing({
         drawing_number: drawingNumber.trim(),
         title: title.trim(),
@@ -42,7 +54,7 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
         drawing_type: drawingType,
         revision: revision.trim() || 'Rev 1',
         project_id: projectId,
-        file_url: `/drawings/${drawingNumber}_${revision}.pdf`,
+        file_url: fileUrl,
         notes: notes.trim(),
       });
 
@@ -51,7 +63,7 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
       }
       onClose();
     } catch (err) {
-      console.error('Failed to upload drawing:', err);
+      setError(err instanceof Error ? err.message : 'The drawing could not be uploaded');
     } finally {
       setIsSubmitting(false);
     }
@@ -244,6 +256,7 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
                 setIsDragging(false);
                 if (e.dataTransfer.files && e.dataTransfer.files[0]) {
                   const f = e.dataTransfer.files[0];
+                  setFile(f);
                   setFileName(f.name);
                   setFileSize(`${(f.size / (1024 * 1024)).toFixed(1)} MB`);
                 }
@@ -263,17 +276,19 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
                     {fileName || 'Drop drawing PDF or CAD image here, or click to browse'}
                   </span>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    {fileName ? `Attached File: ${fileName} (${fileSize})` : 'Supports PDF, JPG, PNG, SVG, CAD exports up to 50MB'}
+                    {fileName ? `Attached File: ${fileName} (${fileSize})` : 'PDF, JPG, PNG, DWG or DXF, up to 25 MB'}
                   </p>
                 </div>
                 <input
                   type="file"
                   id="drawingFileInput"
                   className="hidden"
-                  accept=".pdf,.png,.jpg,.jpeg,.svg,.dwg,.dxf"
+                  accept={FILE_ACCEPT.drawing}
+                  aria-label="Drawing file"
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
                       const f = e.target.files[0];
+                      setFile(f);
                       setFileName(f.name);
                       setFileSize(`${(f.size / (1024 * 1024)).toFixed(1)} MB`);
                     }
@@ -302,6 +317,12 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
               className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
             />
           </div>
+
+          {error && (
+            <div role="alert" className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+              {error}
+            </div>
+          )}
 
           {/* Governance Notice */}
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start space-x-2 text-xs text-amber-900">

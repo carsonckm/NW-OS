@@ -5,12 +5,12 @@ import { readDatabaseSettings } from './server/db/config';
 import { createPool } from './server/db/pool';
 import { enforceRuntimePrivileges, PrivilegedDatabaseError } from './server/db/roles';
 import { mountSecureApi } from './server/app';
-import { aiStatus } from './server/ai/gateway';
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+// The host's port (Cloud Run sets PORT); 3000 for local development.
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '20mb' }));
 
@@ -23,17 +23,7 @@ const pool = dbSettings.pool ? createPool(dbSettings.pool) : undefined;
 // Mounted in setupServer(), after the database privilege check: the API (and its automation
 // scheduler) never starts with a database user the server refuses.
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    system: 'NW OS — Company Operating System',
-    version: '1.0.0-phase1',
-    // Whether an AI model is configured on the server (never the key or its value).
-    ai_configured: aiStatus().available,
-    timestamp: new Date().toISOString(),
-  });
-});
+// Health checks (/api/health, /api/health/live) are mounted with the API (server/http/health.ts).
 
 // Vite Middleware for Development / Static serve for Production
 async function setupServer() {
@@ -52,10 +42,16 @@ async function setupServer() {
       console.warn(`[db] Could not verify the database user's privileges: ${(err as Error).message}`);
     }
   }
-  mountSecureApi(app, {
-    pool,
-    dataSource: dbSettings.dataSource,
-  });
+  try {
+    mountSecureApi(app, {
+      pool,
+      dataSource: dbSettings.dataSource,
+    });
+  } catch (err) {
+    // A configuration error (e.g. TRUST_PROXY) stops the server rather than running half-configured.
+    console.error(`[config] ${(err as Error).message}`);
+    process.exit(1);
+  }
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
