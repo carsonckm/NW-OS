@@ -56,10 +56,11 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('pilot rehearsal
 
   it('1. client, enquiry, tender and the RM 650,000 quotation, approved by someone else', async () => {
     await ok(owner().post('/api/clients').send({ ...D.clients[0], id: 'client-segar', client_type: 'Retail', company_name: 'Segar Mart Sdn Bhd', registration_number: 'SYNTHETIC-0001', contact_person: 'Puan Aisyah (Store Development)', email: 'aisyah@segarmart.example', phone: '+60 3-0000 0012', billing_address: 'Synthetic address, Shah Alam' }), 201);
-    await ok(pm().post('/api/client-enquiries').send({ id: 'sm-enq', enquiry_number: 'ENQ-SM12', client_id: 'client-segar', client_name: 'Segar Mart Sdn Bhd', project_name: 'Outlet 12 Retail Fit-Out', contact_person: 'Puan Aisyah', source: 'Repeat client', scope_description: 'Supermarket fit-out: gondolas, checkouts, ceiling & lighting, signage', received_date: '2026-10-12', target_submission_date: '2026-10-26', status: 'New', assigned_estimator: 'PM', follow_up_date: '2026-10-15' }), 201);
-    await ok(pm().post('/api/tenders').send({ id: 'sm-tdr', tender_number: 'TDR-SM12', enquiry_id: 'sm-enq', client_id: 'client-segar', client_name: 'Segar Mart Sdn Bhd', project_name: 'Outlet 12 Retail Fit-Out', submission_deadline: '2026-10-26', estimated_value: 650000, status: 'In Preparation', documents: [], assigned_lead: 'PM', bq_reference: 'BQ-SM12' }), 201);
+    // Sales for a new client is done by the Owner (a Project Manager sees only their projects' clients).
+    await ok(owner().post('/api/client-enquiries').send({ id: 'sm-enq', enquiry_number: 'ENQ-SM12', client_id: 'client-segar', client_name: 'Segar Mart Sdn Bhd', project_name: 'Outlet 12 Retail Fit-Out', contact_person: 'Puan Aisyah', source: 'Repeat client', scope_description: 'Supermarket fit-out: gondolas, checkouts, ceiling & lighting, signage', received_date: '2026-10-12', target_submission_date: '2026-10-26', status: 'New', assigned_estimator: 'PM', follow_up_date: '2026-10-15' }), 201);
+    await ok(owner().post('/api/tenders').send({ id: 'sm-tdr', tender_number: 'TDR-SM12', enquiry_id: 'sm-enq', client_id: 'client-segar', client_name: 'Segar Mart Sdn Bhd', project_name: 'Outlet 12 Retail Fit-Out', submission_deadline: '2026-10-26', estimated_value: 650000, status: 'In Preparation', documents: [], assigned_lead: 'PM', bq_reference: 'BQ-SM12' }), 201);
     const line = (id: string, code: string, price: number, cost: Row) => ({ id, item_code: code, description: code, category: 'Joinery', specification: 'Retail fit-out', quantity: 1, unit: 'lot', unit_selling_price: price, estimated_cost_breakdown: cost, cost_source: 'Material Price', cost_confidence: 'High', notes: 'INTERNAL', total_selling_price: 1, total_estimated_cost: 1 });
-    const qt = await ok(pm().post('/api/quotations').send({
+    const qt = await ok(owner().post('/api/quotations').send({
       id: 'sm-qt', quotation_number: 'QT-SM12', version: 1, version_code: 'QT-SM12-V1', client_id: 'client-segar', client_name: 'Segar Mart Sdn Bhd', enquiry_id: 'sm-enq', tender_id: 'sm-tdr', project_name: 'Outlet 12 Retail Fit-Out', date: '2026-10-13', validity_days: 30, status: 'Draft',
       items: [
         line('l1', 'GONDOLA', 220000, { material: 150000, labour: 10000 }),
@@ -70,15 +71,16 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('pilot rehearsal
       tax_applicable: false, total_selling_price: 1, terms: '30% deposit, monthly progress claims',
     }), 201);
     expect(qt.body).toMatchObject({ subtotal_selling_price: 650000, total_estimated_cost: 455000, estimated_gross_profit: 195000 });
-    await ok(pm().patch('/api/quotations/sm-qt').send({ status: 'Internal Review' }), 200);
-    expect((await pm().patch('/api/quotations/sm-qt').send({ approval_status: 'Approved' })).status).toBe(403);
+    await ok(owner().patch('/api/quotations/sm-qt').send({ status: 'Internal Review' }), 200);
+    // A Project Manager has no access to a client outside their projects.
+    expect((await pm().get('/api/quotations/sm-qt')).status).toBe(404);
     await ok(accountant().patch('/api/quotations/sm-qt').send({ approval_status: 'Approved' }), 200);
-    await ok(pm().patch('/api/quotations/sm-qt').send({ status: 'Submitted' }), 200);
+    await ok(owner().patch('/api/quotations/sm-qt').send({ status: 'Submitted' }), 200);
     expect(JSON.stringify((await ok(owner().get('/api/quotations/sm-qt/client-view'), 200)).body)).not.toMatch(/cost|margin|profit|INTERNAL/i);
   });
 
   it('2. award and project setup: contract RM 650,000, team assigned', async () => {
-    await ok(pm().patch('/api/quotations/sm-qt').send({ status: 'Accepted' }), 200);
+    await ok(owner().patch('/api/quotations/sm-qt').send({ status: 'Accepted' }), 200);
     const res = await ok(owner().post('/api/quotations/sm-qt/convert').send({ project_number: 'SM-2026-012', start_date: '2026-11-02', end_date: '2027-01-29', site_address: 'Outlet 12, Shah Alam (synthetic)', project_manager_id: 'user-pm' }), 201);
     s.project = res.body.project.id;
     await ok(owner().patch(`/api/projects/${s.project}`).send({ site_supervisor_id: 'user-site', project_status: 'Active' }), 200);
