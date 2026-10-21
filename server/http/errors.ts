@@ -6,6 +6,9 @@ import { explainRefusal } from './explain';
 // Postgres error codes -> HTTP status + stable error name.
 const PG_ERRORS: Record<string, [number, string]> = {
   '23503': [409, 'foreign_key_violation'],
+  // PostgreSQL 18 reports a delete refused by an ON DELETE RESTRICT reference as restrict_violation
+  // (23001) instead of 23503: the same conflict for the client (a record still depends on it).
+  '23001': [409, 'foreign_key_violation'],
   '23505': [409, 'unique_violation'],
   '23502': [400, 'not_null_violation'],
   '23514': [400, 'check_violation'],

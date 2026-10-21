@@ -380,8 +380,21 @@ production-ready until the rollout checklist has passed on the real hosting.
 
 ### Known limitations and open questions
 
-- **Administrator rights (untested on Supabase).** The bootstrap needs a superuser, or a role
-  with CREATEROLE that can act as the current owners of the objects.
+- **Administrator rights (untested on Supabase and Render).** The bootstrap needs a superuser, or
+  a non-superuser administrator with:
+  - CREATEROLE, and ADMIN OPTION on the three roles (it has that if it created them; on
+    PostgreSQL 16 and later a CREATEROLE role may only manage roles it holds ADMIN OPTION on);
+  - ownership of the database (so of the `public` schema) and of any existing objects in it;
+  - CREATEDB, only for `--transfer-database`.
+
+  Tested with exactly that (`server/db/managedAdmin.test.ts`, on PostgreSQL 16 and 18): roles,
+  database handover, all migrations, restricted runtime role, idempotent re-runs.
+  - The bootstrap changes only the role attributes that differ from what they must be. PostgreSQL
+    lets only a role holding SUPERUSER, REPLICATION or BYPASSRLS (or CREATEDB) name that attribute
+    in ALTER ROLE, even to turn it off. If one of the three roles has such an attribute (someone
+    set it by hand), a non-superuser administrator cannot remove it: the bootstrap fails with a
+    message naming the role and attribute, changes nothing, and `db:privileges` keeps reporting
+    it. A superuser (or the host's support) must fix that role.
   - On Supabase the `postgres` role is documented as not being a superuser. Whether it may
     create these roles and take over every object in `public` has **not been verified**.
   - The bootstrap grants `nwos_owner` to a non-superuser administrator so that it can hand

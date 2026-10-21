@@ -307,11 +307,49 @@ export async function enforceRuntimePrivileges(db: Db, env: NodeJS.ProcessEnv = 
   return report;
 }
 
+// role attribute -> pg_roles column, and the keyword that turns it on (prefix NO turns it off).
+const ROLE_ATTRIBUTES = [
+  ['rolcanlogin', 'LOGIN'],
+  ['rolsuper', 'SUPERUSER'],
+  ['rolcreatedb', 'CREATEDB'],
+  ['rolcreaterole', 'CREATEROLE'],
+  ['rolreplication', 'REPLICATION'],
+  ['rolbypassrls', 'BYPASSRLS'],
+  ['rolinherit', 'INHERIT'],
+] as const;
+
+/**
+ * Makes a role's attributes exactly: the given LOGIN and INHERIT, and no SUPERUSER, CREATEDB,
+ * CREATEROLE, REPLICATION or BYPASSRLS. Changes only what differs and returns the keywords it set.
+ * If the administrator may not change one of them (e.g. a non-superuser asked to remove
+ * SUPERUSER), the error names the role and the attribute; nothing is skipped.
+ */
+async function enforceRoleAttributes(admin: PoolClient, role: string, want: { login: boolean; inherit: boolean }) {
+  const current = (await admin.query(
+    `SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolinherit FROM pg_roles WHERE rolname = $1`,
+    [role]
+  )).rows[0] as Record<string, boolean>;
+  const desired: Record<string, boolean> = {
+    rolcanlogin: want.login, rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false, rolbypassrls: false, rolinherit: want.inherit,
+  };
+  const changes = ROLE_ATTRIBUTES.filter(([col]) => current[col] !== desired[col]).map(([col, kw]) => (desired[col] ? kw : `NO${kw}`));
+  if (!changes.length) return changes;
+  try {
+    await admin.query(`ALTER ROLE ${ident(role)} ${changes.join(' ')}`);
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code !== '42501') throw err;
+    throw Object.assign(new Error(`Cannot set ${changes.join(' ')} on role ${role}: ${e.message}. Run the bootstrap with an administrator allowed to change these attributes (a superuser for SUPERUSER / REPLICATION / BYPASSRLS), or fix the role by hand.`), { code: e.code, cause: err });
+  }
+  return changes;
+}
+
 /**
  * Creates or repairs the three roles and moves the schema's objects to the owner role. Run by a
- * database administrator (superuser, or a CREATEROLE role such as Supabase's "postgres" that
- * owns the existing objects). Idempotent. Passwords are optional (set them out of band if not
- * given) and are never logged.
+ * database administrator: a superuser, or a non-superuser with CREATEROLE (and ADMIN OPTION on
+ * the three roles, which it has if it created them) that owns the database and its existing
+ * objects; --transfer-database also needs CREATEDB. Idempotent. Passwords are optional (set them
+ * out of band if not given) and are never logged.
  */
 export async function bootstrapRoles(admin: PoolClient, opts: { schema: string; roles: RoleNames; migratorPassword?: string; appPassword?: string; transferDatabase?: boolean }) {
   const { schema, roles } = opts;
@@ -327,10 +365,14 @@ export async function bootstrapRoles(admin: PoolClient, opts: { schema: string; 
         done.push(`created role ${role}`);
       }
     }
-    // Attributes are (re)asserted every run, so a role altered by hand is repaired.
-    await admin.query(`ALTER ROLE ${o} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT`);
-    await admin.query(`ALTER ROLE ${m} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT`);
-    await admin.query(`ALTER ROLE ${a} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`);
+    // Attributes are checked every run and any that differ are corrected, so a role altered by
+    // hand is repaired. Only differing attributes are named: PostgreSQL lets only a role holding
+    // SUPERUSER / CREATEDB / REPLICATION / BYPASSRLS mention that attribute in ALTER ROLE, even to
+    // turn it off, so restating them all would require a superuser on managed hosts.
+    for (const [role, login, inherit] of [[roles.owner, false, true], [roles.migrator, true, true], [roles.app, true, false]] as const) {
+      const fixed = await enforceRoleAttributes(admin, role, { login, inherit });
+      if (fixed.length) done.push(`set ${fixed.join(' ')} on ${role}`);
+    }
     const setPassword = async (role: string, pw?: string) => {
       if (!pw) return;
       const sql = (await admin.query(`SELECT format('ALTER ROLE %I PASSWORD %L', $1::text, $2::text) AS q`, [role, pw])).rows[0].q;
