@@ -93,6 +93,9 @@ DATABASE_ADMIN_URL='postgres://postgres:…@…:5432/postgres' \
 NWOS_MIGRATOR_PASSWORD='…' NWOS_APP_PASSWORD='…' npm run db:bootstrap-roles
 ```
 Expect "Roles ready". On any error nothing changed (one transaction): stop and investigate.
+The administrator may be a non-superuser with CREATEROLE that owns the database (CREATEDB as well
+for `--transfer-database`); see docs/database-privileges.md §6. Check it first:
+`SELECT rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = current_user;`
 Passwords: generated, at least 32 characters, stored only in Secret Manager / the operator's vault.
 
 **4. Secrets.** `nwos-staging-database-url-app` = the `nwos_app` URL as the service will use it

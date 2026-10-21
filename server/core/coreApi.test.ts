@@ -188,8 +188,11 @@ describe.skipIf(!TEST_DATABASE_URL)('core API with PostgreSQL', () => {
 
     it('refuses to delete a parent that still has children, then deletes leaf-first', async () => {
       const { client, project, wp, item } = await createChain();
-      expect((await app.delete(`/api/clients/${client.id}`)).status).toBe(409);
-      expect((await app.delete(`/api/work-packages/${wp.id}`)).status).toBe(409);
+      // PostgreSQL 16 reports these refusals as 23503, PostgreSQL 18 as 23001: the same answer.
+      for (const res of [await app.delete(`/api/clients/${client.id}`), await app.delete(`/api/work-packages/${wp.id}`)]) {
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('foreign_key_violation');
+      }
       await app.delete(`/api/work-items/${item.id}`).expect(204);
       await app.delete(`/api/work-packages/${wp.id}`).expect(204);
       await app.delete(`/api/projects/${project.id}`).expect(204);
