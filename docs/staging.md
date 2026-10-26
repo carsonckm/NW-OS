@@ -113,7 +113,8 @@ Then, from the operator machine, `DATABASE_URL=<app URL> npm run db:privileges` 
 docs/database-privileges.md §6 step 4 returns no rows.
 
 **7. Deploy.** Replace the placeholders in `deploy/cloudrun/staging-service.yaml`,
-`gcloud run services replace …`. Allow unauthenticated access to the service (NW OS has its own
+`gcloud run services replace …`. Do not set `NWOS_BROWSER_IMPORT` (browser imports stay off;
+§6 below). Allow unauthenticated access to the service (NW OS has its own
 sign-in) only after step 8 passes on the internal URL, or keep it behind IAP for the pilot.
 
 **8. First accounts.** On the operator machine with the migrator URL:
@@ -191,7 +192,33 @@ its backups and its restores. What that means in practice:
   account can be linked to one until its contact person and a phone or email are recorded, which
   clears the flag. Existing accounts already linked to such an id keep working; review them first.
 
-## 6. Rollback and recovery
+## 6. Browser data import (`NWOS_BROWSER_IMPORT`)
+
+Before it had a database, the app kept its data in each browser (local mode). On first load
+against an **empty** database, a user with `settings.manage` (the Owner) would have that
+browser's local data, demo records included, imported automatically. That is now controlled
+by the server:
+
+| `NWOS_BROWSER_IMPORT` | Browser import |
+|---|---|
+| unset, `NODE_ENV=production` (the image's default) | **off** |
+| unset, development | on |
+| `on` | on (still only for users with `settings.manage`) |
+| `off`, or any other value | **off** |
+
+- When off, `POST /api/data/import` and `POST /api/core/import` answer 403 `import_disabled`
+  for every role, `GET /api/data/status` reports `importAllowed: false`, and the app shows the
+  database as it is, even when empty. Normal saving (`/api/data/sync`), sign-in and permissions
+  are unchanged.
+- Whatever a browser held in local mode is kept in its localStorage under
+  `nw_os_local_preserved_<time>` (the latest three copies) before database data replaces it.
+  Sign-out does not remove those copies; the database's own cached data is still cleared.
+- To start a database with the built-in synthetic demo data, use the operator tool
+  (`npm run db:import-demo` with the app URL), which this setting does not affect.
+- Leave it unset (or `off`) for staging and the pilot; set `on` only for a deliberate,
+  supervised import, then remove it.
+
+## 7. Rollback and recovery
 
 - Application: redeploy the previous image tag (`gcloud run services update-traffic … --to-revisions`),
   only if its migrations are the same.

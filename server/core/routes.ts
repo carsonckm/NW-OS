@@ -8,6 +8,7 @@ import { apiErrorHandler } from '../http/errors';
 import type { CoreCollection } from './schema';
 import { CoreService } from './service';
 import { DataService } from '../modules/service';
+import { BROWSER_IMPORT_DISABLED, browserImportAllowed } from '../modules/browserImport';
 import { ValidationError } from './repository';
 import { COLLECTION_ORDER } from './schema';
 
@@ -124,6 +125,7 @@ export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions)
   router.post(
     '/core/import',
     wrap(async (req, res) => {
+      if (!browserImportAllowed()) return res.status(403).json(BROWSER_IMPORT_DISABLED);
       const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
       const result = await data.importData(req.access!, coreOnly(req.body) ?? {}, { dryRun }, actor(req));
       res.status(result.ok ? 200 : 422).json(result);

@@ -6,6 +6,7 @@ import type { CoreData, SyncData } from './coreApi';
 
 const asSync = (d: CoreData) => d as unknown as SyncData;
 import { diffCoreData, useCoreDatabaseSync } from './coreSync';
+import { clearCoreCache, PRESERVED_LOCAL_PREFIX } from './authApi';
 
 const demo = (): CoreData => ({
   clients: structuredClone(INITIAL_CLIENTS),
@@ -96,6 +97,7 @@ describe('useCoreDatabaseSync', () => {
   it('imports local data when the database is empty', async () => {
     let imported = false;
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+    routes['/api/data/status'] = () => ({ body: { databaseEmpty: true, importAllowed: true } });
     routes['/api/data/snapshot'] = () => ({ body: imported ? demo() : empty() });
     routes['/api/data/import'] = (_b, url) => {
       if (!url.includes('dryRun')) imported = true;
@@ -132,6 +134,7 @@ describe('useCoreDatabaseSync', () => {
 
   it('does not import, and stays local, when local data fails validation', async () => {
     routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+    routes['/api/data/status'] = () => ({ body: { databaseEmpty: true, importAllowed: true } });
     routes['/api/data/snapshot'] = () => ({ body: empty() });
     routes['/api/data/import'] = () => ({ status: 422, body: { ok: false, problems: ['projects p1: client_id "x" not found'] } });
 
@@ -189,5 +192,77 @@ describe('useCoreDatabaseSync', () => {
     expect(hook.result.current.message).toMatch(/1 change\(s\) not saved: delete clients/);
     // The refused delete isn't left pending: the database's state is loaded again.
     expect(calls.filter((c) => c.url === '/api/data/snapshot')).toHaveLength(2);
+  });
+
+  describe('browser import switched off on the server (NWOS_BROWSER_IMPORT)', () => {
+    const storeLocally = (d: CoreData) => {
+      for (const [k, v] of Object.entries(d)) localStorage.setItem(`nw_os_data_v1_${k}`, JSON.stringify(v));
+    };
+    const preserved = () => Object.keys(localStorage).filter((k) => k.startsWith(PRESERVED_LOCAL_PREFIX));
+
+    it('an Owner on an empty database gets the empty database, with no import attempt', async () => {
+      routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+      routes['/api/data/status'] = () => ({ body: { databaseEmpty: true, importAllowed: false } });
+      routes['/api/data/snapshot'] = () => ({ body: empty() });
+
+      const { hook, setters } = setup(demo()); // canImport defaults to true (an Owner)
+      await waitFor(() => expect(hook.result.current.mode).toBe('database'));
+      expect(hook.result.current.status).toBe('synced');
+      expect(calls.some((c) => c.url.startsWith('/api/data/import'))).toBe(false);
+      expect(setters.projects).toHaveBeenCalledWith([]);
+    });
+
+    it('never imports when the server does not say imports are allowed', async () => {
+      routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+      routes['/api/data/status'] = () => ({ body: { databaseEmpty: true } }); // older server
+      routes['/api/data/snapshot'] = () => ({ body: empty() });
+
+      const { hook } = setup(demo());
+      await waitFor(() => expect(hook.result.current.mode).toBe('database'));
+      expect(calls.some((c) => c.url.startsWith('/api/data/import'))).toBe(false);
+    });
+
+    it('a non-empty database is loaded normally and later edits still sync', async () => {
+      routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+      routes['/api/data/status'] = () => ({ body: { databaseEmpty: false, importAllowed: false } });
+      routes['/api/data/snapshot'] = () => ({ body: demo() });
+      routes['/api/data/sync'] = () => ({ body: { upserted: 1, deleted: 0 } });
+
+      const initial = demo();
+      const { hook, setters } = setup(initial);
+      await waitFor(() => expect(hook.result.current.mode).toBe('database'));
+      expect(setters.clients).toHaveBeenCalledWith(demo().clients);
+      act(() => hook.rerender({ data: { ...initial, clients: initial.clients.map((c, i) => (i === 0 ? { ...c, company_name: 'Renamed' } : c)) } }));
+      await waitFor(() => expect(calls.some((c) => c.url === '/api/data/sync')).toBe(true));
+      expect(calls.some((c) => c.url.startsWith('/api/data/import'))).toBe(false);
+    });
+
+    it("keeps the browser's own data in a copy that sign-out does not remove, once", async () => {
+      routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+      routes['/api/data/status'] = () => ({ body: { databaseEmpty: true, importAllowed: false } });
+      routes['/api/data/snapshot'] = () => ({ body: empty() });
+      const local = demo();
+      local.projects[0].project_name = 'Demo Supermarket — Outlet 001';
+      storeLocally(local);
+
+      const first = setup(local);
+      await waitFor(() => expect(first.hook.result.current.mode).toBe('database'));
+      expect(preserved()).toHaveLength(1);
+      const copy = JSON.parse(localStorage.getItem(preserved()[0])!);
+      expect(JSON.parse(copy.nw_os_data_v1_projects)[0].project_name).toBe('Demo Supermarket — Outlet 001');
+      cleanup();
+
+      // The cache now holds database data: a later load keeps no further copy of it.
+      storeLocally(empty());
+      const second = setup(empty());
+      await waitFor(() => expect(second.hook.result.current.mode).toBe('database'));
+      expect(preserved()).toHaveLength(1);
+
+      // Sign-out clears the database cache and its backups, never the preserved copy.
+      clearCoreCache();
+      expect(localStorage.getItem('nw_os_data_v1_projects')).toBeNull();
+      expect(Object.keys(localStorage).some((k) => k.startsWith('nw_os_core_backup_'))).toBe(false);
+      expect(preserved()).toHaveLength(1);
+    });
   });
 });
