@@ -25,6 +25,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 AI operating assistant', () => {
   const confirmedText = (a: Row) => a.facts.filter((f: Row) => f.confidence === 'Confirmed').map((f: Row) => f.text).join('\n');
 
   it('explains why a project is at risk from its records, with confidence labels and sources', async () => {
+    // Keep the demo project inside its schedule whatever today's date is: past its end date
+    // (2026-10-24), "Past the completion date" would lead the Schedule reasons instead of the
+    // overdue tasks this test is about.
+    await as['Owner / CEO'].patch('/api/projects/proj-1').send({ end_date: '2099-12-31' }).expect(200);
     const a = await ask('Owner / CEO', 'Why is this project at risk?', { project_id: 'proj-1' });
     expect(a.intent).toBe('risk');
     expect(a.project).toMatchObject({ id: 'proj-1' });
