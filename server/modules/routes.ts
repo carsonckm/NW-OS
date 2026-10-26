@@ -24,6 +24,7 @@ import { recurringFor } from './recurring';
 import { calendarFor } from './calendar';
 import { AI_PROPOSAL_TYPE, raiseProposal, validateProposal } from './assistantActions';
 import { DataService } from './service';
+import { BROWSER_IMPORT_DISABLED, browserImportAllowed } from './browserImport';
 
 const wrap =
   (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
@@ -89,6 +90,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   router.post(
     '/data/import',
     wrap(async (req, res) => {
+      // Refused before any permission check, so the answer is the same for every role.
+      if (!browserImportAllowed()) return res.status(403).json(BROWSER_IMPORT_DISABLED);
       const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
       const result = await service.importData(req.access!, req.body ?? {}, { dryRun }, actorOf(req));
       res.status(result.ok ? 200 : 422).json(result);
@@ -97,7 +100,7 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
 
   router.get(
     '/data/status',
-    wrap(async (_req, res) => res.json({ databaseEmpty: await service.isEmpty() }))
+    wrap(async (_req, res) => res.json({ databaseEmpty: await service.isEmpty(), importAllowed: browserImportAllowed() }))
   );
 
   // ---------------- domain actions ----------------

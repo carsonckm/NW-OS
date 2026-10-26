@@ -87,6 +87,12 @@ export function toUserProfile(user: SessionUser): UserProfile {
 // user signs in on the same browser.
 const CORE_CACHE_KEYS = [...SYNCED_COLLECTIONS.map((c) => c.storageKey), 'currentUser', 'auditLogs'].map((k) => `nw_os_data_v1_${k}`);
 const CACHE_OWNER_KEY = 'nw_os_core_cache_owner';
+// Set once the cached core data has come from the database (cleared with it).
+const CACHE_FROM_DATABASE_KEY = 'nw_os_core_cache_from_database';
+// Copies of data the browser held before it first loaded from the database. Kept until the user
+// removes them: neither sign-out nor another user's sign-in deletes them.
+export const PRESERVED_LOCAL_PREFIX = 'nw_os_local_preserved_';
+const MAX_PRESERVED = 3;
 
 export function clearCoreCache() {
   try {
@@ -95,6 +101,40 @@ export function clearCoreCache() {
       .filter((k) => k.startsWith('nw_os_core_backup_'))
       .forEach((k) => localStorage.removeItem(k));
     localStorage.removeItem(CACHE_OWNER_KEY);
+    localStorage.removeItem(CACHE_FROM_DATABASE_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/**
+ * Before database data first replaces what this browser holds, keeps a copy of the browser's own
+ * stored core data (local mode) under nw_os_local_preserved_<time>. Does nothing once the cache
+ * holds database data, or when nothing is stored; an identical latest copy is not repeated.
+ */
+export function preserveLocalCoreData() {
+  try {
+    if (localStorage.getItem(CACHE_FROM_DATABASE_KEY)) return;
+    const stored: Record<string, string> = {};
+    for (const k of CORE_CACHE_KEYS) {
+      const v = localStorage.getItem(k);
+      if (v !== null) stored[k] = v;
+    }
+    if (!Object.keys(stored).length) return;
+    const payload = JSON.stringify(stored);
+    const keys = Object.keys(localStorage).filter((k) => k.startsWith(PRESERVED_LOCAL_PREFIX)).sort();
+    if (keys.length && localStorage.getItem(keys[keys.length - 1]) === payload) return;
+    localStorage.setItem(`${PRESERVED_LOCAL_PREFIX}${new Date().toISOString()}`, payload);
+    keys.slice(0, Math.max(0, keys.length + 1 - MAX_PRESERVED)).forEach((k) => localStorage.removeItem(k));
+  } catch (err) {
+    console.error('[sync] could not preserve local data', err);
+  }
+}
+
+/** Marks the cached core data as database data (cleared on sign-out, never preserved). */
+export function markCoreCacheFromDatabase() {
+  try {
+    localStorage.setItem(CACHE_FROM_DATABASE_KEY, '1');
   } catch {
     /* storage unavailable */
   }

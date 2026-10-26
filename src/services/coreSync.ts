@@ -3,9 +3,10 @@
  * module, see syncedCollections.ts) in step with PostgreSQL when the server runs with
  * CORE_DATA_SOURCE=database. PostgreSQL is the source of truth; localStorage is a cache.
  *
- * - On load: if the database has data, it replaces the browser's copy (the browser's
- *   previous copy is backed up in localStorage first). If the database is empty and the
- *   user may import, the browser's data is validated and imported (never overwriting).
+ * - On load: the database's data replaces the browser's copy. The browser's own stored data
+ *   (local mode) is first kept under nw_os_local_preserved_*, which sign-out does not remove.
+ *   Only if the database is empty, the user may import and the server allows it
+ *   (NWOS_BROWSER_IMPORT) is the browser's data validated and imported (never overwriting).
  * - After that: every change to these collections, from any screen or action, is diffed
  *   against the last saved state and written in one transaction; the server authorises
  *   every record and enforces the business rules.
@@ -13,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { coreApi, CoreApiError, dataApi, type SyncChanges, type SyncData } from './coreApi';
+import { markCoreCacheFromDatabase, preserveLocalCoreData } from './authApi';
 import { SYNCED_COLLECTIONS } from './syncedCollections';
 
 export interface CoreSyncState {
@@ -116,9 +118,14 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
   const hydrate = useCallback(async () => {
     let snap = await dataApi.snapshot();
     // With sign-in, the snapshot only holds what this user may see, so "empty" must come
-    // from the server; and only users allowed to import may seed the database.
-    const empty = (await dataApi.status().catch(() => undefined))?.databaseEmpty ?? isEmpty(snap);
-    if (empty && canImport) {
+    // from the server; and only users allowed to import may seed the database, only when the
+    // server allows browser imports (NWOS_BROWSER_IMPORT; never assumed if it does not say).
+    const status = await dataApi.status().catch(() => undefined);
+    const empty = status?.databaseEmpty ?? isEmpty(snap);
+    // The browser's own stored data is kept (nw_os_local_preserved_*) before the database's
+    // replaces it, whether or not it is imported.
+    preserveLocalCoreData();
+    if (empty && canImport && status?.importAllowed === true) {
       const local = latest.current;
       const check = await dataApi.importData(local, { dryRun: true });
       if (!check.ok) {
@@ -131,10 +138,13 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
       }
       await dataApi.importData(local);
       snap = await dataApi.snapshot();
-    } else if (!empty && diffCoreData(snap, latest.current).count > 0) {
+    } else if (diffCoreData(snap, latest.current).count > 0) {
+      // Not imported (data already there, no permission, or imports switched off): the
+      // database is shown as it is, even when empty.
       backupLocal(latest.current);
     }
     apply(snap);
+    markCoreCacheFromDatabase();
     setState({ mode: 'database', status: 'synced', lastSyncedAt: new Date().toISOString() });
   }, [apply, canImport]);
 

@@ -97,7 +97,7 @@ export interface DataImportResult {
 
 /** Unified data API (core chain + Phase 3 modules), one transaction per sync. */
 export const dataApi = {
-  status: () => request<{ databaseEmpty: boolean }>('/data/status'),
+  status: () => request<{ databaseEmpty: boolean; importAllowed?: boolean }>('/data/status'),
   snapshot: () => request<SyncData>('/data/snapshot'),
   sync: (changes: SyncChanges) => request<{ upserted: number; deleted: number }>('/data/sync', json('POST', changes)),
   importData: async (data: SyncData, { dryRun = false } = {}): Promise<DataImportResult> => {
