@@ -8,24 +8,30 @@ interface UploadDrawingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onDrawingUploaded?: (drawingId: string) => void;
+  /** The project the drawing belongs to; defaults to the project selected in the app. */
+  projectId?: string;
 }
 
 export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
   isOpen,
   onClose,
   onDrawingUploaded,
+  projectId: projectIdProp,
 }) => {
-  const { currentUser, selectedProjectId, projects, uploadDrawing } = useNW();
+  const { currentUser, selectedProjectId, userProjects, uploadDrawing, authMode } = useNW();
 
-  const [drawingNumber, setDrawingNumber] = useState('A-105');
-  const [title, setTitle] = useState('Timber Wall Cladding & Concealed Door Details');
-  const [category, setCategory] = useState<KnowledgeCategory>('Carpentry');
-  const [drawingType, setDrawingType] = useState<DrawingType>('Client / Designer Drawing');
-  const [revision, setRevision] = useState('Rev 1');
-  const [projectId, setProjectId] = useState(selectedProjectId || projects[0]?.id || 'proj-1');
-  const [notes, setNotes] = useState('Initial architectural detail issued for contractor review and shop drawing preparation.');
-  const [fileName, setFileName] = useState('A-105_Rev1_Wall_Cladding.pdf');
-  const [fileSize, setFileSize] = useState('4.2 MB');
+  // Every field starts empty: nothing is registered with values the user did not enter.
+  const [drawingNumber, setDrawingNumber] = useState('');
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState<KnowledgeCategory | ''>('');
+  const [drawingType, setDrawingType] = useState<DrawingType | ''>('');
+  const [revision, setRevision] = useState('');
+  // The target project: only one this user can see (in database mode, a PostgreSQL project).
+  // There is no fallback: without a valid project, nothing can be uploaded.
+  const [projectId, setProjectId] = useState(projectIdProp ?? selectedProjectId ?? '');
+  const [notes, setNotes] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [fileSize, setFileSize] = useState('');
   // The chosen file; in database mode its bytes are stored on the server (private, per project).
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,10 +40,24 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
 
   if (!isOpen) return null;
 
+  const targetProject = userProjects.find((p) => p.id === projectId);
+  const missing = [
+    !targetProject && 'project',
+    !drawingNumber.trim() && 'drawing number',
+    !revision.trim() && 'revision',
+    !category && 'category',
+    !title.trim() && 'title',
+    !drawingType && 'classification type',
+  ].filter(Boolean) as string[];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
     setError(null);
+    if (!targetProject || !category || !drawingType || missing.length) {
+      setError(`Fill in: ${missing.join(', ')}`);
+      return;
+    }
+    setIsSubmitting(true);
 
     try {
       // Database mode: the drawing file itself is uploaded first; the revision refers to it.
@@ -45,15 +65,15 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
       let fileUrl = `/drawings/${drawingNumber}_${revision}.pdf`;
       if (await filesAvailable()) {
         if (!file) throw new Error('Choose the drawing file to upload');
-        fileUrl = (await uploadFile(file, { purpose: 'drawing', projectId })).url;
+        fileUrl = (await uploadFile(file, { purpose: 'drawing', projectId: targetProject.id })).url;
       }
       const created = uploadDrawing({
         drawing_number: drawingNumber.trim(),
         title: title.trim(),
         category,
         drawing_type: drawingType,
-        revision: revision.trim() || 'Rev 1',
-        project_id: projectId,
+        revision: revision.trim(),
+        project_id: targetProject.id,
         file_url: fileUrl,
         notes: notes.trim(),
       });
@@ -126,7 +146,34 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5 text-slate-800">
-          {/* Quick Presets for Demo / Testing */}
+          {/* Target project: shown, and chosen deliberately */}
+          <div className="bg-amber-50 p-3 rounded-xl border border-amber-200">
+            <label htmlFor="uploadDrawingProject" className="block text-xs font-bold text-slate-700 mb-1">
+              Target project <span className="text-red-500">*</span>
+            </label>
+            <select
+              id="uploadDrawingProject"
+              value={targetProject ? targetProject.id : ''}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              required
+            >
+              <option value="">Select the project this drawing belongs to</option>
+              {userProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.project_name} ({p.project_number})
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] mt-1 text-slate-600" data-testid="upload-target-project">
+              {targetProject
+                ? <>This drawing will be registered on <strong>{targetProject.project_name}</strong> ({targetProject.project_number}).</>
+                : 'No project selected: choose the project before uploading.'}
+            </p>
+          </div>
+
+          {/* Quick Presets: demo mode only (no server database), never on real records */}
+          {!authMode && (
           <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
               Quick Test Presets:
@@ -153,13 +200,15 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
               ))}
             </div>
           </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
+              <label htmlFor="uploadDrawingNumber" className="block text-xs font-bold text-slate-700 mb-1">
                 Drawing Number <span className="text-red-500">*</span>
               </label>
               <input
+                id="uploadDrawingNumber"
                 type="text"
                 value={drawingNumber}
                 onChange={(e) => setDrawingNumber(e.target.value)}
@@ -170,28 +219,32 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
+              <label htmlFor="uploadDrawingRevision" className="block text-xs font-bold text-slate-700 mb-1">
                 Initial Revision <span className="text-red-500">*</span>
               </label>
               <input
+                id="uploadDrawingRevision"
                 type="text"
                 value={revision}
                 onChange={(e) => setRevision(e.target.value)}
-                placeholder="Rev 1"
+                placeholder="e.g. Rev 0"
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
+              <label htmlFor="uploadDrawingCategory" className="block text-xs font-bold text-slate-700 mb-1">
                 Category / Trade <span className="text-red-500">*</span>
               </label>
               <select
+                id="uploadDrawingCategory"
                 value={category}
-                onChange={(e) => setCategory(e.target.value as KnowledgeCategory)}
+                onChange={(e) => setCategory(e.target.value as KnowledgeCategory | '')}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                required
               >
+                <option value="">Select…</option>
                 <option value="Carpentry">Carpentry</option>
                 <option value="Metalwork">Metalwork</option>
                 <option value="Glass & Glazing">Glass & Glazing</option>
@@ -209,10 +262,11 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
+              <label htmlFor="uploadDrawingTitle" className="block text-xs font-bold text-slate-700 mb-1">
                 Drawing Title <span className="text-red-500">*</span>
               </label>
               <input
+                id="uploadDrawingTitle"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -223,14 +277,17 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
+              <label htmlFor="uploadDrawingType" className="block text-xs font-bold text-slate-700 mb-1">
                 Drawing Classification Type <span className="text-red-500">*</span>
               </label>
               <select
+                id="uploadDrawingType"
                 value={drawingType}
-                onChange={(e) => setDrawingType(e.target.value as DrawingType)}
+                onChange={(e) => setDrawingType(e.target.value as DrawingType | '')}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                required
               >
+                <option value="">Select…</option>
                 <option value="Client / Designer Drawing">Client / Designer Drawing (Original)</option>
                 <option value="Site Measurement">Site Measurement (As-Built Survey)</option>
                 <option value="NW Production Drawing">NW Production Drawing (Fabrication)</option>
@@ -332,6 +389,12 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
             </div>
           </div>
 
+          {missing.length > 0 && (
+            <p data-testid="upload-missing" className="text-[11px] text-slate-500">
+              Still needed before upload: {missing.join(', ')}.
+            </p>
+          )}
+
           {/* Footer Actions */}
           <div className="flex items-center justify-between pt-2 border-t border-slate-200">
             <span className="text-[11px] text-slate-500">
@@ -347,7 +410,7 @@ export const UploadDrawingModal: React.FC<UploadDrawingModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || !drawingNumber.trim() || !title.trim()}
+                disabled={isSubmitting || missing.length > 0}
                 className="px-5 py-2 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl shadow-md transition-all flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />

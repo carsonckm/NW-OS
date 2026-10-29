@@ -145,6 +145,47 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('pilot: private 
     expect((await upload(pm, q, 'a.pdf', PDF, { 'Content-Type': 'multipart/form-data; boundary=x' })).status).toBe(415);
   });
 
+  it('NW-002: a drawing upload goes to the project named, and never to a missing or unknown one', async () => {
+    const counts = async () => (await db.owner.query(
+      `SELECT (SELECT count(*) FROM files)::int AS files, (SELECT count(*) FROM file_contents)::int AS contents,
+              (SELECT count(*) FROM audit_logs WHERE action = 'file.upload')::int AS audits, (SELECT count(*) FROM drawings)::int AS drawings`
+    )).rows[0];
+    // Uploaded to the project the user chose, and stored there.
+    const ok = await upload(as['Owner / CEO'], { purpose: 'drawing', project_id: 'proj-x' }, 'nw002.pdf', PDF).expect(201);
+    expect(ok.body.project_id).toBe('proj-x');
+    expect((await db.owner.query('SELECT project_id FROM files WHERE id = $1', [ok.body.id])).rows[0].project_id).toBe('proj-x');
+
+    const before = await counts();
+    // No project: refused before anything is stored.
+    for (const q of [{ purpose: 'drawing' }, { purpose: 'drawing', project_id: '' }]) {
+      const res = await upload(as['Owner / CEO'], q, 'none.pdf', PDF);
+      expect(res.status, JSON.stringify(q)).toBe(400);
+      expect(res.body).toMatchObject({ error: 'validation_error', message: 'project_id is required' });
+    }
+    // An unknown project: a clean 404 for every role (the Owner sees every project id), no
+    // database error, nothing written.
+    for (const role of ['Owner / CEO', 'Project Manager']) {
+      const res = await upload(as[role], { purpose: 'drawing', project_id: 'proj-does-not-exist' }, 'ghost.pdf', PDF);
+      expect(res.status, role).toBe(404);
+      expect(res.body, role).toEqual({ error: 'not_found', message: 'Project not found' });
+    }
+    // The drawing record itself: an unknown project is refused the same way, by both write paths.
+    const rev = { id: 'dwg-ghost-r1', drawing_id: 'dwg-ghost', revision: 'Rev 0', title: 'Ghost', file_url: ok.body.url, uploaded_date: '2026-10-29', uploaded_by: 'Owner', approved_status: 'Draft', notes: '', is_current: false, drawing_type: 'Client / Designer Drawing', markups: [] };
+    const drawing = { id: 'dwg-ghost', project_id: 'proj-does-not-exist', drawing_number: 'G-1', title: 'Ghost', category: 'Joinery', current_revision_id: rev.id, created_at: '2026-10-29', revisions: [rev] };
+    const viaApi = await as['Owner / CEO'].post('/api/drawings').send(drawing);
+    expect(viaApi.status).toBe(404);
+    expect(viaApi.body).toEqual({ error: 'not_found', message: 'Project not found' });
+    const viaSync = await as['Owner / CEO'].post('/api/data/sync').send({ upserts: { drawings: [drawing] }, deletes: {} });
+    expect(viaSync.status).toBe(404);
+    expect(viaSync.body).toEqual({ error: 'not_found', message: 'Project not found' });
+    expect(await counts()).toEqual(before);
+    expect((await db.owner.query(`SELECT count(*)::int AS n FROM drawing_revisions WHERE id = 'dwg-ghost-r1'`)).rows[0].n).toBe(0);
+    // The file uploaded first is still unlinked, and can still be used on its real project.
+    expect((await db.owner.query('SELECT record_id FROM files WHERE id = $1', [ok.body.id])).rows[0].record_id).toBeNull();
+    await as['Owner / CEO'].post('/api/drawings').send({ ...drawing, project_id: 'proj-x' }).expect(201);
+    expect((await db.owner.query('SELECT project_id, record_id FROM files WHERE id = $1', [ok.body.id])).rows[0]).toEqual({ project_id: 'proj-x', record_id: 'dwg-ghost' });
+  });
+
   it('keeps stored files immutable, even for direct SQL on the runtime credential', async () => {
     const { fileId } = await drawingWithFile('dwg-f7', 'Draft');
     for (const sql of [

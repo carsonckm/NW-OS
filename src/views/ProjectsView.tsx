@@ -15,6 +15,7 @@ import { NewProjectModal } from '../components/NewProjectModal';
 import { NewWorkPackageModal } from '../components/NewWorkPackageModal';
 import { WorkPackageDetailModal } from '../components/WorkPackageDetailModal';
 import { ProjectCommandCenter } from '../components/ProjectCommandCenter';
+import { navigateTo } from '../services/navigation';
 import { hasPermission, canViewProjectFinancials } from '../utils/permissions';
 import {
   Building2,
@@ -214,7 +215,10 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
           onBackToPortfolio={() => setViewMode('portfolio')}
           onNavigateToTab={(tab) => {
             if (tab === 'work-items') onNavigateToWorkItems();
-            if (tab === 'contractors' && onNavigateToContractor) onNavigateToContractor('');
+            else if (tab === 'contractors' && onNavigateToContractor) onNavigateToContractor('');
+            // Any other tab (e.g. Drawings) opens for the project shown here, not whatever
+            // project happened to be selected before.
+            else navigateTo(tab, currentProject.id);
           }}
         />
 

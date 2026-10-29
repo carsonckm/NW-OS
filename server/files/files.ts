@@ -121,6 +121,7 @@ export function checkContent(purpose: FilePurpose, fileName: string, bytes: Buff
 }
 
 const notFound = () => Object.assign(new NotFoundError('clients', 'file'), { message: 'File not found' });
+const projectNotFound = () => Object.assign(new NotFoundError('projects', 'project'), { message: 'Project not found' });
 
 function moduleOf(collection: unknown): ModuleDef | undefined {
   return typeof collection === 'string' ? MODULE_BY_KEY.get(collection) : undefined;
@@ -171,13 +172,17 @@ export async function uploadFile(pool: Pool, ctx: AccessContext, actor: AuditAct
   } else {
     // A drawing file uploaded ahead of its revision.
     if (!ctx.can('drawings.upload')) throw new ForbiddenError('Missing permission: drawings.upload');
+    if (!projectId) throw new ValidationError('project_id is required');
   }
-  if (!projectId || !ctx.canSeeProject(projectId)) throw notFound();
+  if (!ctx.canSeeProject(projectId)) throw projectNotFound();
 
   const id = `file-${randomUUID()}`;
   const sha256 = createHash('sha256').update(input.bytes).digest('hex');
   const contentType = CONTENT_TYPES[kind];
   return withUserTransaction(pool, ctx, async (db) => {
+    // Company-wide roles see every project id, so check it exists before writing anything: a
+    // clean 404 rather than the database's foreign key error, and no file or audit row.
+    if (!(await db.query('SELECT 1 FROM projects WHERE id = $1', [projectId])).rowCount) throw projectNotFound();
     await db.query(
       `INSERT INTO files (id, project_id, purpose, record_collection, record_id, file_name, content_type, size_bytes, sha256, uploaded_by_id, uploaded_by_name)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
