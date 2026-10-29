@@ -125,8 +125,15 @@ module.exports = (H) => {
     await L.nav(pm, 'Drawings'); await pm.waitForTimeout(500);
     await pm.getByRole('button', { name: '+ Upload New Drawing' }).click();
     S.dwgNumber = `SL-${S.RUN}`;
+    // NW-002: the modal names the project it uploads to, and starts with every field empty.
+    const target = await pm.getByTestId('upload-target-project').innerText();
+    if (!target.includes(q(`select project_name from projects where id='${S.project}'`))) throw new Error(`Upload modal targets the wrong project: ${target}`);
+    if (await pm.getByText('Quick Test Presets:').count()) throw new Error('Quick Test Presets shown in database mode');
     await pm.getByPlaceholder('e.g. A-103').fill(S.dwgNumber);
+    await pm.getByPlaceholder('e.g. Rev 0').fill('Rev 1');
+    await pm.locator('#uploadDrawingCategory').selectOption('Carpentry');
     await pm.getByPlaceholder('e.g. Checkout Counter Detailed Joinery Plan').fill('Sky Lounge bar counter');
+    await pm.locator('#uploadDrawingType').selectOption('Client / Designer Drawing');
     await pm.getByPlaceholder(/Issued for tender review/).fill('Client designer drawing, bar counter 3600mm');
     // The real drawing file: stored privately on the server and linked to the revision.
     await pm.getByLabel('Drawing file').setInputFiles({ name: `${S.dwgNumber}_Rev1.pdf`, mimeType: 'application/pdf', buffer: Buffer.from(`%PDF-1.7\n% ${S.dwgNumber} bar counter\n%%EOF\n`) });

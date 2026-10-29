@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { linkDrawingRevisionFile } from '../../files/link';
 import { ForbiddenError } from '../../auth/access';
 import { writeAudit } from '../../audit';
-import { ValidationError } from '../../core/repository';
+import { NotFoundError, ValidationError } from '../../core/repository';
 import type { Pool, PoolClient } from '../../db/pool';
 import type { PermissionKey } from '../../../src/types';
 import type { HookContext, ModuleHooks, Row } from '../types';
@@ -344,6 +344,16 @@ export const drawingHooks: ModuleHooks = {
           .map((r) => ({ ...r.data, status: r.approval_status, approved_for_production: r.approved_for_production })),
       };
     });
+  },
+
+  async beforeWrite(h, existing, incoming) {
+    // A drawing registered on (or moved to) a project that does not exist: a clean 404 before
+    // anything is written, rather than the database's foreign key error.
+    if (h.mode !== 'import' && incoming.project_id !== existing?.project_id) {
+      const found = (await h.db.query('SELECT 1 FROM projects WHERE id = $1', [incoming.project_id])).rowCount;
+      if (!found) throw Object.assign(new NotFoundError('projects', String(incoming.project_id)), { message: 'Project not found' });
+    }
+    return incoming;
   },
 
   async afterWrite(h, _existing, stored) {
