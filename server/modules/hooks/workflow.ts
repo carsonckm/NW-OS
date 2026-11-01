@@ -182,6 +182,7 @@ export const handoverHooks: ModuleHooks = {
       return { ...next, prepared_by_id: h.ctx.user.id, prepared_by_name: h.ctx.user.name };
     }
     if (SIGNED.has(String(existing.status))) {
+      if (!SIGNED.has(to)) throw new ForbiddenError('A signed handover cannot return to Draft or another unsigned status');
       const allowed = new Set(['status', 'dlp_start_date', 'dlp_end_date', 'retention_sum_status', 'notes', 'documents', 'updated_at']);
       for (const k of Object.keys(next)) {
         if (!allowed.has(k) && JSON.stringify(next[k]) !== JSON.stringify(existing[k])) throw new ForbiddenError(`A signed handover can't change ${k}`);
