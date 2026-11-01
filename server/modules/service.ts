@@ -220,15 +220,22 @@ export class DataService {
         values.sensitivity = imported ?? existing?.sensitivity ?? 'Normal';
       }
       if (!values || collection !== 'workItems') return values;
-      // A production user (no work_items.edit) may only link an item to an order made for that item.
-      if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
+      // Every role (the Owner included) may only link an item to an existing order made for that
+      // item. Checked at the end of the transaction, so an order created in the same save counts.
+      // A link already stored is left as it is (existing records are never rewritten here).
+      if (h.mode !== 'import' && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
         const itemId = String(existing?.id ?? values.id);
         const orderId = String(values.production_order_id);
         h.defer(async () => {
           const order = (await h.db.query('SELECT work_item_id FROM production_orders WHERE id = $1', [orderId])).rows[0];
-          if (!order || order.work_item_id !== itemId) throw new ValidationError(`Production order ${orderId} is not an order for work item ${itemId}`);
+          if (!order) throw new ValidationError(`Production order ${orderId} does not exist`);
+          if (order.work_item_id !== itemId) throw new ValidationError(`Production order ${orderId} is not an order for work item ${itemId}`);
         });
       }
+      // The delivery status follows the item's committed delivery record (deriveWorkItem): the
+      // browser cannot set it. Without a delivery, a new item is Not Scheduled and an existing
+      // item keeps what is stored.
+      if (h.mode !== 'import') values.delivery_status = existing ? existing.delivery_status : 'Not Scheduled';
       // The revision an item was created from is fixed at creation.
       if (existing) values.source_drawing_revision_id = existing.source_drawing_revision_id ?? undefined;
       else if (!values.source_drawing_revision_id) {

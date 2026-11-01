@@ -188,7 +188,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authentication and server-side authorisatio
       const item = (
         await owner
           .post('/api/work-items')
-          .send({ ...INITIAL_WORK_ITEMS[0], id: undefined, project_id: undefined, work_package_id: wp.id })
+          .send({ ...INITIAL_WORK_ITEMS[0], id: undefined, project_id: undefined, work_package_id: wp.id, production_order_id: undefined })
           .expect(201)
       ).body;
       const tree = (await owner.get(`/api/clients/${client.id}/tree`).expect(200)).body;

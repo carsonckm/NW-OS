@@ -207,6 +207,9 @@ module.exports = (H) => {
     if (q(`select count(*) from production_orders where work_item_id='${S.item}'`) === '0') {
       await L.vis(pmgr.getByRole('button', { name: 'New Production Order' })).click();
       await pmgr.getByLabel('Select Approved Work Item').selectOption(S.item);
+      // QA batch 1: nothing is filled in for the user; the method and target date are asked for.
+      await pmgr.getByLabel('Approved Production Method').fill('NW-PM-Counter-001 Rev 2');
+      await pmgr.getByLabel('Factory Target Completion Date').fill('2026-11-30');
       await pmgr.getByRole('button', { name: 'Issue Production Order' }).click();
     }
     await L.settle(pmgr);
@@ -328,9 +331,17 @@ module.exports = (H) => {
     await delSub(pm, 'Ready for Delivery');
     const card = pm.locator('div.rounded-xl, div.rounded-2xl').filter({ hasText: S.orderNumber }).filter({ has: pm.getByRole('button', { name: 'Arrange Delivery' }) }).last();
     await card.getByRole('button', { name: 'Arrange Delivery' }).click();
+    // QA batch 1: the order gives the project, package and item; transport details start empty.
+    if (!(await sib(pm, 'Responsible Contractor').inputValue())) await sib(pm, 'Responsible Contractor').selectOption({ index: 1 });
     await sib(pm, 'Driver Name').fill(`Ahmad ${S.RUN}`);
+    await sib(pm, 'Driver Contact Number').fill('+60 12-882 1993');
     await sib(pm, 'Vehicle Plate Number').fill('WXY 3838');
+    await sib(pm, 'Vehicle Type').fill('3-Ton Box Lorry');
     await sib(pm, 'Delivery Date').fill('2026-12-02');
+    await sib(pm, 'Delivery Time Slot').fill('10:30 AM');
+    await sib(pm, 'Estimated Arrival at Site').fill('11:45 AM');
+    if (Number(await sib(pm, 'Package Count').inputValue()) < 1) await sib(pm, 'Package Count').fill('3');
+    if (!(await sib(pm, 'Destination Address / Loading Bay').inputValue())) await sib(pm, 'Destination Address / Loading Bay').fill('Loading Bay B2');
     await pm.getByRole('button', { name: 'Save & Schedule Delivery' }).click();
     await L.settle(pm);
     S.del = q(`select id from deliveries where data->>'driver_name'='Ahmad ${S.RUN}'`);

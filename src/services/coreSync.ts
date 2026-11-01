@@ -45,6 +45,7 @@ const MAX_BACKUPS = 3;
 const DEBOUNCE_MS = 400;
 
 const idOf = (collection: string) => SYNCED_COLLECTIONS.find((c) => c.key === collection)?.idField ?? 'id';
+const pathOf = (collection: string) => SYNCED_COLLECTIONS.find((c) => c.key === collection)?.path ?? collection;
 const key = (r: unknown) => JSON.stringify(r);
 
 /** Records added or changed in `next`, and ids removed from `prev`, per collection. */
@@ -62,6 +63,71 @@ export function diffCoreData(prev: SyncData, next: SyncData): SyncChanges & { co
   }
   return changes;
 }
+
+type Change = { c: string; id: string; record?: Rec; deleted?: boolean };
+
+/** Every string inside a record (nested objects and arrays included): the ids it may refer to. */
+function referencedValues(value: unknown, out = new Set<string>(), depth = 0): Set<string> {
+  if (typeof value === 'string') out.add(value);
+  else if (depth < 4 && value && typeof value === 'object') {
+    for (const v of Array.isArray(value) ? value : Object.values(value)) referencedValues(v, out, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * Splits a refused batch into groups that can be retried on their own. Two changes belong
+ * together when either refers to the other's id (a production order and its work item, a
+ * delivery and the items it carries, a record and the one it was deleted with): such a group is
+ * retried as one atomic batch, never record by record. Only a change that refers to no other
+ * change in the batch, and that none refers to, stands alone. Deleted records are judged by
+ * their last saved content (`prev`).
+ */
+export function dependencyGroups(changes: SyncChanges, prev: SyncData): SyncChanges[] {
+  const nodes: Change[] = [];
+  for (const { key: c } of SYNCED_COLLECTIONS) {
+    for (const record of changes.upserts[c] ?? []) nodes.push({ c, id: String(record[idOf(c)]), record });
+    for (const id of changes.deletes[c] ?? []) {
+      nodes.push({ c, id, deleted: true, record: (prev[c] ?? []).find((r) => String(r[idOf(c)]) === id) });
+    }
+  }
+  const parent = nodes.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const union = (a: number, b: number) => {
+    parent[find(a)] = find(b);
+  };
+  const byId = new Map<string, number[]>();
+  nodes.forEach((n, i) => byId.set(n.id, [...(byId.get(n.id) ?? []), i]));
+  for (const ids of byId.values()) for (const j of ids.slice(1)) union(ids[0], j);
+  nodes.forEach((n, i) => {
+    if (!n.record) return;
+    for (const v of referencedValues(n.record)) for (const j of byId.get(v) ?? []) if (j !== i) union(i, j);
+  });
+  const groups = new Map<number, SyncChanges>();
+  nodes.forEach((n, i) => {
+    const g = groups.get(find(i)) ?? { upserts: {}, deletes: {} };
+    if (n.deleted) (g.deletes[n.c] ??= []).push(n.id);
+    else (g.upserts[n.c] ??= []).push(n.record!);
+    groups.set(find(i), g);
+  });
+  return [...groups.values()];
+}
+
+const describeGroup = (g: SyncChanges) =>
+  [
+    ...Object.entries(g.upserts).flatMap(([c, rows]) => rows.map((r) => `${c} ${String(r[idOf(c)])}`)),
+    ...Object.entries(g.deletes).flatMap(([c, ids]) => ids.map((id) => `delete ${c} ${id}`)),
+  ].join(' + ');
+
+/** What a business operation (commit) came to: saved, or refused / not confirmed. */
+export type CommitResult =
+  | { ok: true }
+  | {
+      ok: false;
+      /** The server's answer is unknown (network failure, 5xx): retrying the same operation is safe and creates no duplicate. */
+      uncertain: boolean;
+      message: string;
+    };
 
 const isEmpty = (d: SyncData) => SYNCED_COLLECTIONS.every((c) => !d[c.key]?.length);
 
@@ -148,7 +214,12 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     setState({ mode: 'database', status: 'synced', lastSyncedAt: new Date().toISOString() });
   }, [apply, canImport]);
 
-  /** Writes the batch; if it is rejected, retries record by record so one bad change can't block the rest. */
+  /**
+   * Writes the batch. If the server refuses it, the batch is split only into groups of changes
+   * that do not refer to each other (dependencyGroups); each group is retried as one atomic
+   * batch, so a dependent operation is never saved in part. A batch that is one group is not
+   * retried.
+   */
   const write = useCallback(async (changes: SyncChanges, next: SyncData) => {
     try {
       await dataApi.sync(changes);
@@ -156,27 +227,17 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
       return [];
     } catch (err) {
       if (!(err instanceof CoreApiError) || err.status >= 500) throw err;
+      const groups = dependencyGroups(changes, saved.current ?? {});
+      if (groups.length === 1) return [`${describeGroup(groups[0])}: ${errorText(err)}`];
     }
     const failures: string[] = [];
-    for (const { key: c } of SYNCED_COLLECTIONS) {
-      for (const record of changes.upserts[c] ?? []) {
-        const id = String(record[idOf(c)]);
-        try {
-          await dataApi.sync({ upserts: { [c]: [record] }, deletes: {} });
-          saved.current = patchSnapshot(saved.current!, c, id, record);
-        } catch (err) {
-          failures.push(`${c} ${id}: ${errorText(err)}`);
-        }
-      }
-    }
-    for (const { key: c } of [...SYNCED_COLLECTIONS].reverse()) {
-      for (const id of changes.deletes[c] ?? []) {
-        try {
-          await dataApi.sync({ upserts: {}, deletes: { [c]: [id] } });
-          saved.current = patchSnapshot(saved.current!, c, id);
-        } catch (err) {
-          failures.push(`delete ${c} ${id}: ${errorText(err)}`);
-        }
+    for (const group of dependencyGroups(changes, saved.current ?? {})) {
+      try {
+        await dataApi.sync(group);
+        for (const [c, rows] of Object.entries(group.upserts)) for (const r of rows) saved.current = patchSnapshot(saved.current!, c, String(r[idOf(c)]), r);
+        for (const [c, ids] of Object.entries(group.deletes)) for (const id of ids) saved.current = patchSnapshot(saved.current!, c, id);
+      } catch (err) {
+        failures.push(`${describeGroup(group)}: ${errorText(err)}`);
       }
     }
     return failures;
@@ -317,5 +378,64 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     }
   }, [apply]);
 
-  return { ...state, reloadFromDatabase, applyRows };
+  // Records whose last commit got no clear answer (network failure, 5xx): "collection:id".
+  const unconfirmed = useRef(new Set<string>());
+
+  /**
+   * Saves one business operation (e.g. a production order, a delivery and the items it carries)
+   * as a single atomic batch: never split, never retried record by record, and nothing is shown
+   * as saved until the server confirms it. On success the server's own versions of the records
+   * (and of `refresh`, the records the server updates alongside) replace the app's. If the last
+   * attempt's outcome was unknown, the server is asked first whether the records exist, so
+   * submitting again never creates a duplicate. `localOnly` is applied too when there is no
+   * database (local mode), for links the server makes itself.
+   */
+  const commit = useCallback(
+    async (op: { upserts: Record<string, Rec[]>; refresh?: Record<string, string[]>; localOnly?: Record<string, Rec[]> }): Promise<CommitResult> => {
+      const entries = Object.entries(op.upserts).filter(([, rows]) => rows.length);
+      if (state.mode !== 'database') {
+        for (const [c, rows] of [...entries, ...Object.entries(op.localOnly ?? {})]) applyRows(c, rows);
+        return { ok: true };
+      }
+      const keys = entries.flatMap(([c, rows]) => rows.map((r) => `${c}:${String(r[idOf(c)])}`));
+      const fetchOne = (c: string, id: string) => dataApi.get<Rec>(pathOf(c), id);
+      // Let a debounced save that is already running finish: the operation is its own batch.
+      while (inFlight.current) await new Promise((r) => setTimeout(r, 25));
+      inFlight.current = true;
+      try {
+        let alreadySaved = false;
+        if (keys.some((k) => unconfirmed.current.has(k))) {
+          const found = await Promise.all(entries.flatMap(([c, rows]) => rows.map((r) => fetchOne(c, String(r[idOf(c)])).then(() => true, () => false))));
+          alreadySaved = found.every(Boolean);
+        }
+        if (!alreadySaved) await dataApi.sync({ upserts: Object.fromEntries(entries), deletes: {} });
+        keys.forEach((k) => unconfirmed.current.delete(k));
+      } catch (err) {
+        const uncertain = !(err instanceof CoreApiError) || err.status >= 500;
+        keys.forEach((k) => (uncertain ? unconfirmed.current.add(k) : unconfirmed.current.delete(k)));
+        return {
+          ok: false,
+          uncertain,
+          message: uncertain ? `The server did not confirm the save (${errorText(err)}). Try again: it will not create a duplicate.` : errorText(err),
+        };
+      } finally {
+        inFlight.current = false;
+        if (rerun.current) {
+          rerun.current = false;
+          void flush();
+        }
+      }
+      const reload = async (c: string, ids: string[], sent: Rec[] = []) => {
+        const rows = await Promise.all(ids.map((id) => fetchOne(c, id).catch(() => sent.find((r) => String(r[idOf(c)]) === id))));
+        applyRows(c, rows.filter(Boolean) as Rec[]);
+      };
+      for (const [c, rows] of entries) await reload(c, rows.map((r) => String(r[idOf(c)])), rows);
+      for (const [c, ids] of Object.entries(op.refresh ?? {})) if (ids.length) await reload(c, ids);
+      setState((s) => ({ ...s, status: 'synced', message: undefined, lastSyncedAt: new Date().toISOString() }));
+      return { ok: true };
+    },
+    [state.mode, applyRows, flush]
+  );
+
+  return { ...state, reloadFromDatabase, applyRows, commit };
 }
