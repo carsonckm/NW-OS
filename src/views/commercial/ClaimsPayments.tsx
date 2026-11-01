@@ -10,7 +10,7 @@ import { hasPermission } from '../../utils/permissions';
 import { FormError } from '../../components/ui/FormError';
 import { Button, Field, Input, Modal, Select, newId, rm, today } from '../../components/ui/forms';
 
-const NEXT: Record<string, FinancialClaim['status'] | undefined> = { Draft: 'Submitted', Submitted: 'Certified', Certified: 'Paid' };
+const NEXT: Record<string, FinancialClaim['status'] | undefined> = { Draft: 'Submitted', Submitted: 'Certified' };
 
 export const ClaimForm: React.FC<{ projectId: string; onClose: () => void }> = ({ projectId, onClose }) => {
   const { projects } = useNW();
@@ -58,7 +58,7 @@ export const ClaimForm: React.FC<{ projectId: string; onClose: () => void }> = (
   );
 };
 
-/** Moves a claim to its next state (Submitted, Certified with the certified amount, Paid). */
+/** Moves a claim to Submitted or Certified. Paid requires verified settlement. */
 export const ClaimActions: React.FC<{ claim: FinancialClaim }> = ({ claim }) => {
   const { currentUser } = useNW();
   const records = useRecords();
@@ -72,7 +72,6 @@ export const ClaimActions: React.FC<{ claim: FinancialClaim }> = ({ claim }) => 
     try {
       const patch: Partial<FinancialClaim> = { status: next };
       if (next === 'Certified') patch.certified_amount = claim.certified_amount ?? claim.net_claim_amount;
-      if (next === 'Paid') patch.payment_received_date = today();
       await records.update<FinancialClaim>('financialClaims', claim.id, patch, claim);
     } catch (err) {
       setError((err as Error).message);
