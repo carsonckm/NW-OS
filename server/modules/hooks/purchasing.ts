@@ -310,7 +310,7 @@ export const invoiceHooks: ModuleHooks = {
       // excluding the invoice being edited to avoid counting it twice.
       const others = await h.db.query(
         `SELECT data FROM commercial_invoices
-         WHERE po_id = $1 AND id <> $2`,
+         WHERE data->>'po_id' = $1 AND id <> $2`,
         [next.po_id, String(next.id)]
       );
       const previouslyInvoiced = money(others.rows.reduce((sum: number, row: { data: Row }) => {
