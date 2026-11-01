@@ -83,7 +83,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 project risk, health and the daily 
 
   it('returns to On Track when the problems are resolved', async () => {
     for (const id of ['r-t1', 'r-t2', 'r-t3']) await pm().patch(`/api/tasks/${id}`).send({ status: 'Completed' }).expect(200);
-    await as['Site Supervisor'].post('/api/site-qc').send({ id: 'sqc-r2', inspection_number: 'SQC-R2', work_item_id: 'item-r', work_item_code: 'R-1', installation_job_id: 'inst-r', project_id: 'proj-r', project_name: 'Risk Test', inspection_date: '2026-02-03', result: 'Pass', snag_items: [], photos: [], comments: '' }).expect(201);
+    await as['Site Supervisor'].post('/api/site-qc').send({ id: 'sqc-r2', inspection_number: 'SQC-R2', work_item_id: 'item-r', work_item_code: 'R-1', installation_job_id: 'inst-r', project_id: 'proj-r', project_name: 'Risk Test', inspection_date: '2026-02-03', result: 'Pass', level_and_alignment_pass: true, hardware_and_mechanism_pass: true, finish_and_surfaces_pass: true, safety_and_fixing_pass: true, cleanliness_and_protection_pass: true, snag_items: [], photos: [], comments: '' }).expect(201);
     await as['Purchasing'].patch('/api/material-requests/mr-r').send({ status: 'PO Created' }).expect(200);
     // The automated rectification task from the failed QC is also open: close it.
     for (const t of (await db.pool.query(`SELECT id FROM tasks WHERE project_id = 'proj-r' AND status NOT IN ('Completed', 'Cancelled')`)).rows) {
