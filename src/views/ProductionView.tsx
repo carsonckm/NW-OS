@@ -33,6 +33,10 @@ import { PackingDeliveryTab } from '../components/production/PackingDeliveryTab'
 import { ProductionIssuesTab } from '../components/production/ProductionIssuesTab';
 import { BarcodeScannerModal } from '../components/production/BarcodeScannerModal';
 import { ProductionOrder } from '../types';
+import { operationId, settleOperation } from '../services/coreSync';
+
+// The order being issued keeps one id across attempts and page reloads (see operationId).
+const ORDER_FORM = 'production-order';
 
 export const ProductionView: React.FC = () => {
   const {
@@ -61,9 +65,9 @@ export const ProductionView: React.FC = () => {
   const [customNotes, setCustomNotes] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  // One id per order being issued: issuing again after an unconfirmed attempt reuses it, so
-  // the server never ends up with two orders.
-  const [pendingOrderId, setPendingOrderId] = useState(() => `po-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  // One id per order being issued: issuing again after an unconfirmed attempt (or a reload)
+  // reuses it, so the server never ends up with two orders.
+  const [pendingOrderId, setPendingOrderId] = useState(() => operationId(ORDER_FORM, 'po'));
 
   const subtabs = [
     { id: 'dashboard', label: 'Production Dashboard', icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
@@ -104,7 +108,10 @@ export const ProductionView: React.FC = () => {
     !requiredDate && 'factory target date',
   ].filter(Boolean) as string[];
 
+  // Closing the form ends this order's operation; the next one gets a new id.
   const closeCreateModal = () => {
+    settleOperation(ORDER_FORM);
+    setPendingOrderId(operationId(ORDER_FORM, 'po'));
     setShowCreateModal(false);
     setCreateError(null);
   };
@@ -162,7 +169,6 @@ export const ProductionView: React.FC = () => {
       setCreateError(result.message);
       return;
     }
-    setPendingOrderId(`po-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     setSelectedWorkItemId('');
     setRequiredDate('');
     setProductionMethod('');

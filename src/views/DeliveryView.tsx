@@ -16,6 +16,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useNW } from '../context/NWContext';
+import { operationId, settleOperation } from '../services/coreSync';
 import { hasPermission } from '../utils/permissions';
 import { DeliveryCommandCenter } from './delivery/DeliveryCommandCenter';
 import { ReadyForDeliveryTab } from './delivery/ReadyForDeliveryTab';
@@ -102,9 +103,10 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
   const [arrangeData, setArrangeData] = useState<ArrangeData>(emptyArrangement);
   const [arrangeError, setArrangeError] = useState<string | null>(null);
   const [isArranging, setIsArranging] = useState(false);
-  // One id per delivery being arranged: saving again after an unconfirmed attempt reuses it,
-  // so the server never ends up with two deliveries.
-  const newDeliveryId = () => `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // One id per delivery being arranged: saving again after an unconfirmed attempt (or a
+  // reload) reuses it, so the server never ends up with two deliveries.
+  const ARRANGE_FORM = 'arrange-delivery';
+  const newDeliveryId = () => operationId(ARRANGE_FORM, 'del');
   const [pendingDeliveryId, setPendingDeliveryId] = useState(newDeliveryId);
 
   const openNewArrangement = () => {
@@ -113,7 +115,9 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
     setPendingDeliveryId(newDeliveryId());
     setShowArrangeModal(true);
   };
+  // Closing the form ends this delivery's operation; the next one gets a new id.
   const closeArrangement = () => {
+    settleOperation(ARRANGE_FORM);
     setShowArrangeModal(false);
     setArrangeError(null);
   };
@@ -257,7 +261,6 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
       setArrangeError(result.message);
       return;
     }
-    setPendingDeliveryId(newDeliveryId());
     closeArrangement();
     setActiveTab('schedule');
   };

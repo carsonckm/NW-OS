@@ -66,11 +66,12 @@ export function diffCoreData(prev: SyncData, next: SyncData): SyncChanges & { co
 
 type Change = { c: string; id: string; record?: Rec; deleted?: boolean };
 
-/** Every string inside a record (nested objects and arrays included): the ids it may refer to. */
-function referencedValues(value: unknown, out = new Set<string>(), depth = 0): Set<string> {
+/** Every string inside a record, at any depth (nested objects and arrays, cycles included): the ids it may refer to. */
+function referencedValues(value: unknown, out = new Set<string>(), seen = new WeakSet<object>()): Set<string> {
   if (typeof value === 'string') out.add(value);
-  else if (depth < 4 && value && typeof value === 'object') {
-    for (const v of Array.isArray(value) ? value : Object.values(value)) referencedValues(v, out, depth + 1);
+  else if (value && typeof value === 'object' && !seen.has(value)) {
+    seen.add(value);
+    for (const v of Array.isArray(value) ? value : Object.values(value)) referencedValues(v, out, seen);
   }
   return out;
 }
@@ -127,7 +128,65 @@ export type CommitResult =
       /** The server's answer is unknown (network failure, 5xx): retrying the same operation is safe and creates no duplicate. */
       uncertain: boolean;
       message: string;
+      /** The record was changed by someone else since; the server's version is now shown. */
+      conflict?: boolean;
     };
+
+// --- Operations whose outcome is unknown, kept in the browser so a reload does not lose them ---
+
+const UNCONFIRMED_KEY = 'nw_os_unconfirmed_commits';
+const OPERATION_IDS_KEY = 'nw_os_operation_ids';
+type Unconfirmed = Record<string, Rec[]>; // "collection:id" -> every version sent and not confirmed
+
+function readStore<T>(key: string): T {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? '{}') as T;
+  } catch {
+    return {} as T;
+  }
+}
+function writeStore(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage full or blocked: the in-page flow still works, only reload recovery is lost
+  }
+}
+
+/**
+ * The record id of the operation a form is preparing (e.g. 'quick-schedule'). It stays the same
+ * across attempts and page reloads until the operation is saved or the form is cancelled
+ * (settleOperation), so submitting again never creates a second record.
+ */
+export function operationId(formKey: string, prefix: string): string {
+  const ids = readStore<Record<string, string>>(OPERATION_IDS_KEY);
+  if (ids[formKey]) return ids[formKey];
+  const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  writeStore(OPERATION_IDS_KEY, { ...ids, [formKey]: id });
+  return id;
+}
+/** The form's operation is done (saved) or abandoned (cancelled): the next one gets a new id. */
+export function settleOperation(formKey: string) {
+  const ids = readStore<Record<string, string>>(OPERATION_IDS_KEY);
+  delete ids[formKey];
+  writeStore(OPERATION_IDS_KEY, ids);
+}
+function settleOperationsFor(recordId: string) {
+  const ids = readStore<Record<string, string>>(OPERATION_IDS_KEY);
+  writeStore(OPERATION_IDS_KEY, Object.fromEntries(Object.entries(ids).filter(([, id]) => id !== recordId)));
+}
+
+/** Fields set per attempt (timestamps, history, running numbers): not part of what the user entered. */
+const VOLATILE = ['created_at', 'updated_at', 'status_history', 'stage_history', 'delivery_number', 'order_number', 'barcode', 'qr_code'];
+const stable = (v: unknown): string => {
+  const norm = (x: unknown): unknown =>
+    Array.isArray(x) ? x.map(norm) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x as Rec).sort().filter((k) => (x as Rec)[k] !== undefined).map((k) => [k, norm((x as Rec)[k])])) : (x ?? null);
+  return JSON.stringify(norm(v));
+};
+/** Whether the server's record holds what was sent (every sent field except the volatile ones). */
+function holds(server: Rec, sent: Rec) {
+  return Object.keys(sent).every((k) => VOLATILE.includes(k) || stable(sent[k]) === stable(server[k]));
+}
 
 const isEmpty = (d: SyncData) => SYNCED_COLLECTIONS.every((c) => !d[c.key]?.length);
 
@@ -378,17 +437,22 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     }
   }, [apply]);
 
-  // Records whose last commit got no clear answer (network failure, 5xx): "collection:id".
-  const unconfirmed = useRef(new Set<string>());
-
   /**
    * Saves one business operation (e.g. a production order, a delivery and the items it carries)
    * as a single atomic batch: never split, never retried record by record, and nothing is shown
    * as saved until the server confirms it. On success the server's own versions of the records
-   * (and of `refresh`, the records the server updates alongside) replace the app's. If the last
-   * attempt's outcome was unknown, the server is asked first whether the records exist, so
-   * submitting again never creates a duplicate. `localOnly` is applied too when there is no
-   * database (local mode), for links the server makes itself.
+   * (and of `refresh`, the records the server updates alongside) replace the app's.
+   *
+   * When an earlier attempt got no clear answer (kept in the browser, across reloads), the
+   * server is asked first what it holds for each record:
+   *   - nothing: the attempt was not saved; it is sent (same id, so never a duplicate);
+   *   - what is being submitted now: already saved, confirmed without sending again;
+   *   - one of this browser's earlier attempts: the corrections are applied to that same record,
+   *     with a precondition that it is still exactly as read (server validation and audit as for
+   *     any update; 409 if it changed meanwhile);
+   *   - anything else: someone else changed it. Nothing is overwritten: the server's version is
+   *     shown and the user is asked to apply the corrections to it (submitting again does so).
+   * `localOnly` is applied too when there is no database (local mode), for links the server makes.
    */
   const commit = useCallback(
     async (op: { upserts: Record<string, Rec[]>; refresh?: Record<string, string[]>; localOnly?: Record<string, Rec[]> }): Promise<CommitResult> => {
@@ -397,25 +461,72 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
         for (const [c, rows] of [...entries, ...Object.entries(op.localOnly ?? {})]) applyRows(c, rows);
         return { ok: true };
       }
-      const keys = entries.flatMap(([c, rows]) => rows.map((r) => `${c}:${String(r[idOf(c)])}`));
+      const keyOf = (c: string, r: Rec) => `${c}:${String(r[idOf(c)])}`;
       const fetchOne = (c: string, id: string) => dataApi.get<Rec>(pathOf(c), id);
+      const fetchIfAny = (c: string, id: string) =>
+        fetchOne(c, id).catch((err) => {
+          if (err instanceof CoreApiError && err.status === 404) return undefined;
+          throw err;
+        });
       // Let a debounced save that is already running finish: the operation is its own batch.
       while (inFlight.current) await new Promise((r) => setTimeout(r, 25));
       inFlight.current = true;
+      const sentNow: Record<string, Rec[]> = {};
       try {
-        let alreadySaved = false;
-        if (keys.some((k) => unconfirmed.current.has(k))) {
-          const found = await Promise.all(entries.flatMap(([c, rows]) => rows.map((r) => fetchOne(c, String(r[idOf(c)])).then(() => true, () => false))));
-          alreadySaved = found.every(Boolean);
+        const pending = readStore<Unconfirmed>(UNCONFIRMED_KEY);
+        const expect: NonNullable<SyncChanges['expect']> = [];
+        const conflicts: string[] = [];
+        for (const [c, rows] of entries) {
+          for (const r of rows) {
+            const k = keyOf(c, r);
+            if (!pending[k]) {
+              (sentNow[c] ??= []).push(r);
+              continue;
+            }
+            const id = String(r[idOf(c)]);
+            const server = await fetchIfAny(c, id);
+            if (!server) (sentNow[c] ??= []).push(r);
+            else if (holds(server, r)) continue; // the earlier attempt saved exactly this
+            else if (pending[k].some((sent) => holds(server, sent))) {
+              // Ours, unchanged since: apply the corrections to it (its running numbers kept).
+              (sentNow[c] ??= []).push({ ...r, ...Object.fromEntries(VOLATILE.filter((f) => f in server).map((f) => [f, server[f]])) });
+              expect.push({ collection: c, id, record: server });
+            } else {
+              // Changed by someone else since: show their version, overwrite nothing. The user
+              // now has it in front of them; submitting again applies the corrections to it.
+              pending[k] = [server];
+              applyRows(c, [server]);
+              conflicts.push(`${c} ${id}`);
+            }
+          }
         }
-        if (!alreadySaved) await dataApi.sync({ upserts: Object.fromEntries(entries), deletes: {} });
-        keys.forEach((k) => unconfirmed.current.delete(k));
+        if (conflicts.length) {
+          writeStore(UNCONFIRMED_KEY, pending);
+          return {
+            ok: false,
+            uncertain: false,
+            conflict: true,
+            message: `Your earlier attempt was saved, and has since been changed by someone else (${conflicts.join(', ')}). Your corrections were not applied: review the saved version, then submit again to apply them.`,
+          };
+        }
+        if (Object.keys(sentNow).length) await dataApi.sync({ upserts: sentNow, deletes: {}, ...(expect.length ? { expect } : {}) });
+        const settled = readStore<Unconfirmed>(UNCONFIRMED_KEY);
+        for (const [c, rows] of entries) for (const r of rows) delete settled[keyOf(c, r)];
+        writeStore(UNCONFIRMED_KEY, settled);
       } catch (err) {
         const uncertain = !(err instanceof CoreApiError) || err.status >= 500;
-        keys.forEach((k) => (uncertain ? unconfirmed.current.add(k) : unconfirmed.current.delete(k)));
+        if (uncertain) {
+          // Unknown outcome: remember every version sent, so a retry (even after a reload) can
+          // tell a saved attempt from someone else's change.
+          const pending = readStore<Unconfirmed>(UNCONFIRMED_KEY);
+          for (const [c, rows] of Object.entries(sentNow)) for (const r of rows) pending[keyOf(c, r)] = [...(pending[keyOf(c, r)] ?? []), r];
+          writeStore(UNCONFIRMED_KEY, pending);
+        }
+        const conflict = err instanceof CoreApiError && err.status === 409;
         return {
           ok: false,
           uncertain,
+          ...(conflict ? { conflict: true } : {}),
           message: uncertain ? `The server did not confirm the save (${errorText(err)}). Try again: it will not create a duplicate.` : errorText(err),
         };
       } finally {
@@ -436,6 +547,40 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     },
     [state.mode, applyRows, flush]
   );
+
+  // After a reload, settle what earlier attempts left unconfirmed: a record the server holds was
+  // saved (its form's operation is done, so the next form starts a new one and never overwrites
+  // it); one it does not hold was not saved (its form may submit it again under the same id).
+  useEffect(() => {
+    if (state.mode !== 'database') return;
+    let cancelled = false;
+    (async () => {
+      const pending = readStore<Unconfirmed>(UNCONFIRMED_KEY);
+      const recovered: string[] = [];
+      for (const k of Object.keys(pending)) {
+        const [c, ...rest] = k.split(':');
+        const id = rest.join(':');
+        try {
+          const server = await dataApi.get<Rec>(pathOf(c), id);
+          if (cancelled) return;
+          applyRows(c, [server]);
+          settleOperationsFor(id);
+          recovered.push(`${c} ${id}`);
+        } catch (err) {
+          if (!(err instanceof CoreApiError && err.status === 404)) continue; // still unknown: keep it
+        }
+        const now = readStore<Unconfirmed>(UNCONFIRMED_KEY);
+        delete now[k];
+        writeStore(UNCONFIRMED_KEY, now);
+      }
+      if (!cancelled && recovered.length) {
+        setState((s) => ({ ...s, message: `Saved before the connection was lost: ${recovered.join(', ')}` }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [state.mode, applyRows]);
 
   return { ...state, reloadFromDatabase, applyRows, commit };
 }

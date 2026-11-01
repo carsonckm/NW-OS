@@ -85,6 +85,8 @@ export type SyncData = Record<string, Record<string, unknown>[]>;
 export interface SyncChanges {
   upserts: Record<string, Record<string, unknown>[]>;
   deletes: Record<string, string[]>;
+  /** Records that must still be exactly as last read, or the server answers 409 (see server DataChanges). */
+  expect?: { collection: string; id: string; record: Record<string, unknown> }[];
 }
 
 export interface DataImportResult {

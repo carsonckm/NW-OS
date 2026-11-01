@@ -7,6 +7,10 @@ import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { WorkItem } from '../types';
 import { navigateTo } from '../services/navigation';
+import { operationId, settleOperation } from '../services/coreSync';
+
+// The delivery being arranged keeps one id across attempts and page reloads (see operationId).
+const QUICK_FORM = 'quick-schedule';
 import { Truck, CheckCircle2, X } from 'lucide-react';
 
 interface DeliveryModalProps {
@@ -52,11 +56,17 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
   const [receiptNotes, setReceiptNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  // One id per delivery being arranged: submitting again after an unconfirmed attempt reuses
-  // it, so the server never ends up with two deliveries.
-  const [deliveryId] = useState(() => `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  // One id per delivery being arranged: submitting again after an unconfirmed attempt (or a
+  // reload) reuses it, so the server never ends up with two deliveries.
+  const [deliveryId] = useState(() => operationId(QUICK_FORM, 'del'));
 
   if (!isOpen) return null;
+
+  // Cancelling ends this delivery's operation; the next one gets a new id.
+  const cancel = () => {
+    if (mode === 'schedule') settleOperation(QUICK_FORM);
+    onClose();
+  };
 
   const missing = [
     !contractorId && 'contractor',
@@ -99,7 +109,10 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
     // Only a saved delivery closes the form; otherwise the server's reason is shown and the
     // details stay for correction.
     if (result.ok === false) setError(result.message);
-    else onClose();
+    else {
+      settleOperation(QUICK_FORM);
+      onClose();
+    }
   };
 
   // With the database, a receipt is recorded on the delivery itself (Delivery › Site
@@ -134,7 +147,7 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer transition-colors">
+          <button onClick={cancel} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -206,7 +219,7 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
             <div className="flex justify-end space-x-2 pt-2">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={cancel}
                 className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl border border-slate-300 cursor-pointer"
               >
                 Cancel

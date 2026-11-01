@@ -153,6 +153,76 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('QA batch 1: pro
     expect((await db.owner.query(`SELECT count(*)::int AS n FROM delivery_items WHERE delivery_id = 'del-ti-1'`)).rows[0].n).toBe(2);
   });
 
+  it('contractor isolation: a contractor may only put its own work items on a delivery; other roles keep theirs', async () => {
+    // item-5 is on the same project but assigned to another contractor (con-2).
+    const before = await counts();
+    const res = await sync(as['Contractor'], { deliveryRecords: [delivery('del-ti-iso', ['item-ti-2', 'item-5'])] });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/item-5 is not one of your work items/);
+    expect(await counts()).toEqual(before);
+    // Nor added later to the contractor's own delivery (del-ti-1 carries item-ti-2, item-ti-3).
+    const own = (await owner().get('/api/deliveries/del-ti-1').expect(200)).body;
+    const add = await sync(as['Contractor'], { deliveryRecords: [{ ...own, work_item_ids: [...own.work_item_ids, 'item-5'] }] });
+    expect(add.status).toBe(403);
+    expect((await owner().get('/api/deliveries/del-ti-1').expect(200)).body.work_item_ids).toEqual(['item-ti-2', 'item-ti-3']);
+    // The Owner and a Project Manager may put any item of the project on a delivery.
+    await sync(as['Owner / CEO'], { deliveryRecords: [delivery('del-ti-own', ['item-5'])] }).expect(200);
+    await sync(as['Project Manager'], { deliveryRecords: [delivery('del-ti-pm', ['item-5'])] }).expect(200);
+  });
+
+  it('legacy deliveries: unchanged invalid references allow unrelated edits and receiving; new or changed references are checked', async () => {
+    // An existing delivery that already carries another project's item (as legacy data might);
+    // nothing repairs it.
+    await sync(owner(), { deliveryRecords: [delivery('del-ti-legacy', ['item-ti-1'])] }).expect(200);
+    await db.owner.query(`UPDATE deliveries SET data = jsonb_set(data, '{work_item_ids}', '["item-ti-1","item-x"]') WHERE id = 'del-ti-legacy'`);
+    const legacy = async () => (await owner().get('/api/deliveries/del-ti-legacy').expect(200)).body as Row;
+
+    await sync(owner(), { deliveryRecords: [{ ...(await legacy()), notes: 'unrelated edit' }] }).expect(200);
+    await sync(as['Project Manager'], { deliveryRecords: [{ ...(await legacy()), status: 'In Transit' }] }).expect(200);
+    const receipt = { id: 'rcpt-ti-legacy', delivery_id: 'del-ti-legacy', project_id: 'proj-1', received_at: '2026-11-20T10:00:00Z', condition_status: 'All In Order', packages_expected: 1, packages_received: 1, damaged_quantity: 0, missing_quantity: 0, photos: [], receiver_signature: 'sig' };
+    await as['Site Supervisor'].patch('/api/deliveries/del-ti-legacy').send({ status: 'Received / Confirmed', site_receipt: receipt }).expect(200);
+    expect((await legacy()).work_item_ids).toEqual(['item-ti-1', 'item-x']); // left as it was
+    expect((await db.owner.query(`SELECT count(*)::int AS n FROM delivery_receipts WHERE id = 'rcpt-ti-legacy'`)).rows[0].n).toBe(1);
+
+    // Newly added references are checked: another project's item, a missing or other-project order, a foreign package.
+    const cur = await legacy();
+    for (const [label, change, pattern] of [
+      ['new missing item', { work_item_ids: [...cur.work_item_ids, 'item-x2'] }, /item-x2 does not exist/],
+      ['new missing order', { production_order_ids: ['po-nope'] }, /production order po-nope does not exist/],
+      ['foreign package', { work_package_id: 'wp-x' }, /work package is on another project/],
+      ['changed project re-checks every item', { project_id: 'proj-2' }, /./],
+    ] as [string, Row, RegExp][]) {
+      const res = await sync(owner(), { deliveryRecords: [{ ...cur, ...change }] });
+      expect(res.status, label).toBeGreaterThanOrEqual(400);
+      expect(res.body.message, label).toMatch(pattern);
+    }
+    const crossOrderItem = await sync(owner(), { deliveryRecords: [{ ...cur, work_item_ids: [...cur.work_item_ids, 'item-x'] }] });
+    expect(crossOrderItem.status).toBe(200); // already on it: not "added"
+    // Removing the legacy item is a plain edit.
+    await sync(owner(), { deliveryRecords: [{ ...cur, work_item_ids: ['item-ti-1'] }] }).expect(200);
+    expect((await legacy()).work_item_ids).toEqual(['item-ti-1']);
+    // And once removed, putting it back is a new reference: refused.
+    expect((await sync(owner(), { deliveryRecords: [{ ...(await legacy()), work_item_ids: ['item-ti-1', 'item-x'] }] })).status).toBe(400);
+  });
+
+  it('a sync precondition (expect) writes only if the record is still as last read; otherwise 409 and nothing is written', async () => {
+    const read = (await owner().get('/api/deliveries/del-ti-own').expect(200)).body as Row;
+    const ok = await owner().post('/api/data/sync').send({ upserts: { deliveryRecords: [{ ...read, driver_name: 'Corrected' }] }, deletes: {}, expect: [{ collection: 'deliveryRecords', id: 'del-ti-own', record: read }] });
+    expect(ok.status).toBe(200);
+    // Someone else changes it; a correction based on the old read must not overwrite that.
+    const now = (await owner().get('/api/deliveries/del-ti-own').expect(200)).body as Row;
+    await sync(as['Project Manager'], { deliveryRecords: [{ ...now, vehicle_plate: 'NEWER 1' }] }).expect(200);
+    const auditsBefore = (await auditsFor('del-ti-own')).length;
+    const stale = await owner().post('/api/data/sync').send({ upserts: { deliveryRecords: [{ ...now, driver_name: 'Overwrite?' }] }, deletes: {}, expect: [{ collection: 'deliveryRecords', id: 'del-ti-own', record: now }] });
+    expect(stale.status).toBe(409);
+    expect(stale.body.message).toMatch(/has changed since you last loaded it/);
+    expect((await owner().get('/api/deliveries/del-ti-own').expect(200)).body).toMatchObject({ driver_name: 'Corrected', vehicle_plate: 'NEWER 1' });
+    expect((await auditsFor('del-ti-own')).length).toBe(auditsBefore);
+    // A precondition on a record this user cannot see reads as changed (no hint it exists).
+    const hidden = await as['Contractor'].post('/api/data/sync').send({ upserts: {}, deletes: {}, expect: [{ collection: 'deliveryRecords', id: 'del-x', record: {} }] });
+    expect(hidden.status).toBe(409);
+  });
+
   it('keeps project scope: a Project Manager cannot schedule another project\'s delivery', async () => {
     const res = await sync(as['Project Manager'], { deliveryRecords: [{ ...delivery('del-ti-x', ['item-x']), project_id: 'proj-x', work_package_id: 'wp-x' }] });
     expect(res.status).toBe(403);

@@ -5,7 +5,7 @@ import { INITIAL_CLIENTS, INITIAL_PROJECTS, INITIAL_WORK_ITEMS, INITIAL_WORK_PAC
 import type { CoreData, SyncData } from './coreApi';
 
 const asSync = (d: CoreData) => d as unknown as SyncData;
-import { dependencyGroups, diffCoreData, useCoreDatabaseSync } from './coreSync';
+import { dependencyGroups, diffCoreData, operationId, settleOperation, useCoreDatabaseSync } from './coreSync';
 import { clearCoreCache, PRESERVED_LOCAL_PREFIX } from './authApi';
 
 const demo = (): CoreData => ({
@@ -63,6 +63,19 @@ describe('dependencyGroups (QA batch 1: which refused changes may be retried on 
     const prev = { workItems: [item('item-9', { production_order_id: 'po-9' })] };
     const groups = dependencyGroups({ upserts: { productionOrders: [{ id: 'po-9', status: 'Cancelled' }], workItems: [item('item-1')] }, deletes: { workItems: ['item-9'] } }, prev);
     expect(ids(groups)).toEqual([['-workItems:item-9', 'productionOrders:po-9'], ['workItems:item-1']]);
+  });
+
+  it('finds references at any depth, and handles cyclic data', () => {
+    let deep: Record<string, unknown> = { work_item_id: 'item-1' };
+    for (let i = 0; i < 40; i++) deep = { level: i, child: [deep] };
+    const cyclic: Record<string, unknown> = { id: 'iss-1', links: { order: 'po-1' } };
+    (cyclic.links as Record<string, unknown>).self = cyclic;
+    (cyclic.links as Record<string, unknown>).loop = [cyclic.links];
+    const groups = dependencyGroups(
+      { upserts: { issues: [{ id: 'iss-deep', nested: deep }, cyclic], workItems: [item('item-1'), item('item-2')], productionOrders: [{ id: 'po-1' }] }, deletes: {} },
+      {}
+    );
+    expect(ids(groups)).toEqual([['issues:iss-1', 'productionOrders:po-1'], ['issues:iss-deep', 'workItems:item-1'], ['workItems:item-2']]);
   });
 
   it('separates only edits that refer to no other change in the batch (sharing a project or package is not a reference)', () => {
@@ -352,6 +365,125 @@ describe('useCoreDatabaseSync', () => {
       const items = setters.workItems.mock.calls.at(-1)![0] as { id: string; production_order_id?: string }[];
       expect(items.find((w) => w.id === itemId)?.production_order_id).toBe('po-c1');
       expect(syncCalls()).toHaveLength(0);
+    });
+  });
+
+  describe('timeout recovery (QA batch 1): corrections, concurrent edits and page reloads', () => {
+    type Rec = Record<string, unknown>;
+    let server: Record<string, Rec>;
+    let failNext: number;
+    let syncs: { upserts: Record<string, Rec[]>; expect?: { id: string; record: Rec }[] }[];
+    const sent = (r: Rec) => ({ id: 'del-r1', project_id: 'proj-1', driver_name: 'Wrong', vehicle_plate: 'WXY 1', status_history: [{ at: String(Date.now()) }], ...r });
+    beforeEach(() => {
+      server = {};
+      failNext = 0;
+      syncs = [];
+      routes['/api/core/status'] = () => ({ body: { dataSource: 'database' } });
+      routes['/api/data/snapshot'] = () => ({ body: demo() });
+      // A server that stores what it is sent, honours preconditions, and can lose its answer.
+      routes['/api/data/sync'] = (body) => {
+        const b = body as (typeof syncs)[number];
+        syncs.push(b);
+        for (const e of b.expect ?? []) {
+          if (JSON.stringify(server[e.id]) !== JSON.stringify(e.record)) return { status: 409, body: { error: 'conflict', message: `deliveryRecords ${e.id} has changed since you last loaded it.` } };
+        }
+        for (const r of b.upserts.deliveryRecords ?? []) server[String(r.id)] = r;
+        if (failNext > 0) {
+          failNext -= 1;
+          return { status: 504, body: { error: 'timeout', message: 'Gateway timeout' } }; // saved, but the answer was lost
+        }
+        return { body: {} };
+      };
+      routes['/api/deliveries/del-r1'] = () => (server['del-r1'] ? { body: server['del-r1'] } : { status: 404, body: { error: 'not_found', message: 'not found' } });
+    });
+    const mount = async () => {
+      const setters = { clients: vi.fn(), projects: vi.fn(), workPackages: vi.fn(), workItems: vi.fn(), deliveryRecords: vi.fn() };
+      const hook = renderHook(({ data }) => useCoreDatabaseSync(data, setters), { initialProps: { data: { ...asSync(demo()), deliveryRecords: [] as Rec[] } } });
+      await waitFor(() => expect(hook.result.current.mode).toBe('database'));
+      return { hook, setters };
+    };
+    const commitDelivery = async (hook: Awaited<ReturnType<typeof mount>>['hook'], r: Rec) => {
+      let result: Awaited<ReturnType<typeof hook.result.current.commit>> | undefined;
+      await act(async () => {
+        result = await hook.result.current.commit({ upserts: { deliveryRecords: [r] } });
+      });
+      return result!;
+    };
+
+    it('a corrected retry after a saved-but-unconfirmed attempt applies the corrections to the same record, with a precondition', async () => {
+      const { hook } = await mount();
+      failNext = 1;
+      expect(await commitDelivery(hook, sent({}))).toMatchObject({ ok: false, uncertain: true });
+      expect(server['del-r1'].driver_name).toBe('Wrong'); // it was in fact saved
+      expect(await commitDelivery(hook, sent({ driver_name: 'Corrected' }))).toEqual({ ok: true });
+      expect(server['del-r1'].driver_name).toBe('Corrected');
+      expect(Object.keys(server)).toEqual(['del-r1']); // one record, no duplicate
+      expect(syncs[1].expect?.[0]).toMatchObject({ id: 'del-r1', record: { driver_name: 'Wrong' } });
+    });
+
+    it('an identical retry is confirmed without sending again', async () => {
+      const { hook } = await mount();
+      failNext = 1;
+      await commitDelivery(hook, sent({}));
+      expect(await commitDelivery(hook, sent({}))).toEqual({ ok: true });
+      expect(syncs).toHaveLength(1);
+    });
+
+    it('never overwrites a newer change by someone else: shows their version, and applies the corrections only when submitted again', async () => {
+      const { hook, setters } = await mount();
+      failNext = 1;
+      await commitDelivery(hook, sent({}));
+      server['del-r1'] = { ...server['del-r1'], vehicle_plate: 'CHANGED BY PM' }; // someone else's edit
+      const result = await commitDelivery(hook, sent({ driver_name: 'Corrected' }));
+      expect(result).toMatchObject({ ok: false, conflict: true });
+      expect(syncs).toHaveLength(1); // nothing sent
+      expect(server['del-r1']).toMatchObject({ driver_name: 'Wrong', vehicle_plate: 'CHANGED BY PM' });
+      expect(setters.deliveryRecords).toHaveBeenLastCalledWith([expect.objectContaining({ vehicle_plate: 'CHANGED BY PM' })]); // now shown
+      // Submitting again, having seen it, applies the corrections to that version.
+      expect(await commitDelivery(hook, sent({ driver_name: 'Corrected', vehicle_plate: 'CHANGED BY PM' }))).toEqual({ ok: true });
+      expect(server['del-r1']).toMatchObject({ driver_name: 'Corrected', vehicle_plate: 'CHANGED BY PM' });
+    });
+
+    it('a change between reading and writing is caught by the server precondition (409), and nothing is overwritten', async () => {
+      const { hook } = await mount();
+      failNext = 1;
+      await commitDelivery(hook, sent({}));
+      // The read sees our attempt; then someone else writes before the correction arrives.
+      const read = routes['/api/deliveries/del-r1'];
+      routes['/api/deliveries/del-r1'] = (b, u) => {
+        const out = read(b, u);
+        server['del-r1'] = { ...server['del-r1'], vehicle_plate: 'RACED' };
+        return out;
+      };
+      const result = await commitDelivery(hook, sent({ driver_name: 'Corrected' }));
+      expect(result).toMatchObject({ ok: false, uncertain: false, conflict: true });
+      expect(server['del-r1']).toMatchObject({ driver_name: 'Wrong', vehicle_plate: 'RACED' });
+    });
+
+    it('survives a page reload: an attempt that was saved is recognised, and its form starts a new operation (no duplicate)', async () => {
+      const formId = operationId('quick-schedule', 'del');
+      const first = await mount();
+      failNext = 1;
+      await commitDelivery(first.hook, sent({ id: formId }));
+      routes[`/api/deliveries/${formId}`] = () => (server[formId] ? { body: server[formId] } : { status: 404, body: {} });
+      first.hook.unmount(); // the page is reloaded
+      const second = await mount();
+      await waitFor(() => expect(second.hook.result.current.message).toMatch(/Saved before the connection was lost/));
+      expect(second.setters.deliveryRecords).toHaveBeenLastCalledWith([expect.objectContaining({ id: formId })]);
+      expect(operationId('quick-schedule', 'del')).not.toBe(formId); // the saved one is never reused or overwritten
+      expect(syncs).toHaveLength(1);
+    });
+
+    it('survives a page reload: an attempt that was not saved keeps its id, so submitting again cannot duplicate', async () => {
+      const formId = operationId('quick-schedule', 'del');
+      routes[`/api/deliveries/${formId}`] = () => ({ status: 404, body: {} });
+      const first = await mount();
+      routes['/api/data/sync'] = () => ({ status: 503, body: { error: 'unavailable', message: 'Unavailable' } }); // not saved
+      await commitDelivery(first.hook, sent({ id: formId }));
+      first.hook.unmount();
+      expect(operationId('quick-schedule', 'del')).toBe(formId); // the reloaded form gets the same id
+      settleOperation('quick-schedule');
+      expect(operationId('quick-schedule', 'del')).not.toBe(formId); // until the form is saved or cancelled
     });
   });
 

@@ -93,6 +93,29 @@ describe('DeliveryModal Quick Schedule', () => {
     expect(second).toBe(first);
   });
 
+  it('keeps the same delivery id across a page reload until it is saved or cancelled', async () => {
+    localStorage.clear();
+    scheduleDelivery.mockResolvedValue({ ok: false, uncertain: true, message: 'The server did not confirm the save.' });
+    const first = render(<DeliveryModal isOpen onClose={() => {}} workItem={workItem} mode="schedule" />);
+    fill();
+    fireEvent.click(submit());
+    await waitFor(() => expect(scheduleDelivery).toHaveBeenCalledTimes(1));
+    first.unmount(); // reload
+    render(<DeliveryModal isOpen onClose={() => {}} workItem={workItem} mode="schedule" />);
+    fill();
+    fireEvent.click(submit());
+    await waitFor(() => expect(scheduleDelivery).toHaveBeenCalledTimes(2));
+    expect(scheduleDelivery.mock.calls[1][2].id).toBe(scheduleDelivery.mock.calls[0][2].id);
+    // Cancelling ends the operation: the next delivery gets a new id.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    cleanup();
+    render(<DeliveryModal isOpen onClose={() => {}} workItem={workItem} mode="schedule" />);
+    fill();
+    fireEvent.click(submit());
+    await waitFor(() => expect(scheduleDelivery).toHaveBeenCalledTimes(3));
+    expect(scheduleDelivery.mock.calls[2][2].id).not.toBe(scheduleDelivery.mock.calls[0][2].id);
+  });
+
   it('does not submit twice while a save is in progress', async () => {
     let resolve: (v: unknown) => void = () => {};
     scheduleDelivery.mockReturnValue(new Promise((r) => (resolve = r)));
