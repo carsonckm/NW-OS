@@ -144,13 +144,17 @@ export const goodsReceivedHooks: ModuleHooks = {
     const previous = await receivedByLine(h.db, po.id);
     const lines = poLines(po.data);
     const byId = new Map(lines.map((l) => [String(l.id), l]));
+    // Validate each PO line against the cumulative quantity within this GRN too.
+    // Repeating the same po_item_id must not bypass the ordered quantity limit.
+    const current = new Map(previous);
     const items = ((incoming.items ?? []) as Row[]).map((line) => {
       const poLine = byId.get(String(line.po_item_id));
       if (!poLine) throw new ValidationError(`PO ${String(po.data.po_number)} has no line ${String(line.po_item_id)}`);
       const ordered = qty(poLine.quantity);
-      const before = previous.get(String(poLine.id)) ?? 0;
+      const before = current.get(String(poLine.id)) ?? 0;
       const received = qty(line.received_qty);
       if (before + received > ordered * 1.1) throw new ValidationError(`${String(poLine.item_description)}: receiving ${received} would exceed the ${ordered} ordered`);
+      current.set(String(poLine.id), before + received);
       return {
         po_item_id: poLine.id,
         description: poLine.item_description,
