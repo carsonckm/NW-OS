@@ -1616,6 +1616,7 @@ export interface FinancialClaim {
 
 export interface PaymentRecord {
   id: string;
+  claim_id?: string; // Unique claim allocation for client inflows
   reference_no: string;
   project_id: string;
   type: 'Client Inflow' | 'Contractor Outflow' | 'Supplier PO Payment';

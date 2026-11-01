@@ -12,13 +12,20 @@ export const financialClaimHooks: ModuleHooks = {
       if (!existing || existing.status !== 'Certified') throw new ValidationError('Claim must be Certified');
       const due = Number(existing.certified_amount ?? existing.net_claim_amount);
       const claim = String(existing.claim_number ?? '');
+      const duplicateClaims = await h.db.query(
+        "SELECT id FROM financial_claims WHERE project_id = $1 AND data->>'claim_number' = $2 AND id <> $3",
+        [String(existing.project_id), claim, String(existing.id)],
+      );
+      if (duplicateClaims.rows.length) throw new ValidationError('Claim number is ambiguous; payment allocation requires a unique claim ID');
       const receipts = await h.db.query(
         "SELECT data FROM payments WHERE project_id = $1 AND status = 'Reconciled' AND data->>'type' = 'Client Inflow'",
         [String(existing.project_id)],
       );
       const paid = receipts.rows.reduce((sum: number, r: { data: Record<string, unknown> }) => {
         const note = String(r.data.notes ?? '');
-        return sum + (note === claim || note === 'For claim ' + claim ? Number(r.data.amount) || 0 : 0);
+        const allocatedId = String(r.data.claim_id ?? '');
+        const linked = allocatedId ? allocatedId === String(existing.id) : (note === claim || note === 'For claim ' + claim);
+        return sum + (linked ? Number(r.data.amount) || 0 : 0);
       }, 0);
       if (!Number.isFinite(due) || due <= 0 || !claim || Math.round(paid * 100) < Math.round(due * 100)) {
         throw new ValidationError('Insufficient reconciled client receipts linked to claim');

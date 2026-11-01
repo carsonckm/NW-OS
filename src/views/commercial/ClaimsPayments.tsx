@@ -104,7 +104,7 @@ export const PaymentForm: React.FC<{ projectId: string; onClose: () => void }> =
       const party = f.party.trim() || (f.type === 'Client Inflow' ? clients.find((c) => c.id === project.client_id)?.company_name ?? '' : '');
       await records.create<PaymentRecord>('payments', {
         id: newId('pay'), reference_no: f.reference.trim(), project_id: project.id, type: f.type, party_name: party, amount: Number(f.amount),
-        payment_method: f.method, date: f.date, status: 'Reconciled', notes: f.claim ? `For claim ${f.claim}` : undefined,
+        payment_method: f.method, date: f.date, status: 'Reconciled', claim_id: f.type === 'Client Inflow' ? (f.claim || undefined) : undefined, notes: f.claim ? `For claim ${openClaims.find(c => c.id === f.claim)?.claim_number ?? ''}` : undefined,
       });
       // A single payment does not establish that the certified claim is fully settled.
       // Keep the claim Certified until cumulative linked receipts are reconciled.
@@ -137,7 +137,7 @@ export const PaymentForm: React.FC<{ projectId: string; onClose: () => void }> =
           <Field label="Settles claim">
             <Select value={f.claim} onChange={(e) => setF({ ...f, claim: e.target.value })} aria-label="Settles claim">
               <option value="">None</option>
-              {openClaims.map((c) => <option key={c.id} value={c.claim_number}>{c.claim_number} ({c.status}, {rm(c.net_claim_amount)})</option>)}
+              {openClaims.map((c) => <option key={c.id} value={c.id}>{c.claim_number} ({c.status}, {rm(c.net_claim_amount)})</option>)}
             </Select>
           </Field>
         )}
