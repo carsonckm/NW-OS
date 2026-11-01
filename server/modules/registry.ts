@@ -2,7 +2,7 @@ import { approvalHooks } from './hooks/approvals';
 import { deliveryHooks } from './hooks/delivery';
 import { drawingHooks } from './hooks/drawings';
 import { installationHooks, siteQcHooks } from './hooks/site';
-import { productionOrderHooks } from './hooks/production';
+import { productionOrderHooks, factoryQcHooks, packingHooks } from './hooks/production';
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
 import { quotationHooks } from './hooks/commercial';
@@ -229,6 +229,7 @@ export const MODULES: ModuleDef[] = [
       scope: { kind: 'order' },
       perms: { view: 'production.view', create: [...edit], edit: [...edit], delete: null },
       required: ['production_order_id'],
+      hooks: key === 'factoryQCInspections' ? factoryQcHooks : key === 'packingPackages' ? packingHooks : undefined,
     })
   ),
   {
