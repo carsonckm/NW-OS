@@ -460,8 +460,16 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       expect((await owner().patch('/api/installation-jobs/inst-1').send({ status: 'Completed' })).status).toBe(403);
     });
 
+    it('rejects an overall site QC pass with a failed checklist', async () => {
+      const res = await as['Site Supervisor'].post('/api/site-qc').send(qc({
+        id: 'sqc-invalid-pass', result: 'Pass', snag_items: [],
+      }));
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/checklist/);
+    });
+
     it('a passing re-inspection allows completion', async () => {
-      await as['Site Supervisor'].post('/api/site-qc').send(qc({ id: 'sqc-re', inspection_number: 'SQC-RE', result: 'Pass', inspection_date: '2026-10-12', snag_items: [] })).expect(201);
+      await as['Site Supervisor'].post('/api/site-qc').send(qc({ id: 'sqc-re', inspection_number: 'SQC-RE', result: 'Pass', inspection_date: '2026-10-12', level_and_alignment_pass: true, finish_and_surfaces_pass: true, snag_items: [] })).expect(201);
       const item = (await owner().get('/api/work-items/item-3')).body;
       expect((await owner().post('/api/data/sync').send({ upserts: { workItems: [{ ...item, status: 'Completed' }] } })).status).toBe(200);
     });
