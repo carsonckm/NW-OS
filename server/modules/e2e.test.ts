@@ -212,7 +212,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
   it('31-32. progress claim and the client payment', async () => {
     await ok(accountant().post('/api/claims').send({ ...D.financialClaims[0], id: 'e2e-clm', claim_number: 'IPC-E2E-01', project_id: s.project, project_name: 'Horizon Sky Lounge', cumulative_claimed: 65000, retention_amount: 3250, net_claim_amount: 61750, status: 'Submitted', certified_amount: undefined, payment_received_date: undefined, invoice_number: 'INV-E2E-01' }), 201);
     await ok(accountant().patch('/api/claims/e2e-clm').send({ status: 'Certified', certified_amount: 61750 }), 200);
-    await ok(accountant().post('/api/payments').send({ ...D.payments[0], id: 'e2e-pay', reference_no: 'TRF-E2E', project_id: s.project, type: 'Client Inflow', party_name: 'Horizon', amount: 61750, date: '2027-02-05', status: 'Reconciled', notes: 'IPC-E2E-01' }), 201);
+    await ok(accountant().post('/api/payments').send({ ...D.payments[0], id: 'e2e-wrong-allocation', reference_no: 'TRF-WRONG', project_id: s.project, type: 'Client Inflow', party_name: 'Horizon', amount: 61750, date: '2027-02-05', status: 'Reconciled', claim_id: 'other-claim', notes: 'IPC-E2E-01' }), 201);
+    expect((await accountant().patch('/api/claims/e2e-clm').send({ status: 'Paid' })).status).toBe(400);
+    await ok(accountant().post('/api/payments').send({ ...D.payments[0], id: 'e2e-pay', reference_no: 'TRF-E2E', project_id: s.project, type: 'Client Inflow', party_name: 'Horizon', amount: 61750, date: '2027-02-05', status: 'Reconciled', claim_id: 'e2e-clm', notes: 'IPC-E2E-01' }), 201);
     await ok(accountant().patch('/api/claims/e2e-clm').send({ status: 'Paid', payment_received_date: '2027-02-05' }), 200);
     expect(await one(`SELECT status FROM financial_claims WHERE id = 'e2e-clm'`)).toEqual({ status: 'Paid' });
   });
