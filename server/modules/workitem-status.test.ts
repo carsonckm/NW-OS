@@ -27,7 +27,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 work item status consistency', () =
   const site = () => as['Site Supervisor'];
   const item = async () => (await db.pool.query(`SELECT status, production_status, delivery_status, installation_status, progress_percent FROM work_items WHERE id = 'item-ws'`)).rows[0] as Row;
   const order: Row = { id: 'po-ws', order_number: 'PO-WS', project_id: 'proj-1', project_name: 'Aurora', work_package_id: 'wp-1', work_item_id: 'item-ws', work_item_code: 'WS-1', client_id: 'client-1', location: 'L1', contractor_id: 'con-1', contractor_name: 'Hock Seng', production_manager_id: 'user-prod-mgr', required_date: '2026-11-01', current_stage: 'Not Started', priority: 'Normal', status: 'Not Started', approved_client_drawing_id: 'dwg-1', approved_client_drawing_revision: 'A-103 Rev 3', approved_nw_production_drawing_id: 'nwd-1', approved_nw_production_drawing_revision: 'A-103-NW Rev 1', production_method: 'NW-PM-Counter-001 Rev 2', material: 'Plywood', finish: 'Oak', dimensions: '1x1', quantity: 1, notes: '', photos: [], barcode: 'B', qr_code: 'Q', stage_history: [], created_at: '2026-10-01', updated_at: '2026-10-01' };
-  const qc = (id: string, result: string, date: string) => ({ id, inspection_number: id.toUpperCase(), work_item_id: 'item-ws', work_item_code: 'WS-1', installation_job_id: 'inst-ws', project_id: 'proj-1', project_name: 'Aurora', inspection_date: date, inspected_at: date, result, snag_items: [], photos: [], comments: '' });
+  const qc = (id: string, result: string, date: string) => ({ id, inspection_number: id.toUpperCase(), work_item_id: 'item-ws', work_item_code: 'WS-1', installation_job_id: 'inst-ws', project_id: 'proj-1', project_name: 'Aurora', inspection_date: date, inspected_at: date, result, level_and_alignment_pass: result === 'Pass', hardware_and_mechanism_pass: true, finish_and_surfaces_pass: result === 'Pass', safety_and_fixing_pass: true, cleanliness_and_protection_pass: true, snag_items: [], photos: [], comments: '' });
 
   it('follows production: running → In Progress, factory QC → Ready for QC, blocked → Blocked, ready → Ready for Delivery', async () => {
     await as['Production Manager'].post('/api/production-orders').send(order).expect(201);
@@ -38,6 +38,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 work item status consistency', () =
       ['Blocked', 'Blocked'],
       ['Ready for Delivery', 'Ready for Delivery'],
     ]) {
+      if (stage === 'Ready for Delivery') {
+        await as['Production Manager'].post('/api/factory-qc').send({ id: 'fqc-ws', production_order_id: 'po-ws', result: 'Passed', dimensional_tolerance_pass: true, visual_inspection_pass: true, hardware_smoothness_pass: true, edge_banding_integrity_pass: true, grain_match_pass: true }).expect(201);
+      }
       await as['Production Manager'].patch('/api/production-orders/po-ws').send({ status: stage, current_stage: stage }).expect(200);
       expect(await item(), stage).toMatchObject({ production_status: stage, status: overall });
     }
