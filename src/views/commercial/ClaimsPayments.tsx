@@ -107,7 +107,6 @@ export const PaymentForm: React.FC<{ projectId: string; onClose: () => void }> =
         id: newId('pay'), reference_no: f.reference.trim(), project_id: project.id, type: f.type, party_name: party, amount: Number(f.amount),
         payment_method: f.method, date: f.date, status: 'Reconciled', notes: f.claim ? `For claim ${f.claim}` : undefined,
       });
-      const claim = openClaims.find((c) => c.claim_number === f.claim);
       // A single payment does not establish that the certified claim is fully settled.
       // Keep the claim Certified until cumulative linked receipts are reconciled.
       // Do not auto-mark Paid from a partial or unverified payment.
