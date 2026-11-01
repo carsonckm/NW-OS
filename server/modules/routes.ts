@@ -82,8 +82,8 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   router.post(
     '/data/sync',
     wrap(async (req, res) => {
-      const { upserts, deletes } = req.body ?? {};
-      res.json(await service.sync(req.access!, { upserts, deletes }, actorOf(req)));
+      const { upserts, deletes, expect } = req.body ?? {};
+      res.json(await service.sync(req.access!, { upserts, deletes, expect }, actorOf(req)));
     })
   );
 

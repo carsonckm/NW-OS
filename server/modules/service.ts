@@ -21,6 +21,25 @@ const CORE = new Set<string>(COLLECTION_ORDER);
 export interface DataChanges {
   upserts?: Record<string, Row[]>;
   deletes?: Record<string, string[]>;
+  /**
+   * Optional preconditions: each module record must still be exactly as the user last read it
+   * (GET /api/<path>/:id), compared on what this user can see. Checked under a row lock inside
+   * the transaction; any difference answers 409 and nothing is written. Used when the browser
+   * applies corrections to a record an earlier, unconfirmed attempt already saved, so a newer
+   * change by someone else is never silently overwritten.
+   */
+  expect?: { collection: string; id: string; record: Row }[];
+}
+
+/** JSON with object keys sorted (PostgreSQL jsonb does not keep key order). */
+function stableJson(value: unknown): string {
+  const norm = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(norm)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v as Row).sort().filter((k) => (v as Row)[k] !== undefined).map((k) => [k, norm((v as Row)[k])]))
+        : v;
+  return JSON.stringify(norm(JSON.parse(JSON.stringify(value ?? null))));
 }
 
 /** 404 for a module record that does not exist or is outside the user's scope. */
@@ -220,15 +239,22 @@ export class DataService {
         values.sensitivity = imported ?? existing?.sensitivity ?? 'Normal';
       }
       if (!values || collection !== 'workItems') return values;
-      // A production user (no work_items.edit) may only link an item to an order made for that item.
-      if (h.mode !== 'import' && !h.ctx.can('work_items.edit') && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
+      // Every role (the Owner included) may only link an item to an existing order made for that
+      // item. Checked at the end of the transaction, so an order created in the same save counts.
+      // A link already stored is left as it is (existing records are never rewritten here).
+      if (h.mode !== 'import' && values.production_order_id && values.production_order_id !== existing?.production_order_id) {
         const itemId = String(existing?.id ?? values.id);
         const orderId = String(values.production_order_id);
         h.defer(async () => {
           const order = (await h.db.query('SELECT work_item_id FROM production_orders WHERE id = $1', [orderId])).rows[0];
-          if (!order || order.work_item_id !== itemId) throw new ValidationError(`Production order ${orderId} is not an order for work item ${itemId}`);
+          if (!order) throw new ValidationError(`Production order ${orderId} does not exist`);
+          if (order.work_item_id !== itemId) throw new ValidationError(`Production order ${orderId} is not an order for work item ${itemId}`);
         });
       }
+      // The delivery status follows the item's committed delivery record (deriveWorkItem): the
+      // browser cannot set it. Without a delivery, a new item is Not Scheduled and an existing
+      // item keeps what is stored.
+      if (h.mode !== 'import') values.delivery_status = existing ? existing.delivery_status : 'Not Scheduled';
       // The revision an item was created from is fixed at creation.
       if (existing) values.source_drawing_revision_id = existing.source_drawing_revision_id ?? undefined;
       else if (!values.source_drawing_revision_id) {
@@ -384,7 +410,19 @@ export class DataService {
     for (const key of [...Object.keys(upserts), ...Object.keys(deletes)]) {
       if (!CORE.has(key) && !MODULE_BY_KEY.has(key)) throw new ValidationError(`Unknown collection: ${key}`);
     }
+    const expectations = Array.isArray(changes.expect) ? changes.expect : [];
+    for (const e of expectations) {
+      if (!e || typeof e.id !== 'string' || !MODULE_BY_KEY.has(e.collection)) throw new ValidationError('expect: a module collection and record id are required');
+    }
     return this.inTransaction(ctx, actor, 'sync', async (h) => {
+      for (const e of expectations) {
+        const def = MODULE_BY_KEY.get(e.collection)!;
+        const current = await findRecord(h.db, def, e.id, true);
+        const visible = current && inModuleScope(ctx, def, current, await this.ordersFor(h.db)) ? this.redact(ctx, def, current) : undefined;
+        if (!visible || stableJson(visible) !== stableJson(e.record)) {
+          throw Object.assign(new ValidationError(`${def.key} ${e.id} has changed since you last loaded it. Reload it and apply your changes again.`), { status: 409 });
+        }
+      }
       const coreChanges: CoreChanges = { upserts: {}, deletes: {} };
       for (const c of COLLECTION_ORDER) {
         if (upserts[c]) coreChanges.upserts![c] = upserts[c];

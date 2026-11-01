@@ -57,7 +57,7 @@ export async function deriveWorkItem(db: Db, itemId: string, base: Row): Promise
   const [order, delivery, job, qc] = await Promise.all([
     db.query(`SELECT status FROM production_orders WHERE work_item_id = $1 ORDER BY (status = 'Cancelled'), updated_at DESC, id DESC LIMIT 1`, [itemId]),
     db.query(
-      `SELECT d.status, r.receipt_id, r.condition_status, r.damaged_quantity, r.missing_quantity FROM delivery_items i JOIN deliveries d ON d.id = i.delivery_id
+      `SELECT d.status, d.delivery_date, d.data->>'delivery_time' AS delivery_time, r.receipt_id, r.condition_status, r.damaged_quantity, r.missing_quantity FROM delivery_items i JOIN deliveries d ON d.id = i.delivery_id
        LEFT JOIN LATERAL (SELECT id AS receipt_id, condition_status, damaged_quantity, missing_quantity FROM delivery_receipts WHERE delivery_id = d.id ORDER BY received_at DESC LIMIT 1) r ON true
        WHERE i.work_item_id = $1 AND d.status <> 'Cancelled' ORDER BY d.updated_at DESC, d.id DESC LIMIT 1`,
       [itemId]
@@ -79,6 +79,9 @@ export async function deriveWorkItem(db: Db, itemId: string, base: Row): Promise
       ['Short Quantity', 'Damaged', 'Wrong Item'].includes(d.condition_status) || Number(d.damaged_quantity) > 0 || Number(d.missing_quantity) > 0;
     deliveryStatus = d.receipt_id ? (problem ? 'Delivery Issue' : 'Delivered') : deliveryOf(d.status);
     out.delivery_status = deliveryStatus;
+    // The item's scheduled slot is the delivery's (set together, in the delivery's transaction).
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(d.delivery_date ?? ''))) out.scheduled_delivery_date = d.delivery_date;
+    if (d.delivery_time) out.scheduled_delivery_time = d.delivery_time;
   }
 
   const qcResult: string | undefined = qc.rows[0]?.result;

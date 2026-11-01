@@ -213,7 +213,24 @@ import {
 } from '../data/managementInitialData';
 import { canAccessProject, hasPermission } from '../utils/permissions';
 import { dataApi } from '../services/coreApi';
-import { useCoreDatabaseSync, type CoreSyncState } from '../services/coreSync';
+import { useCoreDatabaseSync, type CommitResult, type CoreSyncState } from '../services/coreSync';
+
+/** A business operation saved as one unit: the saved record, or why it was not saved. */
+export type OperationResult<T> = { ok: true; record: T } | Extract<CommitResult, { ok: false }>;
+
+/** What Quick Schedule asks for: everything a delivery record needs that the work item does not give. */
+export interface QuickDeliveryDetails {
+  contractor_id: string;
+  delivery_date: string;
+  delivery_time: string;
+  driver_name: string;
+  driver_contact: string;
+  vehicle_plate: string;
+  vehicle_type: string;
+  destination_site: string;
+  package_count: number;
+  special_instructions?: string;
+}
 import { clearCoreCache } from '../services/authApi';
 
 interface NWContextType {
@@ -280,12 +297,8 @@ interface NWContextType {
     photos?: string[],
     correction?: string
   ) => void;
-  scheduleDelivery: (
-    workItemId: string,
-    date: string,
-    time: string,
-    lorryDetails?: string
-  ) => void;
+  /** Quick Schedule: a real delivery record for one work item (see createDeliveryRecord). */
+  scheduleDelivery: (workItemId: string, details: QuickDeliveryDetails, opts?: { id?: string }) => Promise<OperationResult<DeliveryRecord>>;
   confirmDeliveryReceived: (
     workItemId: string,
     receivedBy: string,
@@ -381,6 +394,7 @@ interface NWContextType {
   coreDataSync: CoreSyncState & {
     reloadFromDatabase: () => Promise<void>;
     applyRows: (collection: string, rows: Record<string, unknown>[], opts?: { replace?: boolean }) => void;
+    commit: (op: { upserts: Record<string, Record<string, unknown>[]>; refresh?: Record<string, string[]>; localOnly?: Record<string, Record<string, unknown>[]> }) => Promise<CommitResult>;
   };
   /** True when signed in through the server (sign-in replaces the demo role switcher). */
   authMode: boolean;
@@ -478,7 +492,11 @@ interface NWContextType {
   factoryQCInspections: FactoryQCInspection[];
   packingPackages: PackingPackage[];
   productionIssues: ProductionIssueRecord[];
-  createProductionOrder: (data: Omit<ProductionOrder, 'id' | 'order_number' | 'created_at' | 'updated_at' | 'stage_history' | 'barcode' | 'qr_code'>) => ProductionOrder;
+  /** Saved as one operation; `id` (kept by the form across attempts) makes a retry safe. */
+  createProductionOrder: (
+    data: Omit<ProductionOrder, 'id' | 'order_number' | 'created_at' | 'updated_at' | 'stage_history' | 'barcode' | 'qr_code'>,
+    opts?: { id?: string }
+  ) => Promise<OperationResult<ProductionOrder>>;
   updateProductionOrderStatus: (orderId: string, newStage: ProductionOrderStatus, notes?: string) => void;
   addProductionPart: (partData: Omit<ProductionPart, 'id' | 'created_at' | 'updated_at' | 'barcode' | 'qr_code'>) => ProductionPart;
   updatePartStatus: (partId: string, newStage: PartStatus, notes?: string) => void;
@@ -504,8 +522,15 @@ interface NWContextType {
   handoverRecords: HandoverRecord[];
   siteMeasurements: SiteMeasurementRecord[];
   clientChangeRequests: ClientChangeRequest[];
-  createDeliveryRecord: (delivery: Omit<DeliveryRecord, 'id' | 'delivery_number' | 'status_history' | 'qr_code' | 'barcode'>) => DeliveryRecord;
-  scheduleDeliveryRecord: (delivery: Omit<DeliveryRecord, 'id' | 'delivery_number' | 'status_history' | 'qr_code' | 'barcode'>) => DeliveryRecord;
+  /** Saved as one operation; `id` (kept by the form across attempts) makes a retry safe. */
+  createDeliveryRecord: (
+    delivery: Omit<DeliveryRecord, 'id' | 'delivery_number' | 'status_history' | 'qr_code' | 'barcode'>,
+    opts?: { id?: string }
+  ) => Promise<OperationResult<DeliveryRecord>>;
+  scheduleDeliveryRecord: (
+    delivery: Omit<DeliveryRecord, 'id' | 'delivery_number' | 'status_history' | 'qr_code' | 'barcode'>,
+    opts?: { id?: string }
+  ) => Promise<OperationResult<DeliveryRecord>>;
   updateDeliveryStatus: (deliveryId: string, status: DeliveryStatus, notes?: string) => void;
   updateLoadingChecklist: (deliveryId: string, checklist: Partial<LoadingChecklist>, isLoaded?: boolean) => void;
   scanPackageForLoading: (deliveryId: string, packageCode: string) => { success: boolean; message: string; scannedCount: number; totalCount: number; readyToLoad: boolean };
@@ -1443,50 +1468,58 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     }
   };
 
-  // Delivery Automation
+  // Quick Schedule (one work item): creates a real delivery record, saved as one operation and
+  // validated by the server like any other delivery. The item's delivery status follows it.
   const scheduleDelivery = (
     workItemId: string,
-    date: string,
-    time: string,
-    lorryDetails?: string
-  ) => {
+    details: QuickDeliveryDetails,
+    opts: { id?: string } = {}
+  ): Promise<OperationResult<DeliveryRecord>> => {
     const item = workItems.find((w) => w.id === workItemId);
-    if (!item) return;
-
-    setWorkItems((prev) =>
-      prev.map((w) =>
-        w.id === workItemId
-          ? {
-              ...w,
-              delivery_status: 'Scheduled',
-              scheduled_delivery_date: date,
-              scheduled_delivery_time: time,
-              notes: lorryDetails ? `${w.notes || ''} [Lorry: ${lorryDetails}]` : w.notes,
-              updated_at: new Date().toISOString(),
-            }
-          : w
-      )
-    );
-
-    // Notify site supervisor
-    setNotifications((nPrev) => [
+    if (!item) return Promise.resolve({ ok: false, uncertain: false, message: `Work item ${workItemId} not found` });
+    const project = projects.find((p) => p.id === item.project_id);
+    const pkg = workPackages.find((wp) => wp.id === item.work_package_id);
+    const contractor = contractors.find((c) => c.id === details.contractor_id);
+    const order = item.production_order_id ? productionOrders.find((o) => o.id === item.production_order_id) : undefined;
+    return createDeliveryRecord(
       {
-        id: 'notif-' + Date.now(),
-        target_role: 'Site Supervisor',
-        title: `Delivery Scheduled: ${item.item_code}`,
-        message: `Arrival scheduled on ${date} at ${time}. Please ensure site loading bay & hoist clearance.`,
-        type: 'delivery',
-        priority: 'normal',
-        is_read: false,
         project_id: item.project_id,
-        link_type: 'work_item',
-        link_id: item.id,
-        created_at: new Date().toISOString(),
+        project_name: project?.project_name ?? '',
+        work_package_id: item.work_package_id,
+        work_package_name: pkg?.name ?? '',
+        work_item_ids: [item.id],
+        work_item_codes: [item.item_code],
+        production_order_ids: order ? [order.id] : [],
+        contractor_id: details.contractor_id,
+        contractor_name: contractor?.company_name ?? '',
+        driver_name: details.driver_name,
+        driver_contact: details.driver_contact,
+        vehicle_plate: details.vehicle_plate,
+        vehicle_type: details.vehicle_type,
+        delivery_date: details.delivery_date,
+        delivery_time: details.delivery_time,
+        estimated_arrival: details.delivery_time,
+        destination_site: details.destination_site,
+        special_instructions: details.special_instructions ?? '',
+        package_count: details.package_count,
+        status: 'Scheduled',
+        scanned_packages: [],
+        loading_checklist: {
+          correct_project: false,
+          correct_work_items: false,
+          correct_quantity: false,
+          correct_package_count: false,
+          correct_destination: false,
+          protection_applied: false,
+          hardware_accessories_included: false,
+          delivery_documents_included: false,
+          photos: [],
+        },
+        notes: `Quick Schedule from work item ${item.item_code}`,
+        photos: [],
       },
-      ...nPrev,
-    ]);
-
-    addAuditLog('Scheduled Delivery', 'WorkItem', item.item_code, 'Not Scheduled', `Scheduled for ${date} ${time}`);
+      opts
+    );
   };
 
   // Delivery Received (Site Supervisor)
@@ -3984,47 +4017,43 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   // MODULE 13: PRODUCTION, CNC & QR/BARCODE FACTORY METHODS
   // ----------------------------------------------------
 
-  const createProductionOrder = (
-    data: Omit<ProductionOrder, 'id' | 'order_number' | 'created_at' | 'updated_at' | 'stage_history' | 'barcode' | 'qr_code'>
-  ): ProductionOrder => {
+  const createProductionOrder = async (
+    data: Omit<ProductionOrder, 'id' | 'order_number' | 'created_at' | 'updated_at' | 'stage_history' | 'barcode' | 'qr_code'>,
+    opts: { id?: string } = {}
+  ): Promise<OperationResult<ProductionOrder>> => {
     const nextNum = (productionOrders.length + 1).toString().padStart(3, '0');
     const orderNumber = `PO-2026-${nextNum}`;
+    const now = new Date().toISOString();
     const newOrder: ProductionOrder = {
       ...data,
-      id: 'po-' + Date.now(),
+      id: opts.id ?? 'po-' + Date.now(),
       order_number: orderNumber,
       barcode: `BC-${orderNumber}`,
       qr_code: `NW-QR://po/${orderNumber}/${data.work_item_code}`,
       stage_history: [
         {
           stage: data.current_stage || 'Not Started',
-          timestamp: new Date().toISOString(),
+          timestamp: now,
           updated_by: currentUser.name,
           role: currentUser.role,
           notes: 'Production Order created from Work Item ' + data.work_item_code,
         },
       ],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
     };
 
-    setProductionOrders((prev) => [newOrder, ...prev]);
-
-    // Link back to Work Item
-    if (data.work_item_id) {
-      setWorkItems((prev) =>
-        prev.map((item) =>
-          item.id === data.work_item_id
-            ? {
-                ...item,
-                production_order_id: newOrder.id,
-                production_status: newOrder.current_stage,
-                updated_at: new Date().toISOString(),
-              }
-            : item
-        )
-      );
-    }
+    // One operation: the order only. The server links it to its work item in the same
+    // transaction; the browser no longer writes that link itself (except in local mode).
+    const item = data.work_item_id ? workItems.find((w) => w.id === data.work_item_id) : undefined;
+    const result = await coreDataSync.commit({
+      upserts: { productionOrders: [newOrder as never] },
+      refresh: item ? { workItems: [item.id] } : undefined,
+      localOnly: item
+        ? { workItems: [{ ...item, production_order_id: newOrder.id, production_status: newOrder.current_stage, updated_at: now } as never] }
+        : undefined,
+    });
+    if (result.ok === false) return result;
 
     addAuditLog(
       'Created Production Order',
@@ -4033,7 +4062,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       undefined,
       `${newOrder.order_number} (${data.work_item_code})`
     );
-    return newOrder;
+    return { ok: true, record: newOrder };
   };
 
   const updateProductionOrderStatus = (
@@ -4481,11 +4510,12 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   // MODULE 14: DELIVERY, SITE INSTALLATION & PROJECT COMPLETION
   // ----------------------------------------------------
 
-  const createDeliveryRecord = (
-    data: Omit<DeliveryRecord, 'id' | 'delivery_number' | 'status_history' | 'qr_code' | 'barcode'>
-  ): DeliveryRecord => {
+  const createDeliveryRecord = async (
+    data: Omit<DeliveryRecord, 'id' | 'delivery_number' | 'status_history' | 'qr_code' | 'barcode'>,
+    opts: { id?: string } = {}
+  ): Promise<OperationResult<DeliveryRecord>> => {
     const deliveryNum = `DEL-2026-0${10 + deliveryRecords.length}`;
-    const id = `del-${Date.now()}`;
+    const id = opts.id ?? `del-${Date.now()}`;
 
     // Conflict detection: Check for existing deliveries on same date and overlapping time (same site/bay)
     let conflictObj: DeliveryRecord['schedule_conflict'] = undefined;
@@ -4524,26 +4554,23 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       schedule_conflict: conflictObj,
     };
 
-    setDeliveryRecords((prev) => [newRecord, ...prev]);
+    // One operation: the delivery only. The server sets its items' delivery status and slot
+    // in the same transaction (and refuses items of another project), so a refused delivery
+    // leaves every item as it was. In local mode the items are updated here.
+    const itemIds = data.work_item_ids ?? [];
+    const now = new Date().toISOString();
+    const result = await coreDataSync.commit({
+      upserts: { deliveryRecords: [newRecord as never] },
+      refresh: { workItems: itemIds },
+      localOnly: {
+        workItems: workItems
+          .filter((w) => itemIds.includes(w.id))
+          .map((w) => ({ ...w, delivery_status: 'Scheduled', scheduled_delivery_date: data.delivery_date, scheduled_delivery_time: data.delivery_time, updated_at: now }) as never),
+      },
+    });
+    if (result.ok === false) return result;
 
-    // Update linked work items delivery status
-    if (data.work_item_ids && data.work_item_ids.length > 0) {
-      setWorkItems((prev) =>
-        prev.map((w) =>
-          data.work_item_ids.includes(w.id) || data.work_item_codes?.includes(w.item_code)
-            ? {
-                ...w,
-                delivery_status: 'Scheduled',
-                scheduled_delivery_date: data.delivery_date,
-                scheduled_delivery_time: data.delivery_time,
-                updated_at: new Date().toISOString(),
-              }
-            : w
-        )
-      );
-    }
-
-    // Add audit log & notify
+    // Only now, with the delivery saved: audit and notify.
     addAuditLog(
       `Delivery Arranged: ${deliveryNum}`,
       currentUser.role,
@@ -4569,7 +4596,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       ...prev,
     ]);
 
-    return newRecord;
+    return { ok: true, record: newRecord };
   };
 
   const scheduleDeliveryRecord = createDeliveryRecord;

@@ -16,6 +16,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useNW } from '../context/NWContext';
+import { operationId, settleOperation } from '../services/coreSync';
 import { hasPermission } from '../utils/permissions';
 import { DeliveryCommandCenter } from './delivery/DeliveryCommandCenter';
 import { ReadyForDeliveryTab } from './delivery/ReadyForDeliveryTab';
@@ -65,7 +66,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
 
   // Modal state for New Delivery Arrangement
   const [showArrangeModal, setShowArrangeModal] = useState(false);
-  const [arrangeData, setArrangeData] = useState<{
+  type ArrangeData = {
     project_id: string;
     work_package_id: string;
     work_item_ids: string[];
@@ -81,22 +82,65 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
     destination_address: string;
     package_count: number;
     special_instructions: string;
-  }>({
-    project_id: projects[0]?.id || '',
-    work_package_id: workPackages[0]?.id || '',
-    work_item_ids: [workItems[0]?.id || ''],
-    contractor_id: contractors[0]?.id || '',
-    driver_name: 'Encik Rosli bin Hamzah',
-    driver_phone: '+60 12-882 1993',
-    vehicle_plate: 'WVR 8821',
-    vehicle_type: '3-Ton Box Lorry with Tailgate',
-    delivery_date: new Date().toISOString().split('T')[0],
-    delivery_time: '10:00 AM',
-    estimated_arrival_time: '11:15 AM',
-    destination_address: projects[0]?.site_address || 'Loading Bay B2, Pavilion Mall, Jalan Bukit Bintang, KL',
-    package_count: 3,
-    special_instructions: 'Strict security pass required. Delivery bay slot booked for 10:00 AM.',
+  };
+  // A new arrangement starts empty: no project, package, item or transport details are assumed.
+  const emptyArrangement = (): ArrangeData => ({
+    project_id: '',
+    work_package_id: '',
+    work_item_ids: [],
+    contractor_id: '',
+    driver_name: '',
+    driver_phone: '',
+    vehicle_plate: '',
+    vehicle_type: '',
+    delivery_date: '',
+    delivery_time: '',
+    estimated_arrival_time: '',
+    destination_address: '',
+    package_count: 0,
+    special_instructions: '',
   });
+  const [arrangeData, setArrangeData] = useState<ArrangeData>(emptyArrangement);
+  const [arrangeError, setArrangeError] = useState<string | null>(null);
+  const [isArranging, setIsArranging] = useState(false);
+  // One id per delivery being arranged: saving again after an unconfirmed attempt (or a
+  // reload) reuses it, so the server never ends up with two deliveries.
+  const ARRANGE_FORM = 'arrange-delivery';
+  const newDeliveryId = () => operationId(ARRANGE_FORM, 'del');
+  const [pendingDeliveryId, setPendingDeliveryId] = useState(newDeliveryId);
+
+  const openNewArrangement = () => {
+    setArrangeData(emptyArrangement());
+    setArrangeError(null);
+    setPendingDeliveryId(newDeliveryId());
+    setShowArrangeModal(true);
+  };
+  // Closing the form ends this delivery's operation; the next one gets a new id.
+  const closeArrangement = () => {
+    settleOperation(ARRANGE_FORM);
+    setShowArrangeModal(false);
+    setArrangeError(null);
+  };
+
+  // Only this project's and package's work items can be put on the delivery.
+  const arrangeItems = workItems.filter(
+    (w) => w.project_id === arrangeData.project_id && w.work_package_id === arrangeData.work_package_id
+  );
+  const arrangeMissing = [
+    !arrangeData.project_id && 'project',
+    !arrangeData.work_package_id && 'work package',
+    !arrangeData.work_item_ids.length && 'at least one work item',
+    !arrangeData.contractor_id && 'contractor',
+    !arrangeData.driver_name.trim() && 'driver name',
+    !arrangeData.driver_phone.trim() && 'driver contact',
+    !arrangeData.vehicle_plate.trim() && 'vehicle plate',
+    !arrangeData.vehicle_type.trim() && 'vehicle type',
+    !arrangeData.delivery_date && 'delivery date',
+    !arrangeData.delivery_time.trim() && 'time slot',
+    !arrangeData.estimated_arrival_time.trim() && 'estimated arrival',
+    !arrangeData.destination_address.trim() && 'destination',
+    !(arrangeData.package_count > 0) && 'package count',
+  ].filter(Boolean) as string[];
 
   // Calculate badges
   const readyCount = productionOrders.filter(
@@ -134,47 +178,56 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
   };
 
   const handleOpenArrangeFromOrder = (order: ProductionOrder, workItem?: WorkItem) => {
-    const proj = projects.find((p) => p.id === order.project_id) || projects[0];
-    const pkg = workPackages.find((wp) => wp.id === order.work_package_id) || workPackages[0];
+    const proj = projects.find((p) => p.id === order.project_id);
+    const pkg = workPackages.find((wp) => wp.id === order.work_package_id);
     const item = workItem || workItems.find((w) => w.id === order.work_item_id);
 
+    // What the order says (project, package, item, packages); transport details are asked for.
     setArrangeData({
-      project_id: proj.id,
-      work_package_id: pkg?.id || '',
-      work_item_ids: item ? [item.id] : [],
+      ...emptyArrangement(),
+      project_id: proj?.id ?? '',
+      work_package_id: pkg?.id ?? '',
+      work_item_ids: item && proj && item.project_id === proj.id ? [item.id] : [],
       production_order_id: order.id,
-      contractor_id: pkg?.contractor_id || contractors[0]?.id || '',
-      driver_name: 'Encik Rosli bin Hamzah',
-      driver_phone: '+60 12-882 1993',
-      vehicle_plate: 'WVR 8821',
-      vehicle_type: '3-Ton Box Lorry with Tailgate',
-      delivery_date: new Date().toISOString().split('T')[0],
-      delivery_time: '10:30 AM',
-      estimated_arrival_time: '11:45 AM',
-      destination_address: proj.site_address || 'Loading Bay B2, Project Site',
-      package_count: packingPackages.filter((p) => p.production_order_id === order.id).length || 3,
+      contractor_id: pkg?.contractor_id || '',
+      destination_address: proj?.site_address || '',
+      package_count: packingPackages.filter((p) => p.production_order_id === order.id).length,
       special_instructions: `Handle with care. Fabricated items for ${order.work_item_code}. Maintain vertical loading.`,
     });
+    setArrangeError(null);
+    setPendingDeliveryId(newDeliveryId());
     setShowArrangeModal(true);
   };
 
-  const handleCreateDeliverySubmit = (e: React.FormEvent) => {
+  const handleCreateDeliverySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isArranging) return;
+    if (arrangeMissing.length) {
+      setArrangeError(`Fill in: ${arrangeMissing.join(', ')}`);
+      return;
+    }
+    // Never another project's items (the server refuses them too).
+    if (arrangeData.work_item_ids.some((id) => !arrangeItems.some((w) => w.id === id))) {
+      setArrangeError('Every work item on the delivery must belong to the selected project and work package');
+      return;
+    }
+    setArrangeError(null);
+    setIsArranging(true);
     const proj = projects.find((p) => p.id === arrangeData.project_id);
     const pkg = workPackages.find((wp) => wp.id === arrangeData.work_package_id);
     const cont = contractors.find((c) => c.id === arrangeData.contractor_id);
     const matchedItems = workItems.filter((w) => arrangeData.work_item_ids.includes(w.id));
 
-    scheduleDeliveryRecord({
+    const result = await scheduleDeliveryRecord({
       project_id: arrangeData.project_id,
-      project_name: proj?.project_name || 'Project Site',
+      project_name: proj?.project_name ?? '',
       work_package_id: arrangeData.work_package_id,
-      work_package_name: pkg?.name || 'Joinery & Fitout Package',
+      work_package_name: pkg?.name ?? '',
       work_item_ids: arrangeData.work_item_ids,
       work_item_codes: matchedItems.map((m) => m.item_code),
       production_order_ids: arrangeData.production_order_id ? [arrangeData.production_order_id] : [],
       contractor_id: arrangeData.contractor_id,
-      contractor_name: cont?.company_name || 'Main Carpentry Subcontractor',
+      contractor_name: cont?.company_name ?? '',
       driver_name: arrangeData.driver_name,
       driver_contact: arrangeData.driver_phone,
       vehicle_plate: arrangeData.vehicle_plate,
@@ -200,9 +253,15 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
       },
       notes: 'Delivery arranged by Contractor. Contractor transport coordinated.',
       photos: [],
-    });
-
-    setShowArrangeModal(false);
+    }, { id: pendingDeliveryId });
+    setIsArranging(false);
+    // Only a saved delivery closes the form; otherwise the server's reason is shown and the
+    // details stay for correction.
+    if (result.ok === false) {
+      setArrangeError(result.message);
+      return;
+    }
+    closeArrangement();
     setActiveTab('schedule');
   };
 
@@ -304,7 +363,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
 
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={() => setShowArrangeModal(true)}
+              onClick={openNewArrangement}
               className="inline-flex items-center space-x-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl shadow-lg transition-all text-xs"
             >
               <Plus className="w-4 h-4" />
@@ -391,7 +450,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
               setSelectedDeliveryId(delivery.id);
               setActiveTab('deliveries');
             }}
-            onNewDeliveryClick={() => setShowArrangeModal(true)}
+            onNewDeliveryClick={openNewArrangement}
           />
         )}
 
@@ -451,7 +510,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                 </div>
               </div>
               <button
-                onClick={() => setShowArrangeModal(false)}
+                onClick={closeArrangement}
                 className="text-slate-400 hover:text-white text-lg font-bold p-1"
               >
                 ✕
@@ -467,15 +526,21 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                     onChange={(e) => {
                       const pid = e.target.value;
                       const proj = projects.find((p) => p.id === pid);
+                      // A different project: its package, items and order must be chosen again.
                       setArrangeData({
                         ...arrangeData,
                         project_id: pid,
-                        destination_address: proj?.site_address || arrangeData.destination_address,
+                        work_package_id: '',
+                        work_item_ids: [],
+                        production_order_id: undefined,
+                        destination_address: proj?.site_address || '',
                       });
                     }}
+                    aria-label="Project"
                     className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-amber-500 focus:outline-none"
                     required
                   >
+                    <option value="">Select a project…</option>
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.project_number} • {p.project_name}
@@ -489,9 +554,11 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                   <select
                     value={arrangeData.contractor_id}
                     onChange={(e) => setArrangeData({ ...arrangeData, contractor_id: e.target.value })}
+                    aria-label="Responsible Contractor"
                     className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-amber-500 focus:outline-none"
                     required
                   >
+                    <option value="">Select a contractor…</option>
                     {contractors.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.company_name} ({c.trade})
@@ -504,12 +571,25 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                   <label className="block text-xs font-bold text-slate-700 mb-1">Work Package</label>
                   <select
                     value={arrangeData.work_package_id}
-                    onChange={(e) => setArrangeData({ ...arrangeData, work_package_id: e.target.value })}
+                    onChange={(e) => {
+                      // A different package: its items and order must be chosen again.
+                      const pkg = workPackages.find((wp) => wp.id === e.target.value);
+                      setArrangeData({
+                        ...arrangeData,
+                        work_package_id: e.target.value,
+                        work_item_ids: [],
+                        production_order_id: undefined,
+                        contractor_id: arrangeData.contractor_id || pkg?.contractor_id || '',
+                      });
+                    }}
+                    aria-label="Work Package"
                     className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-amber-500 focus:outline-none"
                     required
+                    disabled={!arrangeData.project_id}
                   >
+                    <option value="">{arrangeData.project_id ? 'Select a work package…' : 'Select a project first'}</option>
                     {workPackages
-                      .filter((wp) => !arrangeData.project_id || wp.project_id === arrangeData.project_id)
+                      .filter((wp) => wp.project_id === arrangeData.project_id)
                       .map((wp) => (
                         <option key={wp.id} value={wp.id}>
                           {wp.name}
@@ -610,6 +690,36 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                 </div>
               </div>
 
+              <fieldset>
+                <legend className="block text-xs font-bold text-slate-700 mb-1">Work Items on this Delivery</legend>
+                {!arrangeData.work_package_id ? (
+                  <p className="text-[11px] text-slate-500">Select the project and work package first.</p>
+                ) : arrangeItems.length === 0 ? (
+                  <p className="text-[11px] text-slate-500">This work package has no work items.</p>
+                ) : (
+                  <div className="max-h-32 overflow-y-auto border border-slate-200 rounded-lg p-2 space-y-1">
+                    {arrangeItems.map((w) => (
+                      <label key={w.id} className="flex items-center space-x-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={arrangeData.work_item_ids.includes(w.id)}
+                          onChange={(e) =>
+                            setArrangeData({
+                              ...arrangeData,
+                              work_item_ids: e.target.checked
+                                ? [...arrangeData.work_item_ids, w.id]
+                                : arrangeData.work_item_ids.filter((id) => id !== w.id),
+                            })
+                          }
+                        />
+                        <span className="font-mono font-bold">{w.item_code}</span>
+                        <span className="text-slate-600 truncate">{w.description}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Destination Address / Loading Bay</label>
                 <textarea
@@ -639,19 +749,29 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ initialSubTab = 'das
                 </span>
               </div>
 
+              {arrangeError && (
+                <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 font-medium">
+                  {arrangeError}
+                </div>
+              )}
+              {!arrangeError && arrangeMissing.length > 0 && (
+                <p className="text-[11px] text-slate-500">Still needed: {arrangeMissing.join(', ')}.</p>
+              )}
+
               <div className="pt-3 border-t border-slate-200 flex justify-end space-x-3">
                 <button
                   type="button"
-                  onClick={() => setShowArrangeModal(false)}
+                  onClick={closeArrangement}
                   className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-100"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold shadow-md"
+                  disabled={isArranging || arrangeMissing.length > 0}
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold shadow-md disabled:opacity-50"
                 >
-                  Save & Schedule Delivery
+                  {isArranging ? 'Saving…' : 'Save & Schedule Delivery'}
                 </button>
               </div>
             </form>

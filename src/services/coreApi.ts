@@ -85,6 +85,8 @@ export type SyncData = Record<string, Record<string, unknown>[]>;
 export interface SyncChanges {
   upserts: Record<string, Record<string, unknown>[]>;
   deletes: Record<string, string[]>;
+  /** Records that must still be exactly as last read, or the server answers 409 (see server DataChanges). */
+  expect?: { collection: string; id: string; record: Record<string, unknown> }[];
 }
 
 export interface DataImportResult {
@@ -111,6 +113,8 @@ export const dataApi = {
   auditLogs: (limit = 300) => request<Record<string, unknown>[]>(`/audit-logs?limit=${limit}`),
   /** One collection as the server holds it (e.g. 'commercial-baselines'). */
   list: <T = Record<string, unknown>>(path: string) => request<T[]>(`/${path}`),
+  /** One record as the server holds it (404 when it does not exist or is not visible). */
+  get: <T = Record<string, unknown>>(path: string, id: string) => request<T>(`/${path}/${encodeURIComponent(id)}`),
   /** The server's official contract value, costs and project gross profit for one project. */
   profitability: (projectId: string) => request<ServerFinancials>(`/projects/${encodeURIComponent(projectId)}/profitability`),
 };

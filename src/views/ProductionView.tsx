@@ -33,12 +33,19 @@ import { PackingDeliveryTab } from '../components/production/PackingDeliveryTab'
 import { ProductionIssuesTab } from '../components/production/ProductionIssuesTab';
 import { BarcodeScannerModal } from '../components/production/BarcodeScannerModal';
 import { ProductionOrder } from '../types';
+import { operationId, settleOperation } from '../services/coreSync';
+
+// The order being issued keeps one id across attempts and page reloads (see operationId).
+const ORDER_FORM = 'production-order';
 
 export const ProductionView: React.FC = () => {
   const {
     productionOrders,
     workItems,
     projects,
+    clients,
+    workPackages,
+    contractors,
     createProductionOrder,
     currentUser,
   } = useNW();
@@ -49,10 +56,18 @@ export const ProductionView: React.FC = () => {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
 
   // Create Order Form State
-  const [selectedWorkItemId, setSelectedWorkItemId] = useState(workItems[0]?.id || '');
+  // Nothing is pre-chosen or invented: the order is built from the work item, its project and
+  // package, and what the user enters here.
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
   const [priority, setPriority] = useState<'Normal' | 'High' | 'Urgent'>('Normal');
-  const [requiredDate, setRequiredDate] = useState('2026-10-15');
+  const [requiredDate, setRequiredDate] = useState('');
+  const [productionMethod, setProductionMethod] = useState('');
   const [customNotes, setCustomNotes] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  // One id per order being issued: issuing again after an unconfirmed attempt (or a reload)
+  // reuses it, so the server never ends up with two orders.
+  const [pendingOrderId, setPendingOrderId] = useState(() => operationId(ORDER_FORM, 'po'));
 
   const subtabs = [
     { id: 'dashboard', label: 'Production Dashboard', icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
@@ -78,45 +93,87 @@ export const ProductionView: React.FC = () => {
     },
   ];
 
-  const handleCreateOrder = () => {
-    const item = workItems.find((w) => w.id === selectedWorkItemId);
-    if (!item) return;
+  const createItem = workItems.find((w) => w.id === selectedWorkItemId);
+  const createProject = createItem ? projects.find((p) => p.id === createItem.project_id) : undefined;
+  const createPackage = createItem ? workPackages.find((wp) => wp.id === createItem.work_package_id) : undefined;
+  const clientDrawingId = createItem?.client_drawing_id || createItem?.drawing_id || '';
+  const clientRevision = createItem?.client_drawing_revision || createItem?.drawing_revision || '';
+  const createMissing = [
+    !createItem && 'work item',
+    createItem && !createProject && 'the work item\'s project',
+    createItem && !createPackage && 'the work item\'s work package',
+    createItem && (!clientDrawingId || !clientRevision) && 'an approved client drawing revision on the work item',
+    createItem && (!createItem.nw_production_drawing_id || !createItem.nw_production_drawing_revision) && 'an approved NW production drawing on the work item',
+    !productionMethod.trim() && 'production method',
+    !requiredDate && 'factory target date',
+  ].filter(Boolean) as string[];
 
-    const project = projects.find((p) => p.id === item.project_id);
-
-    createProductionOrder({
-      project_id: item.project_id,
-      project_number: project?.project_number || 'NW-2026-001',
-      project_name: project?.project_name || 'Project Aurora',
-      work_package_id: item.work_package_id,
-      work_package_name: 'CARPENTRY & ARCHITECTURAL JOINERY',
-      work_item_id: item.id,
-      work_item_code: item.item_code,
-      client_id: project?.client_id || 'cli-1',
-      client_name: 'Aurora Luxury Retail',
-      location: item.location,
-      contractor_id: item.contractor_id,
-      contractor_name: 'Hock Seng Carpentry (林福成)',
-      production_manager_id: 'user-prod-mgr',
-      production_manager_name: 'Tan Kok Leong',
-      required_date: requiredDate,
-      current_stage: 'Not Started',
-      priority,
-      status: 'Not Started',
-      approved_client_drawing_id: item.drawing_id || 'dwg-1',
-      approved_client_drawing_revision: item.client_drawing_revision || item.drawing_revision || 'Rev 1',
-      approved_nw_production_drawing_id: item.nw_production_drawing_id || 'nwd-1',
-      approved_nw_production_drawing_revision: item.nw_production_drawing_revision || 'Rev 1',
-      production_method: 'NW-PM-Standard-001 Rev 1',
-      material: item.material,
-      finish: item.finish,
-      dimensions: item.dimensions,
-      quantity: item.quantity,
-      notes: customNotes || item.notes || 'Created from approved work item release',
-      photos: item.photos || [],
-    });
-
+  // Closing the form ends this order's operation; the next one gets a new id.
+  const closeCreateModal = () => {
+    settleOperation(ORDER_FORM);
+    setPendingOrderId(operationId(ORDER_FORM, 'po'));
     setShowCreateModal(false);
+    setCreateError(null);
+  };
+
+  const handleCreateOrder = async () => {
+    if (isCreating) return;
+    if (createMissing.length || !createItem || !createProject || !createPackage) {
+      setCreateError(`Needed: ${createMissing.join(', ')}`);
+      return;
+    }
+    setCreateError(null);
+    setIsCreating(true);
+    const item = createItem;
+    const client = clients.find((c) => c.id === createProject.client_id);
+    const contractor = contractors.find((c) => c.id === item.contractor_id);
+    const result = await createProductionOrder(
+      {
+        project_id: item.project_id,
+        project_number: createProject.project_number,
+        project_name: createProject.project_name,
+        work_package_id: item.work_package_id,
+        work_package_name: createPackage.name,
+        work_item_id: item.id,
+        work_item_code: item.item_code,
+        client_id: createProject.client_id,
+        client_name: client?.company_name ?? '',
+        location: item.location,
+        contractor_id: item.contractor_id,
+        contractor_name: contractor?.company_name ?? '',
+        // The person issuing the order is recorded as its production manager.
+        production_manager_id: currentUser.id,
+        production_manager_name: currentUser.name,
+        required_date: requiredDate,
+        current_stage: 'Not Started',
+        priority,
+        status: 'Not Started',
+        approved_client_drawing_id: clientDrawingId,
+        approved_client_drawing_revision: clientRevision,
+        approved_nw_production_drawing_id: item.nw_production_drawing_id!,
+        approved_nw_production_drawing_revision: item.nw_production_drawing_revision!,
+        production_method: productionMethod.trim(),
+        material: item.material,
+        finish: item.finish,
+        dimensions: item.dimensions,
+        quantity: item.quantity,
+        notes: customNotes.trim() || item.notes || '',
+        photos: item.photos || [],
+      },
+      { id: pendingOrderId }
+    );
+    setIsCreating(false);
+    // Only a saved order closes the form; otherwise the server's reason is shown and the
+    // entries stay for correction.
+    if (result.ok === false) {
+      setCreateError(result.message);
+      return;
+    }
+    setSelectedWorkItemId('');
+    setRequiredDate('');
+    setProductionMethod('');
+    setCustomNotes('');
+    closeCreateModal();
     setActiveTab('orders');
   };
 
@@ -235,7 +292,7 @@ export const ProductionView: React.FC = () => {
                   Converts an approved project work item into a controlled factory production order.
                 </p>
               </div>
-              <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={closeCreateModal} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -250,6 +307,7 @@ export const ProductionView: React.FC = () => {
                 onChange={(e) => setSelectedWorkItemId(e.target.value)}
                 className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-bold"
               >
+                <option value="">Select a work item…</option>
                 {workItems.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.item_code} — {item.description} ({item.dimensions})
@@ -281,11 +339,27 @@ export const ProductionView: React.FC = () => {
                 </label>
                 <input
                   type="date"
+                  aria-label="Factory Target Completion Date"
                   value={requiredDate}
                   onChange={(e) => setRequiredDate(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                  required
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Approved Production Method <span className="text-red-500">*</span>
+              </label>
+              <input
+                aria-label="Approved Production Method"
+                placeholder="e.g. NW-PM-Counter-001 Rev 2"
+                value={productionMethod}
+                onChange={(e) => setProductionMethod(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                required
+              />
             </div>
 
             <div>
@@ -301,18 +375,28 @@ export const ProductionView: React.FC = () => {
               />
             </div>
 
+            {createError && (
+              <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 font-medium">
+                {createError}
+              </div>
+            )}
+            {!createError && createMissing.length > 0 && (
+              <p className="text-[11px] text-slate-500">Still needed: {createMissing.join(', ')}.</p>
+            )}
+
             <div className="flex justify-end space-x-2 pt-2 border-t">
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={closeCreateModal}
                 className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-medium"
               >
                 Cancel
               </button>
               <button
-                onClick={handleCreateOrder}
-                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-bold shadow-xs"
+                onClick={() => void handleCreateOrder()}
+                disabled={isCreating || createMissing.length > 0}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-bold shadow-xs disabled:opacity-50"
               >
-                Issue Production Order
+                {isCreating ? 'Saving…' : 'Issue Production Order'}
               </button>
             </div>
           </div>

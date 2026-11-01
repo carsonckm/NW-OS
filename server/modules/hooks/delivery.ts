@@ -16,14 +16,47 @@ export const deliveryHooks: ModuleHooks = {
       arranged_by: incoming.arranged_by ?? existing?.arranged_by ?? 'Contractor',
     };
 
-    const itemIds = Array.isArray(incoming.work_item_ids) ? (incoming.work_item_ids as string[]) : [];
-    if (itemIds.length) {
-      const res = await h.db.query('SELECT id, project_id FROM work_items WHERE id = ANY($1)', [itemIds]);
+    // What the delivery refers to is checked when it is added or changed: a new delivery, a
+    // changed project (everything again), or items, orders or a package added since. References
+    // already stored and left as they are (legacy records) do not block unrelated edits or a
+    // site receipt; nothing here repairs them. An import checks everything, as before.
+    const list = (v: unknown) => (Array.isArray(v) ? (v as unknown[]).map(String) : []);
+    const recheckAll = !existing || h.mode === 'import' || existing.project_id !== incoming.project_id;
+    const added = (field: string) => {
+      const before = new Set(recheckAll ? [] : list(existing?.[field]));
+      return list(incoming[field]).filter((id) => !before.has(id));
+    };
+
+    const newItems = added('work_item_ids');
+    if (newItems.length) {
+      const res = await h.db.query('SELECT id, project_id FROM work_items WHERE id = ANY($1)', [newItems]);
       const found = new Map(res.rows.map((r) => [r.id, r.project_id]));
-      for (const id of itemIds) {
+      for (const id of newItems) {
         if (!found.has(id)) throw new ValidationError(`Delivery work item ${id} does not exist`);
         if (found.get(id) !== incoming.project_id) throw new ValidationError(`Delivery work item ${id} is on another project`);
+        // A contractor may only put its own work on a delivery: items it or its package is
+        // assigned to. Other roles keep their permission and project scope.
+        if (h.mode !== 'import' && h.ctx.user.role === 'Contractor' && !h.ctx.contractorOwnsWorkItem(id)) {
+          throw new ForbiddenError(`Work item ${id} is not one of your work items`);
+        }
       }
+    }
+
+    const newOrders = added('production_order_ids');
+    if (newOrders.length && h.mode !== 'import') {
+      const res = await h.db.query('SELECT id, project_id FROM production_orders WHERE id = ANY($1)', [newOrders]);
+      const found = new Map(res.rows.map((r) => [r.id, r.project_id]));
+      for (const id of newOrders) {
+        if (!found.has(id)) throw new ValidationError(`Delivery production order ${id} does not exist`);
+        if (found.get(id) !== incoming.project_id) throw new ValidationError(`Delivery production order ${id} is on another project`);
+      }
+    }
+
+    const packageChanged = incoming.work_package_id && (recheckAll || existing?.work_package_id !== incoming.work_package_id);
+    if (packageChanged && h.mode !== 'import') {
+      const wp = (await h.db.query('SELECT project_id FROM work_packages WHERE id = $1', [incoming.work_package_id])).rows[0];
+      if (!wp) throw new ValidationError(`Delivery work package ${String(incoming.work_package_id)} does not exist`);
+      if (wp.project_id !== incoming.project_id) throw new ValidationError('The delivery work package is on another project');
     }
 
     const receipt = incoming.site_receipt as Row | undefined;
