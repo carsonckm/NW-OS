@@ -225,7 +225,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 end-to-end acceptance: automation, 
     await prodMgr().patch(`/api/tasks/${s.aiTask}`).send({ status: 'Completed' }).expect(200);
     await site().patch('/api/tasks/tsk-auto-p5-sqc1').send({ status: 'Completed', completion_evidence: 'Gap closed, photo attached' }).expect(200);
     await pm().patch('/api/issues/issue-rect-p5-sqc1').send({ status: 'Resolved', resolution_notes: 'Panel re-set' }).expect(200);
-    await site().post('/api/site-qc').send({ id: 'p5-sqc2', inspection_number: 'SQC-P5-2', work_item_id: 'p5-item', work_item_code: 'GAL-01', installation_job_id: 'p5-inst', project_id: P, project_name: 'Phase 5 Gallery', inspection_date: '2026-10-06', result: 'Pass', snag_items: [], photos: [], comments: '' }).expect(201);
+    await site().post('/api/site-qc').send({ id: 'p5-sqc2', inspection_number: 'SQC-P5-2', work_item_id: 'p5-item', work_item_code: 'GAL-01', installation_job_id: 'p5-inst', project_id: P, project_name: 'Phase 5 Gallery', inspection_date: '2026-10-06', result: 'Pass', level_and_alignment_pass: true, hardware_and_mechanism_pass: true, finish_and_surfaces_pass: true, safety_and_fixing_pass: true, cleanliness_and_protection_pass: true, snag_items: [], photos: [], comments: '' }).expect(201);
     await engine.runAll('schedule');
     // The automation closed its own production task once production moved on; escalations resolved.
     expect((await one(`SELECT status FROM tasks WHERE id = 'tsk-auto-prod-p5-po'`)).status).toBe('Completed');
