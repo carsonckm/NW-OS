@@ -73,6 +73,18 @@ export const siteQcHooks: ModuleHooks = {
   async beforeWrite(h, existing, incoming) {
     await checkWorkItemOnProject(h.db, incoming.work_item_id, incoming.project_id);
     const values: Row = { ...incoming };
+    if (h.mode !== 'import' && values.result === 'Pass') {
+      const requiredChecks = [
+        'level_and_alignment_pass',
+        'hardware_and_mechanism_pass',
+        'finish_and_surfaces_pass',
+        'safety_and_fixing_pass',
+        'cleanliness_and_protection_pass',
+      ];
+      if (requiredChecks.some((key) => values[key] !== true)) {
+        throw new ValidationError('Site QC cannot pass until every required checklist item passes');
+      }
+    }
     if (h.mode !== 'import' && !existing) {
       values.inspector_name = h.ctx.user.name;
       values.inspector_role = h.ctx.user.role;

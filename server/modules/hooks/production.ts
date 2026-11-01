@@ -59,6 +59,41 @@ export async function checkOrderRevisions(db: PoolClient, order: Row): Promise<R
   return { ...result, valid: true };
 }
 
+/** A production order may enter dispatch stages only after its latest factory QC passed. */
+async function requirePassedFactoryQc(h: HookContext, orderId: string) {
+  const latest = await h.db.query(
+    `SELECT result, data FROM factory_qc_inspections WHERE production_order_id = $1
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [orderId]
+  );
+  const qc = latest.rows[0];
+  const checks = ['dimensional_tolerance_pass', 'visual_inspection_pass',
+    'hardware_smoothness_pass', 'edge_banding_integrity_pass', 'grain_match_pass'];
+  if (!qc || qc.result !== 'Passed' || checks.some((key) => qc.data?.[key] !== true)) {
+    throw new ValidationError('A passed Factory QC inspection with all checklist checks is required before packing or dispatch');
+  }
+}
+
+export const factoryQcHooks: ModuleHooks = {
+  async beforeWrite(h, _existing, incoming) {
+    if (h.mode !== 'import' && incoming.result === 'Passed') {
+      const checks = ['dimensional_tolerance_pass', 'visual_inspection_pass',
+        'hardware_smoothness_pass', 'edge_banding_integrity_pass', 'grain_match_pass'];
+      if (checks.some((key) => incoming[key] !== true)) {
+        throw new ValidationError('Factory QC cannot pass with failed or missing checklist checks');
+      }
+    }
+    return incoming;
+  },
+};
+
+export const packingHooks: ModuleHooks = {
+  async beforeWrite(h, _existing, incoming) {
+    if (h.mode !== 'import') await requirePassedFactoryQc(h, String(incoming.production_order_id));
+    return incoming;
+  },
+};
+
 export const productionOrderHooks: ModuleHooks = {
   // Keep the work item's statuses in step with its order, in the same transaction.
   async afterWrite(h, _existing, stored) {
@@ -94,6 +129,9 @@ export const productionOrderHooks: ModuleHooks = {
 
     const status = String(incoming.status);
     checkOnHold(h, existing, status);
+    if (status !== String(existing?.status) && ['Packing', 'Ready for Delivery'].includes(status)) {
+      await requirePassedFactoryQc(h, String(incoming.id));
+    }
     const statusChanged = !existing || existing.status !== status;
     const refsChanged =
       !existing ||

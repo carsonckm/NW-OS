@@ -67,6 +67,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 issue -> task, site QC, handover, c
     const signed = await pm().patch('/api/handovers/ho-p4').send({ status: 'Formal CPC Handover Signed', client_signoff_name: 'Mr Tan', client_signoff_signature: 'Tan (signed on tablet)' }).expect(200);
     expect(signed.body).toMatchObject({ nw_pm_signoff_name: 'Project Manager', nw_signed_by_id: 'user-pm' });
     expect((await pm().patch('/api/handovers/ho-p4').send({ client_representative: 'Someone else' })).status).toBe(403);
+    expect((await pm().patch('/api/handovers/ho-p4').send({ status: 'Draft' })).status).toBe(403);
     expect((await owner().get('/api/projects/proj-2').expect(200)).body.project_status).toBe('Active');
   });
 
