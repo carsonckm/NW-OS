@@ -10,7 +10,7 @@ import { hasPermission } from '../../utils/permissions';
 import { FormError } from '../../components/ui/FormError';
 import { Button, Field, Input, Modal, Select, newId, rm, today } from '../../components/ui/forms';
 
-const NEXT: Record<string, FinancialClaim['status'] | undefined> = { Draft: 'Submitted', Submitted: 'Certified', Certified: 'Paid' };
+const NEXT: Record<string, FinancialClaim['status'] | undefined> = { Draft: 'Submitted', Submitted: 'Certified' };
 
 export const ClaimForm: React.FC<{ projectId: string; onClose: () => void }> = ({ projectId, onClose }) => {
   const { projects } = useNW();
@@ -58,7 +58,7 @@ export const ClaimForm: React.FC<{ projectId: string; onClose: () => void }> = (
   );
 };
 
-/** Moves a claim to its next state (Submitted, Certified with the certified amount, Paid). */
+/** Moves a claim to Submitted or Certified. Paid requires verified settlement. */
 export const ClaimActions: React.FC<{ claim: FinancialClaim }> = ({ claim }) => {
   const { currentUser } = useNW();
   const records = useRecords();
@@ -72,7 +72,6 @@ export const ClaimActions: React.FC<{ claim: FinancialClaim }> = ({ claim }) => 
     try {
       const patch: Partial<FinancialClaim> = { status: next };
       if (next === 'Certified') patch.certified_amount = claim.certified_amount ?? claim.net_claim_amount;
-      if (next === 'Paid') patch.payment_received_date = today();
       await records.update<FinancialClaim>('financialClaims', claim.id, patch, claim);
     } catch (err) {
       setError((err as Error).message);
@@ -107,8 +106,9 @@ export const PaymentForm: React.FC<{ projectId: string; onClose: () => void }> =
         id: newId('pay'), reference_no: f.reference.trim(), project_id: project.id, type: f.type, party_name: party, amount: Number(f.amount),
         payment_method: f.method, date: f.date, status: 'Reconciled', notes: f.claim ? `For claim ${f.claim}` : undefined,
       });
-      const claim = openClaims.find((c) => c.claim_number === f.claim);
-      if (claim && claim.status === 'Certified') await records.update<FinancialClaim>('financialClaims', claim.id, { status: 'Paid', payment_received_date: f.date }, claim);
+      // A single payment does not establish that the certified claim is fully settled.
+      // Keep the claim Certified until cumulative linked receipts are reconciled.
+      // Do not auto-mark Paid from a partial or unverified payment.
       onClose();
     } catch (err) {
       setError((err as Error).message);
