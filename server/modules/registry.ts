@@ -6,6 +6,7 @@ import { productionOrderHooks, factoryQcHooks, packingHooks } from './hooks/prod
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
 import { quotationHooks } from './hooks/commercial';
+import { financialClaimHooks } from './hooks/claims';
 import { handoverHooks, issueHooks, taskHooks } from './hooks/workflow';
 import { goodsReceivedHooks, invoiceHooks, purchaseOrderHooks } from './hooks/purchasing';
 import { knowledgeHooks } from './hooks/knowledge';
@@ -501,6 +502,7 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'finance.view', create: 'finance.manage_claims', edit: 'finance.manage_claims', delete: null },
     required: ['project_id'],
+    hooks: financialClaimHooks,
   },
   {
     key: 'payments',
