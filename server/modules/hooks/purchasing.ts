@@ -306,8 +306,21 @@ export const invoiceHooks: ModuleHooks = {
       next.po_reference = po.data.po_number;
       const { poTotal, received } = await receivedValue(h.db, String(next.po_id));
       const amount = Number(next.amount_before_tax);
-      next.match = { po_total: poTotal, received_value: received, invoiced: amount };
-      next.match_status = amount > poTotal + 0.5 ? 'Exceeds PO' : amount > received + 0.5 ? 'Exceeds goods received' : 'Matched';
+      // Compare against all other non-cancelled supplier invoices for this PO,
+      // excluding the invoice being edited to avoid counting it twice.
+      const others = await h.db.query(
+        `SELECT data FROM commercial_invoices
+         WHERE po_id = $1 AND id <> $2`,
+        [next.po_id, String(next.id)]
+      );
+      const previouslyInvoiced = money(others.rows.reduce((sum: number, row: { data: Row }) => {
+        const invoice = row.data;
+        return sum + (invoice.invoice_type === 'Supplier Invoice' && !['Cancelled', 'Rejected'].includes(String(invoice.status))
+          ? money(invoice.amount_before_tax) : 0);
+      }, 0));
+      const cumulativeInvoiced = money(previouslyInvoiced + amount);
+      next.match = { po_total: poTotal, received_value: received, invoiced: amount, previously_invoiced: previouslyInvoiced, cumulative_invoiced: cumulativeInvoiced };
+      next.match_status = cumulativeInvoiced > poTotal + 0.5 ? 'Exceeds PO' : cumulativeInvoiced > received + 0.5 ? 'Exceeds goods received' : 'Matched';
     }
     const approving = next.status === 'Approved' && existing?.status !== 'Approved' && !['Partially Paid', 'Paid'].includes(String(existing?.status));
     if (approving) {
