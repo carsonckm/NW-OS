@@ -56,7 +56,17 @@ export const deliveryHooks: ModuleHooks = {
     // the production order's latest passed factory inspection.
     const dispatchStatuses = new Set(['Loading', 'In Transit', 'Arrived at Site', 'Delivered', 'Received / Confirmed']);
     if (h.mode !== 'import' && dispatchStatuses.has(String(incoming.status))) {
-      for (const orderId of list(incoming.production_order_ids)) {
+      // A work-item-only delivery must still honor QC for any associated production orders.
+      const linkedOrderIds = new Set(list(incoming.production_order_ids));
+      const workItemIds = list(incoming.work_item_ids);
+      if (workItemIds.length) {
+        const associated = await h.db.query(
+          'SELECT id FROM production_orders WHERE work_item_id = ANY($1) AND project_id = $2',
+          [workItemIds, incoming.project_id],
+        );
+        for (const order of associated.rows) linkedOrderIds.add(String(order.id));
+      }
+      for (const orderId of linkedOrderIds) {
         const qc = (await h.db.query(
           `SELECT result, data FROM factory_qc_inspections WHERE production_order_id = $1
            ORDER BY created_at DESC, id DESC LIMIT 1`,
