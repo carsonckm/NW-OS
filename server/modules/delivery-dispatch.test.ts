@@ -48,6 +48,20 @@ describe('Delivery dispatch Factory QC gate', () => {
     });
   }
 
+  it('rejects work-item-only dispatch when associated production order lacks QC', async () => {
+    const { h } = context(null);
+    await expect(deliveryHooks.beforeWrite!(h as any, undefined, {
+      ...delivery('Loading'), production_order_ids: [], work_item_ids: ['item-1'],
+    })).rejects.toThrow(/passed Factory QC/);
+  });
+
+  it('allows work-item-only dispatch when associated production order passes QC', async () => {
+    const { h } = context({ result: 'Passed', data: checks });
+    await expect(deliveryHooks.beforeWrite!(h as any, undefined, {
+      ...delivery('Loading'), production_order_ids: [], work_item_ids: ['item-1'],
+    })).resolves.toBeDefined();
+  });
+
   it('rejects a failed checklist even if inspection result says Passed', async () => {
     const { h } = context({ result: 'Passed', data: { ...checks, grain_match_pass: false } });
     await expect(deliveryHooks.beforeWrite!(h as any, undefined, delivery('Loading'))).rejects.toThrow(/passed Factory QC/);
