@@ -52,6 +52,24 @@ export const deliveryHooks: ModuleHooks = {
       }
     }
 
+    // Scheduling is permitted before QC, but loading and dispatch must not bypass
+    // the production order's latest passed factory inspection.
+    const dispatchStatuses = new Set(['Loading', 'In Transit', 'Arrived at Site', 'Delivered', 'Received / Confirmed']);
+    if (h.mode !== 'import' && dispatchStatuses.has(String(incoming.status))) {
+      for (const orderId of list(incoming.production_order_ids)) {
+        const qc = (await h.db.query(
+          `SELECT result, data FROM factory_qc_inspections WHERE production_order_id = $1
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [orderId],
+        )).rows[0];
+        const checks = ['dimensional_tolerance_pass', 'visual_inspection_pass',
+          'hardware_smoothness_pass', 'edge_banding_integrity_pass', 'grain_match_pass'];
+        if (!qc || qc.result !== 'Passed' || checks.some((key) => qc.data?.[key] !== true)) {
+          throw new ValidationError(`Production order ${orderId} requires passed Factory QC before delivery loading or dispatch`);
+        }
+      }
+    }
+
     const packageChanged = incoming.work_package_id && (recheckAll || existing?.work_package_id !== incoming.work_package_id);
     if (packageChanged && h.mode !== 'import') {
       const wp = (await h.db.query('SELECT project_id FROM work_packages WHERE id = $1', [incoming.work_package_id])).rows[0];
