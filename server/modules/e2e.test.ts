@@ -137,9 +137,23 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 end-to-end acceptance: enquiry to c
     expect(await one(`SELECT production_status FROM work_items WHERE id = $1`, [s.item])).toEqual({ production_status: 'QC' });
   });
 
+  it('17b. delivery loading is rejected without passed Factory QC', async () => {
+    const delivery = { ...D.deliveryRecords[0], id: 'e2e-qc-gate-del', delivery_number: 'DEL-QC-GATE',
+      project_id: s.project, work_package_id: s.wp, work_item_ids: [s.item],
+      production_order_ids: ['e2e-po'], status: 'Scheduled', site_receipt: undefined };
+    await ok(pm().post('/api/deliveries').send(delivery), 201);
+    expect((await pm().patch('/api/deliveries/e2e-qc-gate-del').send({ status: 'Loading' })).status).toBe(400);
+    expect((await pm().patch('/api/deliveries/e2e-qc-gate-del').send({ status: 'In Transit' })).status).toBe(400);
+    expect(await one(`SELECT status FROM deliveries WHERE id = 'e2e-qc-gate-del'`)).toEqual({ status: 'Scheduled' });
+  });
+
   it('18. factory QC passes', async () => {
     await ok(staff().post('/api/factory-qc').send({ ...D.factoryQCInspections[0], id: 'e2e-fqc', production_order_id: 'e2e-po', production_order_number: 'PO-E2E', work_item_code: 'BAR-01', result: 'Passed' }), 201);
     expect(await one(`SELECT result FROM factory_qc_inspections WHERE id = 'e2e-fqc'`)).toEqual({ result: 'Passed' });
+  });
+
+  it('18b. delivery loading succeeds after passed Factory QC', async () => {
+    await ok(pm().patch('/api/deliveries/e2e-qc-gate-del').send({ status: 'Loading' }), 200);
   });
 
   it('19. packing, ready for delivery', async () => {
