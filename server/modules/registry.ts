@@ -1,3 +1,4 @@
+import { paymentHooks } from './hooks/payments';
 import { approvalHooks } from './hooks/approvals';
 import { deliveryHooks } from './hooks/delivery';
 import { drawingHooks } from './hooks/drawings';
@@ -513,6 +514,7 @@ export const MODULES: ModuleDef[] = [
     scope: { kind: 'project' },
     perms: { view: 'finance.view', create: 'finance.record_payments', edit: 'finance.record_payments', delete: null },
     required: ['project_id'],
+    hooks: paymentHooks,
   },
   {
     key: 'knowledge',
