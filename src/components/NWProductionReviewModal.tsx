@@ -20,43 +20,25 @@ export const NWProductionReviewModal: React.FC<NWProductionReviewModalProps> = (
 }) => {
   const { currentUser, addNWProductionReview } = useNW();
 
-  const [reviewedBy, setReviewedBy] = useState(currentUser.name || 'Ah Huat (Master Joiner)');
-  const [reviewerRole, setReviewerRole] = useState('Master Joiner / Workshop Foreman');
-  const [status, setStatus] = useState<'Approved' | 'Review' | 'Draft'>('Approved');
+  const [reviewedBy, setReviewedBy] = useState(currentUser.name);
+  const [reviewerRole, setReviewerRole] = useState<string>(currentUser.role);
+  const [status, setStatus] = useState<'Approved' | 'Review' | 'Draft'>('Draft');
   const [reviewCategory, setReviewCategory] = useState<KnowledgeCategory>(
     (drawing.category as KnowledgeCategory) || 'Carpentry'
   );
 
   // Workshop Expertise Fields
-  const [productionRecommendation, setProductionRecommendation] = useState(
-    'Split 2400mm single counter into 2 × 1200mm modular units (Module A Cashier + Module B Bagging Station) connected via concealed Festool Domino XL pins.'
-  );
-  const [reason, setReason] = useState(
-    'Pavilion Mall Level 2 service hoist opening is strictly capped at 2200mm height and 1400mm width. A 2400mm single carcase cannot enter the lift without tilting, risking edge chipping and requiring 6 workers.'
-  );
-  const [materialRecommendation, setMaterialRecommendation] = useState(
-    'Use 18mm E1 Marine Plywood core with Wilsonart HPL cladding and 12mm Dupont Corian solid surface top with seamless site bonding.'
-  );
-  const [constructionMethod, setConstructionMethod] = useState(
-    'Modular pre-fabricated carcases with internal cable riser raceways pre-routed at factory prior to laminating.'
-  );
-  const [joiningMethod, setJoiningMethod] = useState(
-    'Concealed Festool Domino DF 500 beechwood loose tenons + 4 × Hafele M6 worktop connecting bolts accessible from drawer apertures.'
-  );
-  const [hardware, setHardware] = useState(
-    'Hafele Quadro soft-close under-mount runners, Blum 110-degree CLIP top hinges, brushed brass kickplates.'
-  );
-  const [transportConsideration, setTransportConsideration] = useState(
-    'Each module max dimension 1200 × 900 × 1050mm, weight under 65kg. Fits standard service lift door. Pack in protective corner foam and stretch wrap.'
-  );
-  const [installationMethod, setInstallationMethod] = useState(
-    'Site team rolls Module A into place first; level with heavy-duty M10 glides; dock Module B; tighten 4 × M6 connector bolts; clamp and bond Corian top with matching adhesive.'
-  );
-  const [productionRisk, setProductionRisk] = useState(
-    'Site floor levels frequently vary ±8mm. Supply 10mm adjustable plinth scribing strip on sides so joiners can scribe on site without cutting carcase.'
-  );
-  const [isCompanyStandard, setIsCompanyStandard] = useState(true);
-  const [notes, setNotes] = useState('Verified with factory workshop lead Ah Huat and PM Kevin Lim.');
+  const [productionRecommendation, setProductionRecommendation] = useState('');
+  const [reason, setReason] = useState('');
+  const [materialRecommendation, setMaterialRecommendation] = useState('');
+  const [constructionMethod, setConstructionMethod] = useState('');
+  const [joiningMethod, setJoiningMethod] = useState('');
+  const [hardware, setHardware] = useState('');
+  const [transportConsideration, setTransportConsideration] = useState('');
+  const [installationMethod, setInstallationMethod] = useState('');
+  const [productionRisk, setProductionRisk] = useState('');
+  const [isCompanyStandard, setIsCompanyStandard] = useState(false);
+  const [notes, setNotes] = useState('');
 
   if (!isOpen) return null;
 

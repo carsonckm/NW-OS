@@ -73,6 +73,10 @@ export default defineConfig(() => {
       aistudioMediaPlugin(),
       VitePWA({
         registerType: 'autoUpdate',
+        workbox: {
+          // Private API/file navigations must never receive the cached application shell.
+          navigateFallbackDenylist: [/^\/api(?:\/|$)/],
+        },
         includeAssets: ['icon.svg'],
         manifest: {
           id: '/',

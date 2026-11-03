@@ -71,6 +71,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 sales workflow', () => {
       estimated_gross_profit: 26000,
     });
     expect(res.body.items[0]).toMatchObject({ total_selling_price: 36000, total_estimated_cost: 10000 });
+    expect((await pm().get('/api/client-enquiries/enq-p4').expect(200)).body.status).toBe('New');
   });
 
   it('needs internal approval by someone else before it is submitted', async () => {
@@ -82,6 +83,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 sales workflow', () => {
     await accountant().patch('/api/quotations/qt-p4').send({ approval_status: 'Approved' }).expect(200);
     expect(await quote('qt-p4')).toMatchObject({ approval_status: 'Approved', approved_by_id: 'user-accountant' });
     await pm().patch('/api/quotations/qt-p4').send({ status: 'Submitted' }).expect(200);
+    expect((await pm().get('/api/client-enquiries/enq-p4').expect(200)).body.status).toBe('Quoted');
   });
 
   it('blocks owners from approving their own quotation', async () => {

@@ -163,7 +163,6 @@ export const ContractorFormModal: React.FC<ContractorFormModalProps> = ({
           address: address.trim() || undefined,
           notes: notes.trim() || undefined,
           is_active: isActive,
-          rating: 4.8,
           preferred_languages: ['English', 'Bahasa Malaysia'],
         });
 

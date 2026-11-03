@@ -946,7 +946,7 @@ export interface CNCFileVersion {
   estimated_run_time_min: number;
   uploaded_at: string;
   approved_by: string;
-  status: 'Approved' | 'OUTDATED / REQUIRES RE-GENERATION' | 'Superseded';
+  status: 'Draft' | 'Approved' | 'OUTDATED / REQUIRES RE-GENERATION' | 'Superseded';
   associated_drawing_revision: string;
 }
 

@@ -68,7 +68,7 @@ export const NewWorkPackageModal: React.FC<NewWorkPackageModalProps> = ({
   const [contractorId, setContractorId] = useState(defaultContractorId || (contractors[0]?.id ?? ''));
   const [name, setName] = useState('');
   const [category, setCategory] = useState<WorkPackageTrade>('Carpentry');
-  const [projectManagerId, setProjectManagerId] = useState('user-pm');
+  const [projectManagerId, setProjectManagerId] = useState('');
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState(
     new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
@@ -314,9 +314,9 @@ export const NewWorkPackageModal: React.FC<NewWorkPackageModalProps> = ({
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-8 py-2.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 focus:bg-white transition-all cursor-pointer"
                   id="select-pm-for-wp"
                 >
-                  <option value="user-pm">Marcus Lee (Project Manager)</option>
+                  <option value="">Unassigned</option>
                   {availableUsers
-                    .filter((u) => u.id !== 'user-pm')
+                    .filter((u) => ['Project Manager', 'Admin', 'Owner / CEO'].includes(u.role))
                     .map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.name} ({u.role})

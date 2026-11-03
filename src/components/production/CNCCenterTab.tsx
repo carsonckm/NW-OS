@@ -35,8 +35,8 @@ export const CNCCenterTab: React.FC = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [newRevision, setNewRevision] = useState('Rev 1');
-  const [newMachine, setNewMachine] = useState('Biesse Rover B FT 2231 (bSolid v4)');
-  const [newPartCode, setNewPartCode] = useState('CAR-003-P01');
+  const [newMachine, setNewMachine] = useState('');
+  const [newPartCode, setNewPartCode] = useState('');
 
   const handleStartJob = (jobId: string) => {
     updateCNCJobStatus(jobId, 'Running', 'Started cycle by operator');
@@ -47,18 +47,18 @@ export const CNCCenterTab: React.FC = () => {
   };
 
   const handleUploadVersion = () => {
-    if (!newFileName.trim()) return;
+    if (!newFileName.trim() || !newPartCode.trim()) return;
     uploadCNCFileVersion({
       file_name: newFileName,
       revision: newRevision,
       part_code: newPartCode,
       machine_compatibility: newMachine,
-      gcode_summary: 'Toolpaths regenerated to match drawing specifications',
-      toolpath_count: 8,
-      estimated_run_time_min: 40,
-      approved_by: 'Tan Kok Leong (Production Manager)',
-      status: 'Approved',
-      associated_drawing_revision: 'A-103-NW Rev 1',
+      gcode_summary: 'Draft program reference only; file upload and machining verification pending',
+      toolpath_count: 0,
+      estimated_run_time_min: 0,
+      approved_by: '',
+      status: 'Draft',
+      associated_drawing_revision: '',
     });
     setShowUploadModal(false);
     setNewFileName('');
@@ -66,49 +66,8 @@ export const CNCCenterTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* CNC Machine Status Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Machine 1: Biesse Rover B */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex items-center justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center space-x-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-              <h3 className="font-bold text-slate-900 text-sm">CNC Router #1 — Biesse Rover B FT 2231</h3>
-            </div>
-            <p className="text-xs text-slate-500">5-Axis Heavy Nested Flat-Table Routing (2200 × 3100mm)</p>
-            <div className="flex items-center space-x-3 text-[11px] text-slate-400 mt-2 font-mono">
-              <span>Spindle: 18,000 RPM</span>
-              <span>•</span>
-              <span>Vacuum: 880 mbar</span>
-              <span>•</span>
-              <span>Operator: Mohd Hafiz</span>
-            </div>
-          </div>
-          <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-900 font-bold text-xs">
-            ONLINE / ACTIVE
-          </span>
-        </div>
-
-        {/* Machine 2: Homag Centateq */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex items-center justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center space-x-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-              <h3 className="font-bold text-slate-900 text-sm">CNC Center #2 — Homag Centateq P-110</h3>
-            </div>
-            <p className="text-xs text-slate-500">Deep Mortise, Pod & Rail Heavy Lockcase & Hinge Center</p>
-            <div className="flex items-center space-x-3 text-[11px] text-slate-400 mt-2 font-mono">
-              <span>Spindle: 16,000 RPM</span>
-              <span>•</span>
-              <span>woodWOP 7</span>
-              <span>•</span>
-              <span>Operator: Chong Wei Lun</span>
-            </div>
-          </div>
-          <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-900 font-bold text-xs">
-            ONLINE / ACTIVE
-          </span>
-        </div>
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        Machine telemetry is not connected. This screen records manual job progress and draft program references; it does not upload, generate, approve or send machining instructions.
       </div>
 
       {/* CNC File Version Control Section (Section 12 Requirement) */}
@@ -120,7 +79,7 @@ export const CNCCenterTab: React.FC = () => {
               <h3 className="font-bold text-white text-sm">CNC Program Version Control</h3>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Strict Versioning Policy: CNC files are never overwritten. Drawing revisions flag toolpaths as OUTDATED.
+              Program references require a separate verified file and manufacturing review before use.
             </p>
           </div>
           <button
@@ -128,7 +87,7 @@ export const CNCCenterTab: React.FC = () => {
             className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-colors self-start sm:self-auto"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Upload New CNC Version</span>
+            <span>Register Draft Reference</span>
           </button>
         </div>
 
@@ -151,7 +110,7 @@ export const CNCCenterTab: React.FC = () => {
                       : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                   }`}
                 >
-                  {file.status === 'OUTDATED / REQUIRES RE-GENERATION' ? 'OUTDATED' : file.revision}
+                  {file.status} · {file.revision}
                 </span>
               </div>
 
@@ -159,7 +118,7 @@ export const CNCCenterTab: React.FC = () => {
 
               <div className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-700/80 flex justify-between">
                 <span>Machine: {file.machine_compatibility.split('(')[0]}</span>
-                <span>Run: {file.estimated_run_time_min} mins</span>
+                <span>Run: {file.estimated_run_time_min > 0 ? `${file.estimated_run_time_min} mins` : 'Not measured'}</span>
               </div>
             </div>
           ))}
@@ -172,7 +131,7 @@ export const CNCCenterTab: React.FC = () => {
           <div className="flex items-center space-x-2">
             <Cpu className="w-4 h-4 text-cyan-600" />
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              CNC Live Execution Queue ({cncJobs.length} Jobs)
+              CNC Manual Job Register ({cncJobs.length} Jobs)
             </h3>
           </div>
         </div>
@@ -317,7 +276,7 @@ export const CNCCenterTab: React.FC = () => {
           <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wider flex items-center space-x-2">
               <Plus className="w-4 h-4 text-amber-600" />
-              <span>Register New CNC Program Revision</span>
+              <span>Register Draft CNC Reference</span>
             </h3>
 
             <div>

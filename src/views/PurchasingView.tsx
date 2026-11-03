@@ -73,29 +73,29 @@ export const PurchasingView: React.FC = () => {
 
   // New PO Modal
   const [showNewPOModal, setShowNewPOModal] = useState(false);
-  const [poProjectId, setPoProjectId] = useState(userProjects[0]?.id || 'proj-1');
-  const [poSupplierId, setPoSupplierId] = useState(suppliers[0]?.id || 'sup-1');
-  const [poExpectedDate, setPoExpectedDate] = useState('2026-09-20');
+  const [poProjectId, setPoProjectId] = useState('');
+  const [poSupplierId, setPoSupplierId] = useState('');
+  const [poExpectedDate, setPoExpectedDate] = useState('');
   const [poNotes, setPoNotes] = useState('');
   const [poItems, setPoItems] = useState<
     { item_description: string; specification: string; quantity: number; unit: string; unit_price: number }[]
   >([
     {
-      item_description: 'E1 Moisture Resistant Plywood 18mm',
-      specification: 'BB/BB grade, phenolic glue',
-      quantity: 30,
+      item_description: '',
+      specification: '',
+      quantity: 1,
       unit: 'sheets',
-      unit_price: 185,
+      unit_price: 0,
     },
   ]);
 
   // New Material Request Modal
   const [showNewMRModal, setShowNewMRModal] = useState(false);
-  const [mrProjectId, setMrProjectId] = useState(userProjects[0]?.id || 'proj-1');
+  const [mrProjectId, setMrProjectId] = useState('');
   const [mrMaterialName, setMrMaterialName] = useState('');
   const [mrQuantity, setMrQuantity] = useState(10);
   const [mrUnit, setMrUnit] = useState('pcs');
-  const [mrNeededDate, setMrNeededDate] = useState('2026-09-18');
+  const [mrNeededDate, setMrNeededDate] = useState('');
   const [mrPurpose, setMrPurpose] = useState('');
 
   // Goods Received Modal

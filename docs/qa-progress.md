@@ -20,11 +20,15 @@ Implement and regression-test the saved QA backlog, merge only after complete CI
 
 | Batch | Scope | State |
 |---|---|---|
-| Integrity follow-up | Completion QC gate, serial aggregate invoice validation, shared task assignment scope, settlement amount/evidence guards | Implemented; validation in progress |
-| Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display | Pending |
+| Integrity follow-up | Completion QC gate, serial aggregate invoice validation, shared task assignment scope, settlement amount/evidence guards | Merged in PR #36; complete CI passed; Render dep-dbl06ijbc2fs738f1au0 live at 490a0d9 |
+| Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Implemented; regression/CI validation in progress |
 | Security/dependency review | Current dependency advisories, private API/service-worker handling and remaining trust boundaries | Pending |
 | Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Pending |
 
 ## Recovery
 
 No production repairs are authorized in this session. The earlier two-record repair has a separate approval history and must not be repeated automatically. Do not repeat the November 1 live synthetic creation tests merely to recover context. Check current main/open PRs before resuming to avoid duplicating merged changes.
+
+## Remaining integration limits
+
+CNC is a manual job/reference register. Machine telemetry, program byte upload/verification and machine dispatch require a separately specified machine/provider integration; newly created references cannot be approved. Real WhatsApp and AI provider tests require configured providers; production currently reports no AI and no scheduler. Browser acceptance with existing signed-in roles remains separate from CI's disposable-database role tests. No production data repair has been attempted.

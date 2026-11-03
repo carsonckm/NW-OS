@@ -25,6 +25,8 @@ export const ContractorDashboard: React.FC = () => {
   const {
     currentUser,
     workItems,
+    workPackages,
+    contractors,
     updateWorkItemStatus,
     language,
   } = useNW();
@@ -34,9 +36,10 @@ export const ContractorDashboard: React.FC = () => {
 
   // Filter items strictly for this contractor
   const myItems = workItems.filter(
-    (w) => w.contractor_id === currentUser.contractor_id || w.contractor_id === 'con-1'
+    (w) => Boolean(currentUser.contractor_id) && (w.contractor_id === currentUser.contractor_id || workPackages.some((p) => p.id === w.work_package_id && p.contractor_id === currentUser.contractor_id))
   );
 
+  const companyName = contractors.find((c) => c.id === currentUser.contractor_id)?.company_name || currentUser.name;
   const activeFocusItem = myItems.find((w) => w.item_code === 'CAR-003') || myItems[0];
 
   // Multilingual translations for Contractor
@@ -79,11 +82,11 @@ export const ContractorDashboard: React.FC = () => {
             <span className="px-2.5 py-0.5 rounded bg-orange-50 text-orange-800 border border-orange-200 text-[10px] font-bold uppercase tracking-widest">
               {t.title}
             </span>
-            <span className="text-xs text-slate-500 font-medium">Ah Seng (林福成)</span>
+            <span className="text-xs text-slate-500 font-medium">{currentUser.name}</span>
           </div>
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900 mt-1">{t.sub}</h1>
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 mt-1">{companyName}</h1>
           <p className="text-xs text-slate-500 mt-1">
-            Factory: Sungai Buloh Industrial Park • Trade: Carpentry & Bespoke Joinery
+            Assigned work and recorded progress
           </p>
         </div>
 

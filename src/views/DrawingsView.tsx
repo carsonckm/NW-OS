@@ -37,6 +37,7 @@ export const DrawingsView: React.FC = () => {
     drawings,
     selectedProjectId,
     projects,
+    coreDataSync,
     drawingDemoStep,
     runDrawingDemoWorkflowStep,
     resetDrawingDemo,
@@ -162,6 +163,7 @@ export const DrawingsView: React.FC = () => {
       </div>
 
       {/* Mandatory Lifecycle Flow Ribbon */}
+      {coreDataSync.mode === 'local' && (
       <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-lg space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -255,6 +257,7 @@ export const DrawingsView: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
 
       {/* Drawing Search & Category Filters */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -318,7 +321,7 @@ export const DrawingsView: React.FC = () => {
       {/* Main Drawing Viewer */}
       {activeDrawing ? (
         <>
-          <DrawingViewer drawing={activeDrawing} />
+          <DrawingViewer drawing={activeDrawing} initialRevisionId={focus?.type === 'drawing_revision' ? focus.id : undefined} />
           <RevisionRegister drawing={activeDrawing} />
         </>
       ) : (

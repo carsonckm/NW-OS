@@ -19,6 +19,7 @@
 import { api } from '../services/coreApi';
 import { actionErrorOf } from '../services/records';
 import { AssistantAnswerView, type AssistantResult } from './AssistantAnswerView';
+import { calendarDaysUntil } from '../utils/operational';
 import React, { useState, useMemo } from 'react';
 import { useNW } from '../context/NWContext';
 import { navigateTo } from '../services/navigation';
@@ -186,10 +187,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
   const projVariations = variations.filter((v) => v.project_id === project.id);
 
   // Calculate schedule health (days remaining / overdue)
-  const today = new Date('2026-09-26T00:00:00Z');
-  const endDate = new Date(project.end_date);
-  const diffTime = endDate.getTime() - today.getTime();
-  const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const today = new Date();
+  const daysRemaining = calendarDaysUntil(project.end_date) ?? 0;
   const isOverdue = daysRemaining < 0;
 
   // Calculate Production progress %
@@ -339,7 +338,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
       .forEach((issue) => {
         actions.push({
           id: `today-issue-${issue.id}`,
-          priority: issue.priority === 'Critical' ? 'CRITICAL' : issue.priority === 'High' ? 'HIGH' : 'MEDIUM',
+          priority: issue.priority === 'Critical' ? 'CRITICAL' : issue.priority === 'High' ? 'HIGH' : issue.priority === 'Low' ? 'LOW' : 'MEDIUM',
           category: 'Issue Decision',
           title: issue.title,
           refCode: issue.id,
@@ -415,10 +414,10 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
       if (item.revision_impact_alert) {
         alerts.push({
           id: `alert-${item.id}`,
-          drawingNumber: item.drawing_id === 'draw-1' ? 'A-103' : 'A-104',
-          revision: item.revision_impact_alert.to_revision || 'Rev 4',
-          previousSpec: '2400mm L × 900mm D (18mm Marine Plywood core)',
-          newSpec: '2300mm L × 900mm D (Reduced 100mm due to mall wall opening)',
+          drawingNumber: projDrawings.find((d) => d.id === item.drawing_id)?.drawing_number || item.drawing_id || 'Unlinked',
+          revision: item.revision_impact_alert.to_revision || 'Not recorded',
+          previousSpec: item.revision_impact_alert.from_revision || 'Not recorded',
+          newSpec: item.revision_impact_alert.to_revision || 'Not recorded',
           affectedItemCode: item.item_code,
           affectedItemDescription: item.description,
           productionStage: item.production_status,
@@ -428,23 +427,6 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
         });
       }
     });
-
-    // Default Malaysian joinery showcase alert if none detected
-    if (alerts.length === 0) {
-      alerts.push({
-        id: 'default-alert-1',
-        drawingNumber: 'A-103',
-        revision: 'Rev 4',
-        previousSpec: '2400mm (Module A: 1200mm + Module B: 1200mm)',
-        newSpec: '2300mm (Mall column tolerance reduction of 100mm)',
-        affectedItemCode: 'CAR-003',
-        affectedItemDescription: 'Checkout Counter #03 (Main Retail Cashier)',
-        productionStage: 'Assembly',
-        statusText: 'PRODUCTION IMPACT POSSIBLE',
-        statusLevel: 'POSSIBLE',
-        suggestedAction: 'Review Revision & apply concealed 100mm scribing panel to absorb mall masonry deviation.',
-      });
-    }
 
     return alerts;
   }, [projWorkItems]);
@@ -510,38 +492,12 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
     } catch {
       // Fallback
       setBriefingData({
-        executive_summary: `${project.project_name} is running at ${project.progress_percent}% progress. Handover is set for ${project.end_date} (${daysRemaining} days remaining). Joinery and site coordination require immediate PM oversight.`,
-        handover_projection: `${daysRemaining > 0 ? `${daysRemaining} days remaining` : 'Overdue'}. High probability of on-time delivery if CAR-003 scribing solution is confirmed today.`,
-        critical_path_bottlenecks: [
-          'CAR-003 Checkout Counter: 100mm site dimension conflict. Carcass currently held at factory assembly.',
-          'Pavilion Mall Service Lift: 2200mm height limit requires split-module delivery.',
-          'VO-001 Corian upgrade awaiting formal signature.',
-        ],
-        pm_action_checklist: [
-          {
-            task: 'Instruct Hock Seng Carpentry to scribe Module B plinth by 100mm without re-ordering plywood.',
-            priority: 'CRITICAL',
-            reason: 'Saves 7 days and RM 14,500.',
-            owner_needed: false,
-          },
-          {
-            task: 'Confirm Pavilion Mall security loading bay permit for tomorrow 09:30 AM arrival.',
-            priority: 'HIGH',
-            reason: 'Mall security enforces strict delivery windows.',
-            owner_needed: false,
-          },
-          {
-            task: 'Complete pre-ceiling inspection on ELE-002 wiring raceway.',
-            priority: 'MEDIUM',
-            reason: 'Drywall team begins boarding tomorrow afternoon.',
-            owner_needed: false,
-          },
-        ],
-        owner_escalations_needed: [
-          "Dato' Nicholas Wong executive signature needed for VO-001 (Corian Solid Surface upgrade: RM 18,500).",
-        ],
-        production_health: 'Factory running at 74% throughput across carpentry packages.',
-        financial_risk_summary: `Contract Value: RM ${project.contract_value.toLocaleString()}. Variations: RM ${approvedVariationsTotal.toLocaleString()}.`,
+        executive_summary: `${project.project_name}: ${project.progress_percent}% recorded progress.`,
+        handover_projection: 'No verified projection is available. Review the recorded schedule and open issues.',
+        critical_path_bottlenecks: openIssues.map((i) => i.title),
+        recommended_actions: [], owner_escalations_needed: [],
+        production_health: `${productionPercent}% recorded production progress`,
+        financial_risk_summary: 'Use the server financial summary for verified figures.',
       });
     } finally {
       setIsGeneratingBriefing(false);
@@ -1153,55 +1109,12 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           {/* Stepper Flow */}
           <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5 pt-2">
             {[
-              {
-                step: '1',
-                title: 'Contract / LA',
-                date: project.signed_date || '2026-06-25',
-                status: 'Completed',
-                detail: 'LA Signed & Deposit Cleared',
-                progress: 100,
-              },
-              {
-                step: '2',
-                title: 'Pre-Start',
-                date: project.start_date || '2026-07-01',
-                status: 'Completed',
-                detail: 'Site Measure & Mall Permit',
-                progress: 100,
-              },
-              {
-                step: '3',
-                title: 'Production',
-                date: '2026-07-15 to 2026-09-30',
-                status: 'In Progress',
-                detail: `${productionPercent}% Factory Build (CAR-003 scribing hold)`,
-                progress: productionPercent,
-                hasDelay: project.is_at_risk,
-              },
-              {
-                step: '4',
-                title: 'Delivery',
-                date: '2026-09-27 to 2026-10-05',
-                status: 'Scheduled',
-                detail: `${upcomingDeliveries.length} Dispatches (Pavilion Bay 3)`,
-                progress: 40,
-              },
-              {
-                step: '5',
-                title: 'Installation',
-                date: '2026-10-01 to 2026-10-18',
-                status: 'Pending',
-                detail: 'Joinery Fix & On-site Join',
-                progress: 15,
-              },
-              {
-                step: '6',
-                title: 'Completion',
-                date: project.end_date || '2026-10-24',
-                status: 'Target',
-                detail: 'Handover & CPC Inspection',
-                progress: 0,
-              },
+              { step: '1', title: 'Contract / LA', date: project.signed_date || 'Not recorded', status: project.signed_date ? 'Recorded' : 'Not recorded', detail: 'Signed date; deposit confirmation is separate', progress: project.signed_date ? 100 : 0 },
+              { step: '2', title: 'Pre-Start', date: project.start_date || 'Not recorded', status: 'Review documents', detail: 'Verify measurements, insurance and permits', progress: 0 },
+              { step: '3', title: 'Production', date: 'From linked work items', status: productionPercent === 100 ? 'Completed' : productionPercent > 0 ? 'In Progress' : 'Not Started', detail: `${productionPercent}% recorded progress`, progress: productionPercent, hasDelay: project.is_at_risk },
+              { step: '4', title: 'Delivery', date: 'From linked work items', status: upcomingDeliveries.length ? 'Scheduled' : 'Not Scheduled', detail: `${upcomingDeliveries.length} scheduled items`, progress: 0 },
+              { step: '5', title: 'Installation', date: 'From linked work items', status: 'Recorded progress', detail: `${projWorkItems.filter((w) => w.installation_status === 'Completed').length} of ${projWorkItems.length} items completed`, progress: projWorkItems.length ? Math.round(projWorkItems.filter((w) => w.installation_status === 'Completed').length / projWorkItems.length * 100) : 0 },
+              { step: '6', title: 'Completion', date: project.end_date || 'Not recorded', status: project.project_status, detail: 'Signed handover required for completion', progress: ['Completed', 'Closed'].includes(project.project_status) ? 100 : 0 },
             ].map((stage, idx) => (
               <div
                 key={stage.step}
