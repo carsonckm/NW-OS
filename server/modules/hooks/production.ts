@@ -129,7 +129,7 @@ export const productionOrderHooks: ModuleHooks = {
 
     const status = String(incoming.status);
     checkOnHold(h, existing, status);
-    if (status !== String(existing?.status) && ['Packing', 'Ready for Delivery'].includes(status)) {
+    if (status !== String(existing?.status) && ['Packing', 'Ready for Delivery', 'Completed'].includes(status)) {
       await requirePassedFactoryQc(h, String(incoming.id));
     }
     const statusChanged = !existing || existing.status !== status;

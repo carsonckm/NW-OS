@@ -79,6 +79,21 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 5 task engine, escalation and notific
       const all = (await db.pool.query(`SELECT id FROM tasks WHERE assigned_user_id = 'user-contractor'`)).rows.map((r) => r.id).sort();
       expect([...mine].sort()).toEqual(all);
     });
+
+    it('does not assign hidden work to an unassigned Production Manager', async () => {
+      await db.owner.query("DELETE FROM project_assignments WHERE user_id = 'user-prod-mgr'");
+      try {
+        const rejected = await pm().post('/api/tasks').send(task({ id: 't-hidden-manager', assigned_user_id: 'user-prod-mgr' }));
+        expect(rejected.status).toBe(400);
+        expect(rejected.body.message).toMatch(/does not work on this project/);
+        expect((await as['Production Manager'].get('/api/projects').expect(200)).body).toEqual([]);
+      } finally {
+        await db.owner.query("INSERT INTO project_assignments (user_id, project_id) VALUES ('user-prod-mgr', 'proj-1'), ('user-prod-mgr', 'proj-2') ON CONFLICT DO NOTHING");
+      }
+      await pm().post('/api/tasks').send(task({ id: 't-visible-manager', assigned_user_id: 'user-prod-mgr' })).expect(201);
+      const visible = (await as['Production Manager'].get('/api/tasks').expect(200)).body as Row[];
+      expect(visible.some((t) => t.id === 't-visible-manager')).toBe(true);
+    });
   });
 
   describe('escalation', () => {
