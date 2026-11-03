@@ -23,8 +23,8 @@ Implement and regression-test the saved QA backlog, merge only after complete CI
 | Integrity follow-up | Completion QC gate, serial aggregate invoice validation, shared task assignment scope, settlement amount/evidence guards | Merged in PR #36; complete CI passed; Render dep-dbl06ijbc2fs738f1au0 live at 490a0d9 |
 | Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Merged in PR #37; complete normal/restricted-role CI and build passed |
 | Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Merged in PR #38 after complete CI passed; no high/critical audit findings |
-| Drawing project integrity | Reject approved drawing revisions belonging to a different project, for every role | Implemented; CI pending |
-| Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Pending |
+| Drawing project integrity | Reject approved drawing revisions belonging to a different project, for every role | Merged in PR #39; 937 tests pass with both database roles; Render dep-dbl0iuss728c7399kicg live at da52fde |
+| Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Read-only browser acceptance completed for QA PDF, client documents, project milestones, CNC, automation and WhatsApp; final directory/update follow-up pending CI |
 
 ## Recovery
 
@@ -40,7 +40,7 @@ The refreshed dependency audit reduced the findings from 17 (including one high 
 
 Malformed percent-encoded session cookies now produce unauthenticated requests instead of escaping the Express 4 async middleware. Cookie regressions exercise the actual HTTP middleware. Remembered project selection now waits for the server snapshot before applying access-based fallback; a delayed-snapshot regression protects that behavior.
 
-Production browser smoke testing reached the sign-in screen; authenticated live verification needs the user's secure sign-in. The agent has not requested or read credentials.
+The user completed secure sign-in. Authenticated read-only acceptance verified the stored synthetic revision B PDF, empty client document register, correct 87-day Malaysian-calendar project countdown, stored milestones, explicit disconnected CNC telemetry, server-only automation and unconfigured WhatsApp provider. No records were created, edited, approved or deleted. Provider send/run actions were not invoked.
 
 ## Production drawing project boundary
 
@@ -49,3 +49,11 @@ Approval/current status alone did not bind both drawings to the production order
 ## Revision impact actions
 
 Removed the remaining hardcoded plinth-trim directive, fake variation/clarification success buttons and invented revision impact deltas. A live revision comparison now returns a preview without rewriting work items or clearing alerts; live AI errors surface as errors instead of falling back to sample cabinet dimensions. Tests verify failed live analysis/comparison does not invent data and successful comparison leaves work items/drawings and sync requests unchanged.
+
+## Live staff directory and deployment updates
+
+Authenticated browser acceptance exposed two remaining problems: a signed-in tab stayed on an older asset bundle until reload, and project headers resolved stored staff IDs against cached demo users. The follow-up replaces authenticated directory data with active identities from the existing permission-checked `/api/users` endpoint, fails closed to the session identity if unavailable, and clears this cache on sign-out. Missing historical staff IDs display “Staff record unavailable”; no assignment is rewritten. Action queues no longer invent named approvers or same-day deadlines.
+
+A replacement service worker now offers an explicit reload notice, disabled during core synchronization, without automatically discarding open forms. Six targeted regressions pass, along with type checking. Full normal/restricted PostgreSQL CI and production deployment verification remain pending for this follow-up.
+
+Recovery checkpoint: PRs #36–39 merged, main and deployed commit da52fde23ec62695fa9caf3fade8b7ecbce6f8d1; all CI checks passed on PR #39 and its merged main. Do not repeat prior synthetic creation tests. Remaining external acceptance includes physical CNC integration, configured AI/WhatsApp, real multi-role browser sessions, mobile/offline conflict and load testing; these are not certified by the disposable-database suite.

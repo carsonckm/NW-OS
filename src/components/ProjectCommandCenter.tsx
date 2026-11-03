@@ -7,7 +7,7 @@
  * 3. Visual Project Timeline (Contract/LA -> Pre-Start -> Production -> Delivery -> Installation -> Completion)
  * 4. Work Package Overview (Carpentry, Electrical, Glass, Metal, Painting, Ceiling, etc. with risk & delay badges)
  * 5. Work Item Status Matrix (15-stage filterable counts with instant work item list drill-down)
- * 6. Today's Actions (Real-time operational queue with priority, responsible person, due times, and action buttons)
+ * 6. Open Actions (Real-time operational queue with priority, responsible person, due times, and action buttons)
  * 7. Project Issues Panel (Severity breakdown, complete lifecycle workflow, escalation targets)
  * 8. Drawing / Revision Alerts (Production impact checks, dimension changes, conflict detection)
  * 9. Production Status Pipeline (10-stage manufacturing flow with bottleneck highlights)
@@ -308,7 +308,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           title: `Inspect completed fabrication: ${item.description}`,
           refCode: item.item_code,
           responsible: 'Site Supervisor / PM',
-          dueTime: 'Today 11:30 AM',
+          dueTime: 'No inspection deadline recorded',
           actionLabel: 'Inspect QC',
           type: 'qc',
           payload: item,
@@ -325,8 +325,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           category: 'Delivery Dispatch',
           title: `Gate clearance & unloading: ${item.description}`,
           refCode: item.item_code,
-          responsible: 'Site Supervisor Suresh',
-          dueTime: item.scheduled_delivery_time || 'Today 02:00 PM',
+          responsible: 'Site receiving team',
+          dueTime: item.scheduled_delivery_time || 'Time not scheduled',
           actionLabel: 'Confirm Delivery',
           type: 'delivery',
           payload: item,
@@ -343,8 +343,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           category: 'Issue Decision',
           title: issue.title,
           refCode: issue.id,
-          responsible: issue.assigned_to || 'Project Manager Marcus',
-          dueTime: issue.priority === 'Critical' ? 'URGENT — Today' : 'Today 04:00 PM',
+          responsible: issue.assigned_to || 'Project manager',
+          dueTime: issue.due_date || 'No deadline recorded',
           actionLabel: 'Resolve / Action',
           type: 'issue',
           payload: issue,
@@ -361,8 +361,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
             category: 'Drawing Review',
             title: `${drawing.drawing_number} ${rev.revision}: ${rev.title}`,
             refCode: drawing.drawing_number,
-            responsible: 'Project Manager Marcus',
-            dueTime: 'Today 05:00 PM',
+            responsible: 'Drawing reviewer',
+            dueTime: 'No review deadline recorded',
             actionLabel: 'Review Drawing',
             type: 'drawing',
             payload: { drawing, revision: rev },
@@ -381,8 +381,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           category: 'Variation Approval',
           title: `${vo.variation_number}: ${vo.title} (RM ${(vo.client_amount || 0).toLocaleString()})`,
           refCode: vo.variation_number,
-          responsible: vo.status === 'Internal Approval' ? "Dato' Nicholas Wong (Owner)" : 'Client Michelle Tan',
-          dueTime: 'End of Day',
+          responsible: vo.status === 'Internal Approval' ? 'See assigned approval route' : 'Client representative',
+          dueTime: 'See approval route deadline',
           actionLabel: 'Review VO',
           type: 'variation',
           payload: vo,
@@ -718,14 +718,14 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
               <span className="flex items-center space-x-1.5">
                 <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <span>
-                  PM: <strong className="text-slate-700">{availableUsers.find((u) => u.id === project.project_manager_id)?.name || 'Not recorded'}</strong>
+                  PM: <strong className="text-slate-700">{availableUsers.find((u) => u.id === project.project_manager_id)?.name || 'Staff record unavailable'}</strong>
                 </span>
               </span>
               <span className="text-slate-300">•</span>
               <span className="flex items-center space-x-1.5">
                 <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <span>
-                  Supervisor: <strong className="text-slate-700">{availableUsers.find((u) => u.id === project.site_supervisor_id)?.name || 'Not recorded'}</strong>
+                  Supervisor: <strong className="text-slate-700">{availableUsers.find((u) => u.id === project.site_supervisor_id)?.name || 'Staff record unavailable'}</strong>
                 </span>
               </span>
             </div>
@@ -923,7 +923,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
       <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
         {[
           { id: 'ALL', label: 'All Command Modules' },
-          { id: 'ACTIONS', label: `Today's Actions (${todayActions.length})` },
+          { id: 'ACTIONS', label: `Open Actions (${todayActions.length})` },
           { id: 'TIMELINE', label: 'Project Timeline' },
           { id: 'PACKAGES', label: `Work Packages (${projWorkPackages.length})` },
           { id: 'ITEMS', label: `Work Items (${projWorkItems.length})` },
@@ -956,7 +956,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
               </div>
               <div>
                 <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">
-                  TODAY — Operational Action Queue
+                  OPEN — Operational Action Queue
                 </h2>
                 <p className="text-xs text-slate-500">
                   Tasks requiring immediate resolution to prevent site stoppage or delays.

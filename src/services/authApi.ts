@@ -85,7 +85,7 @@ export function toUserProfile(user: SessionUser): UserProfile {
 // localStorage keys holding database-backed data. In database mode they are only a cache of
 // what the signed-in user may see, so they are cleared on sign-out and when a different
 // user signs in on the same browser.
-const CORE_CACHE_KEYS = [...SYNCED_COLLECTIONS.map((c) => c.storageKey), 'currentUser', 'auditLogs'].map((k) => `nw_os_data_v1_${k}`);
+const CORE_CACHE_KEYS = [...SYNCED_COLLECTIONS.map((c) => c.storageKey), 'currentUser', 'availableUsers', 'auditLogs'].map((k) => `nw_os_data_v1_${k}`);
 const CACHE_OWNER_KEY = 'nw_os_core_cache_owner';
 // Set once the cached core data has come from the database (cleared with it).
 const CACHE_FROM_DATABASE_KEY = 'nw_os_core_cache_from_database';
