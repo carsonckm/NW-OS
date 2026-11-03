@@ -38,7 +38,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   const [projectName, setProjectName] = useState('');
   const [projectNumber, setProjectNumber] = useState('');
   const [siteAddress, setSiteAddress] = useState('');
-  const [contractValue, setContractValue] = useState<string>('650000');
+  const [contractValue, setContractValue] = useState<string>('');
   const [projectStatus, setProjectStatus] = useState<ProjectStatus>('Active');
   const [startDate, setStartDate] = useState(
     new Date().toISOString().split('T')[0]
@@ -46,8 +46,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   const [endDate, setEndDate] = useState(
     new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   );
-  const [pmId, setPmId] = useState('user-pm');
-  const [siteSupervisorId, setSiteSupervisorId] = useState('user-site');
+  const [pmId, setPmId] = useState('');
+  const [siteSupervisorId, setSiteSupervisorId] = useState('');
   const [description, setDescription] = useState('');
 
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
@@ -55,15 +55,17 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      const selectedClient = defaultClientId || (clients[0] ? clients[0].id : '');
+      const selectedClient = defaultClientId || '';
+      setPmId('');
+      setSiteSupervisorId('');
       setClientId(selectedClient);
 
       // Auto-generate project number
       const nextNum = projects.length + 88 + 10;
-      setProjectNumber(`NW-2026-${String(nextNum).padStart(3, '0')}`);
+      setProjectNumber(`NW-${new Date().getFullYear()}-${String(nextNum).padStart(3, '0')}`);
       setProjectName('');
       setSiteAddress('');
-      setContractValue('650000');
+      setContractValue('');
       setProjectStatus('Active');
       setDescription('');
       setErrors({});
@@ -337,9 +339,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 onChange={(e) => setPmId(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:bg-white"
               >
-                <option value="user-pm">Marcus Lee (Senior PM)</option>
-                <option value="user-admin">Sarah Cheng (Operations)</option>
-                <option value="user-owner">Dato’ Nicholas Wong (Executive Oversight)</option>
+                <option value="">Unassigned</option>
+                {availableUsers.filter((u) => ['Project Manager', 'Admin', 'Owner / CEO'].includes(u.role)).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </div>
 
@@ -352,8 +353,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 onChange={(e) => setSiteSupervisorId(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:bg-white"
               >
-                <option value="user-site">Suresh Kumar (Senior Site Supervisor)</option>
-                <option value="user-pm">Marcus Lee</option>
+                <option value="">Unassigned</option>
+                {availableUsers.filter((u) => ['Site Supervisor', 'Project Manager'].includes(u.role)).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </div>
           </div>

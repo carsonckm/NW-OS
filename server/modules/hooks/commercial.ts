@@ -137,6 +137,14 @@ export const quotationHooks: ModuleHooks = {
     }
     return priceQuotation(next);
   },
+  async afterWrite(h, existing, stored) {
+    if (h.mode === 'import' || stored.status !== 'Submitted' || existing?.status === 'Submitted' || !stored.enquiry_id) return;
+    const row = (await h.db.query('SELECT data FROM client_enquiries WHERE id = $1', [stored.enquiry_id])).rows[0];
+    if (!row || row.data.client_id !== stored.client_id) throw new ValidationError('The quotation enquiry must belong to the same client');
+    if (['New', 'Reviewing', 'Tender Invited'].includes(String(row.data.status))) {
+      await h.writeModule!('clientEnquiries', row.data, { ...row.data, status: 'Quoted' });
+    }
+  },
 };
 
 /** Client-facing quotation: everything internal (costs, margins, notes, sources) is left out. */

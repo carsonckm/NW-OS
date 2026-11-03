@@ -22,29 +22,15 @@ export const NWProductionDrawingModal: React.FC<NWProductionDrawingModalProps> =
 
   const [drawingNumber, setDrawingNumber] = useState(`${drawing.drawing_number}-NW`);
   const [revision, setRevision] = useState('Rev 1');
-  const [title, setTitle] = useState(`NW Production Drawing — ${drawing.title} (Modular 2-Carcase Build)`);
-  const [revisedDimensions, setRevisedDimensions] = useState('2400 × 900 × 1050mm (Split 2 × 1200mm Modules)');
-  const [constructionDetails, setConstructionDetails] = useState(
-    'Split carcass into Module A (1200mm Cashier & sub-DB) and Module B (1200mm Bagging & Wrap cavity). Dual side gable panels with concealed Domino dowels.'
-  );
-  const [materialDetails, setMaterialDetails] = useState(
-    '18mm E1 Marine Plywood core; Wilsonart Natural Oak HPL external face; 12mm Dupont Corian Glacier White solid surface seamless bonded countertop.'
-  );
-  const [hardwareDetails, setHardwareDetails] = useState(
-    'Hafele Quadro soft-close full-extension drawer runners; Blum CLIP top 110-degree hinges; 4 × M6 connecting bolts.'
-  );
-  const [joiningMethod, setJoiningMethod] = useState(
-    'Concealed Festool Domino DF 500 beechwood loose tenons with internal lock bolts.'
-  );
-  const [assemblyInstructions, setAssemblyInstructions] = useState(
-    '1. Pre-route cable conduits prior to carcass pressing. 2. Edgeband all exposed gables with 2mm matching PVC. 3. Pre-assemble drawers and test fit runners at factory.'
-  );
-  const [installationInstructions, setInstallationInstructions] = useState(
-    '1. Hoist modules individually via Pavilion Service Lift. 2. Position Module A and align laser level with floor benchmark. 3. Dock Module B, engage Domino pins, tighten M6 connector bolts. 4. Bond Corian top on site.'
-  );
-  const [productionNotes, setProductionNotes] = useState(
-    'Approved by Master Joiner Ah Huat for workshop execution. Exceeds standard structural load criteria.'
-  );
+  const [title, setTitle] = useState(`NW Production Drawing — ${drawing.title}`);
+  const [revisedDimensions, setRevisedDimensions] = useState('');
+  const [constructionDetails, setConstructionDetails] = useState('');
+  const [materialDetails, setMaterialDetails] = useState('');
+  const [hardwareDetails, setHardwareDetails] = useState('');
+  const [joiningMethod, setJoiningMethod] = useState('');
+  const [assemblyInstructions, setAssemblyInstructions] = useState('');
+  const [installationInstructions, setInstallationInstructions] = useState('');
+  const [productionNotes, setProductionNotes] = useState('');
 
   if (!isOpen) return null;
 
@@ -67,7 +53,7 @@ export const NWProductionDrawingModal: React.FC<NWProductionDrawingModalProps> =
       assembly_instructions: assemblyInstructions.trim(),
       installation_instructions: installationInstructions.trim(),
       production_notes: productionNotes.trim(),
-      file_url: `/drawings/${drawingNumber}_${revision}.svg`,
+      file_url: '',
       uploaded_by: currentUser.name,
     });
 

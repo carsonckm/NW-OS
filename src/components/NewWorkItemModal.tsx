@@ -56,7 +56,7 @@ export const NewWorkItemModal: React.FC<NewWorkItemModalProps> = ({
 
   // Find project drawings for this work package
   const projectDrawings = drawings.filter((d) => d.project_id === workPackage.project_id);
-  const defaultDrawing = projectDrawings[0] || drawings[0] || null;
+  const defaultDrawing = projectDrawings[0] || null;
 
   // Auto-suggest item code based on trade
   const getSuggestedCode = (trade: string) => {
@@ -67,12 +67,12 @@ export const NewWorkItemModal: React.FC<NewWorkItemModalProps> = ({
 
   const [itemCode, setItemCode] = useState(() => getSuggestedCode(workPackage.category || 'CAR'));
   const [description, setDescription] = useState('');
-  const [location, setLocation] = useState('Ground Floor');
+  const [location, setLocation] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [unit, setUnit] = useState('Unit');
-  const [dimensions, setDimensions] = useState('2400 × 900 × 1050 mm');
-  const [material, setMaterial] = useState('18mm plywood');
-  const [finish, setFinish] = useState('Laminate');
+  const [dimensions, setDimensions] = useState('');
+  const [material, setMaterial] = useState('');
+  const [finish, setFinish] = useState('');
   const [requiredDate, setRequiredDate] = useState(
     workPackage.end_date || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   );
@@ -388,7 +388,7 @@ export const NewWorkItemModal: React.FC<NewWorkItemModalProps> = ({
                   className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 cursor-pointer"
                   id="select-drawing"
                 >
-                  {drawings.map((dwg) => (
+                  {projectDrawings.map((dwg) => (
                     <option key={dwg.id} value={dwg.id}>
                       {dwg.drawing_number} — {dwg.title}
                     </option>

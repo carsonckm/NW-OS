@@ -18,14 +18,15 @@ import {
 } from 'lucide-react';
 
 export const ClientDashboard: React.FC = () => {
-  const { selectedProject, variations, approveVariation, workItems } = useNW();
+  const { selectedProject, variations, approveVariation, workItems, clients } = useNW();
 
   // Client variations
   const clientVOs = variations.filter(
     (v) => v.project_id === selectedProject?.id
   );
 
-  const completedCount = workItems.filter(
+  const projectItems = workItems.filter((w) => w.project_id === selectedProject?.id);
+  const completedCount = projectItems.filter(
     (w) => w.status === 'Completed' || w.installation_status === 'Completed'
   ).length;
 
@@ -39,13 +40,13 @@ export const ClientDashboard: React.FC = () => {
               <span className="px-2.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-300 text-[10px] font-bold uppercase tracking-widest">
                 Client Project Dashboard
               </span>
-              <span className="text-xs text-slate-500 font-medium">Aurora Retail Sdn Bhd</span>
+              <span className="text-xs text-slate-500 font-medium">{clients.find((c) => c.id === selectedProject?.client_id)?.company_name || 'Client'}</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">
               {selectedProject?.project_name}
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Project Director: Dato’ Nicholas Wong • Senior PM: Marcus Lee
+              Project team and progress are shown from recorded data.
             </p>
           </div>
 
@@ -62,9 +63,9 @@ export const ClientDashboard: React.FC = () => {
         {/* Milestone Progress Bar */}
         <div className="mt-5 space-y-2">
           <div className="flex justify-between text-xs text-slate-600 font-medium">
-            <span>Mobilization & Site Demo (100%)</span>
-            <span>Factory Joinery (85%)</span>
-            <span>Site Installation (60%)</span>
+            <span>Recorded project progress</span>
+            <span>Production</span>
+            <span>Installation</span>
             <span>Final Handover</span>
           </div>
           <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
@@ -124,7 +125,7 @@ export const ClientDashboard: React.FC = () => {
                   </span>
                 </div>
 
-                {vo.status !== 'Approved' ? (
+                {vo.status === 'Client Approval' ? (
                   <button
                     onClick={() => approveVariation(vo.id, false)}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
@@ -135,7 +136,7 @@ export const ClientDashboard: React.FC = () => {
                 ) : (
                   <div className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center space-x-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Approved by Client</span>
+                    <span>{vo.status}</span>
                   </div>
                 )}
               </div>
@@ -151,7 +152,7 @@ export const ClientDashboard: React.FC = () => {
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
             <span>Site Milestones & Delivered Millwork</span>
           </h3>
-          <span className="text-xs text-slate-500 font-medium">{completedCount} of {workItems.length} items on site</span>
+          <span className="text-xs text-slate-500 font-medium">{completedCount} of {projectItems.length} items on site</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">

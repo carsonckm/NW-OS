@@ -4,6 +4,7 @@ import { deliveryHooks } from './hooks/delivery';
 import { drawingHooks } from './hooks/drawings';
 import { installationHooks, siteQcHooks } from './hooks/site';
 import { productionOrderHooks, factoryQcHooks, packingHooks } from './hooks/production';
+import { cncFileVersionHooks } from './hooks/cnc';
 import { variationHooks } from './hooks/variations';
 import { baselineHooks } from './reports';
 import { quotationHooks } from './hooks/commercial';
@@ -242,6 +243,7 @@ export const MODULES: ModuleDef[] = [
     columns: [{ col: 'part_code' }, { col: 'revision' }, { col: 'status' }],
     scope: { kind: 'company' },
     perms: { view: 'production.view', create: 'production.cnc_manage', edit: 'production.cnc_manage', delete: null },
+    hooks: cncFileVersionHooks,
   },
   {
     key: 'productionMaterials',

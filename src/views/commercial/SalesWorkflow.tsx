@@ -835,7 +835,7 @@ const QuotationEditor: React.FC<{
       if (quotation) await records.update('commercialQuotations', quotation.id, record, quotation);
       else {
         const created = await records.create('commercialQuotations', { ...record, id: newId('qt') });
-        if (enquiry && ['New', 'Reviewing', 'Tender Invited'].includes(enquiry.status)) await records.update('clientEnquiries', enquiry.id, { status: 'Quoted' }, enquiry);
+        // A draft is not an issued quotation; the server updates the enquiry on submission.
         onSaved?.(String(created.id));
       }
       onClose();

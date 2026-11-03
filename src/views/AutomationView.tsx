@@ -50,6 +50,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   initialSubTab = 'dashboard',
 }) => {
   const {
+    coreDataSync,
     tasks,
     automationRules,
     escalations,
@@ -72,7 +73,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const activeEscalationsCount = escalations.filter((e) => !e.resolved_at).length;
   const unreadNotifCount = notifications.filter((n) => !n.is_read).length;
   const pendingApprovalsCount = approvals.filter((a) => a.decision === 'Pending').length;
-  const unresolvedFailuresCount = failedAutomations.filter((f) => !f.is_resolved).length;
+  const unresolvedFailuresCount = coreDataSync.mode === 'database' ? 0 : failedAutomations.filter((f) => !f.is_resolved).length;
   const criticalCount = tasks.filter((t) => t.priority === 'Critical' && t.status !== 'Completed').length;
 
   const navItems: {
@@ -196,9 +197,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         {/* Operating Architecture Bar */}
         <div className="mt-6 pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-400 font-mono">
           <div className="flex items-center space-x-4">
-            <span className="text-emerald-400 font-bold">✓ Idempotency Shield Active</span>
+            <span className="text-emerald-400 font-bold">Server rule status shown above</span>
             <span>•</span>
-            <span className="text-blue-300">✓ Multi-Channel Dispatch Ready</span>
+            <span className="text-blue-300">Provider connections require separate setup</span>
             <span>•</span>
             <span className="text-purple-300">✓ Tiered Responsibility Matrix</span>
           </div>
@@ -212,7 +213,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       {/* Subsection Navigation Tabs (Section 1 requirement) */}
       <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-1.5 overflow-x-auto">
         <div className="flex items-center space-x-1 min-w-max">
-          {navItems.map((item) => {
+          {navItems.filter((item) => coreDataSync.mode !== 'database' || !['workflow-rules', 'workflow-templates', 'scheduled-actions', 'automation-history', 'failed-automations'].includes(item.id)).map((item) => {
             const isActive = activeTab === item.id;
             return (
               <button
@@ -244,7 +245,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       {/* Tab Contents */}
       <div>
         {activeTab === 'dashboard' && (
-          <AutomationDashboardTab onNavigateTab={(tab) => setActiveTab(tab as AutomationSubTab)} />
+          coreDataSync.mode === 'database' ? <p className="rounded-xl border p-4 text-sm text-slate-500">Live rule performance and run history are shown above. The example dashboard is available only in local demo mode.</p> : <AutomationDashboardTab onNavigateTab={(tab) => setActiveTab(tab as AutomationSubTab)} />
         )}
 
         {activeTab === 'my-tasks' && <MyTasksTab />}

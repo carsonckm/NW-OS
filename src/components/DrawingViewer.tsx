@@ -4,7 +4,7 @@
  * Implements AI DRAFT extraction, Revision Impact Checking, NW Production Method Reviews, and Production Drawing Approvals.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { hasPermission } from '../utils/permissions';
 import { FILE_ACCEPT, filesAvailable, isStoredFileUrl, uploadFile } from '../services/files';
@@ -47,10 +47,11 @@ import { NWProductionDrawingModal } from './NWProductionDrawingModal';
 
 interface DrawingViewerProps {
   drawing: Drawing;
+  initialRevisionId?: string;
   onRevisionChange?: (revisionId: string) => void;
 }
 
-export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisionChange }) => {
+export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, initialRevisionId, onRevisionChange }) => {
   const {
     currentUser,
     workPackages,
@@ -67,8 +68,14 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
   } = useNW();
 
   const [selectedRevisionId, setSelectedRevisionId] = useState<string>(
-    drawing.current_revision_id || drawing.revisions[drawing.revisions.length - 1]?.id || drawing.revisions[0]?.id
+    initialRevisionId || drawing.current_revision_id || drawing.revisions[drawing.revisions.length - 1]?.id || drawing.revisions[0]?.id
   );
+
+  useEffect(() => {
+    const id = initialRevisionId && drawing.revisions.some((r) => r.id === initialRevisionId)
+      ? initialRevisionId : drawing.current_revision_id || drawing.revisions.at(-1)?.id || '';
+    setSelectedRevisionId(id);
+  }, [drawing.id, initialRevisionId]);
 
   const [activeTab, setActiveTab] = useState<
     'drawing' | 'ai-draft' | 'impact' | 'nw-review' | 'nw-drawings' | 'history'
@@ -86,9 +93,9 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
   const [showNWDrawingModal, setShowNWDrawingModal] = useState(false);
 
   // New revision form
-  const [newRevNumber, setNewRevNumber] = useState('Rev 5');
-  const [newRevTitle, setNewRevTitle] = useState('Architectural Shop Drawing — Coordinated Mall M&E Set');
-  const [newRevNotes, setNewRevNotes] = useState('Coordinated with Mall tenant guidelines and Level 2 hoist clearances.');
+  const [newRevNumber, setNewRevNumber] = useState('');
+  const [newRevTitle, setNewRevTitle] = useState('');
+  const [newRevNotes, setNewRevNotes] = useState('');
   // The new revision's file (database mode: stored privately on the server).
   const [newRevFile, setNewRevFile] = useState<File | null>(null);
   const [newRevError, setNewRevError] = useState<string | null>(null);
@@ -98,7 +105,7 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
   const [aiError, setAiError] = useState<string | null>(null);
   const [approvedItems, setApprovedItems] = useState<Record<string, boolean>>({});
   const [selectedWorkPackageId, setSelectedWorkPackageId] = useState<string>(
-    workPackages[0]?.id || 'wp-1'
+    workPackages.find((p) => p.project_id === drawing.project_id)?.id || ''
   );
 
   // Revision Comparison State
@@ -499,168 +506,12 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
                 }}
               />
 
-              {/* DRAWING VISUALIZATIONS */}
-              {currentRev.revision === 'Rev 1' ? (
-                /* REVISION 1: Monolithic Single Piece (Client Original) */
-                <div className="w-full max-w-2xl bg-slate-900/90 border-2 border-rose-500/50 rounded-2xl p-6 sm:p-8 relative z-10 shadow-2xl">
-                  <div className="absolute -top-3.5 left-4 bg-rose-500 text-white text-[10px] font-black px-3 py-0.5 rounded shadow">
-                    SUPERSEDED BY REV 2 — MONOLITHIC DESIGN HAZARD
-                  </div>
-
-                  <div className="text-center mb-5">
-                    <span className="text-xs font-mono font-bold text-slate-300 uppercase tracking-widest">
-                      Original Client Concept: 2400mm Monolithic Unit
-                    </span>
-                    <div className="h-0.5 w-28 bg-rose-500/50 mx-auto mt-1" />
-                  </div>
-
-                  <div className="border-2 border-dashed border-rose-400/60 bg-slate-950/80 rounded-xl p-6 relative">
-                    <div className="flex items-center justify-between text-xs text-rose-400 font-mono font-bold mb-2">
-                      <span>◄──────────────── 2400mm Single Carcase ────────────────►</span>
-                    </div>
-
-                    <div className="h-32 rounded-lg bg-gradient-to-r from-slate-800 to-slate-750 border border-slate-600 flex items-center justify-center relative shadow-inner">
-                      <div className="text-center p-3">
-                        <div className="text-sm font-black text-white">Cashier Checkout Counter Body</div>
-                        <div className="text-xs text-rose-400 font-semibold mt-1">
-                          ⚠️ Lift Clearance Violation (Pavilion Hoist max: 2200mm)
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 p-3 bg-rose-950/50 border border-rose-800/80 rounded-xl text-xs text-rose-300 leading-relaxed">
-                      <strong>NW Production Feedback:</strong> Cannot be transported via Level 2 service hoist without severe tilting. Weight exceeds 140kg single lift safety limit. Requires modular split.
-                    </div>
-                  </div>
-                </div>
-              ) : currentRev.revision === 'Rev 4' ? (
-                /* REVISION 4: Site Variance 2300mm (-100mm) */
-                <div className="w-full max-w-3xl bg-slate-900/95 border-2 border-amber-500/60 rounded-2xl p-6 sm:p-8 relative z-10 shadow-2xl">
-                  <div className="absolute -top-3.5 left-4 bg-amber-500 text-slate-950 text-[10px] font-black px-3 py-0.5 rounded shadow">
-                    REVISION 4 — SITE VARIANCE DETECTED (2300mm)
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs font-mono text-amber-400 mb-3 font-bold">
-                    <span>Revised Dimension: 2300mm (-100mm Reduction Due to Site Column Encasement)</span>
-                    <span className="text-slate-400">Depth: 900mm | Height: 1050mm</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 relative">
-                    {/* MODULE A */}
-                    <div className="border border-sky-500/70 bg-slate-950/90 rounded-xl p-4">
-                      <div className="text-xs font-bold text-sky-400 mb-1 flex items-center justify-between">
-                        <span>MODULE A (1200mm)</span>
-                        <span className="text-[10px] px-1.5 py-0.5 bg-emerald-950 text-emerald-300 rounded font-semibold">
-                          UNTOUCHED (Standard)
-                        </span>
-                      </div>
-                      <div className="h-32 rounded-lg bg-slate-800/80 border border-slate-700 flex flex-col justify-between p-3">
-                        <div className="text-xs text-white font-bold">Corian Solid Surface Top</div>
-                        <div className="text-[11px] text-sky-300">POS & Cashier Under-bench Tray</div>
-                        <div className="text-[10px] text-slate-400 font-mono">Hafele Full-Extension Runners</div>
-                      </div>
-                    </div>
-
-                    {/* MODULE B WITH 100mm FIELD PLINTH TRIM */}
-                    <div className="border border-amber-500/80 bg-slate-950/90 rounded-xl p-4 relative">
-                      <div className="text-xs font-bold text-amber-400 mb-1 flex items-center justify-between">
-                        <span>MODULE B (1100mm Effective)</span>
-                        <span className="text-[10px] px-1.5 py-0.5 bg-amber-950 text-amber-300 rounded font-bold">
-                          -100mm PLINTH TRIM
-                        </span>
-                      </div>
-                      <div className="h-32 rounded-lg bg-slate-800/80 border border-slate-700 flex flex-col justify-between p-3">
-                        <div className="text-xs text-white font-bold">Wrap Station & Cavity</div>
-                        <div className="text-[11px] text-amber-300 font-medium">
-                          Trim 100mm off end scribe plinth without modifying carcase core!
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-mono">Concealed Domino Pins</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 p-3 bg-amber-950/40 border border-amber-800/70 rounded-xl text-xs text-amber-300 flex items-start space-x-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <div>
-                      <strong>NW Engineering Directive:</strong> Carcase CAR-003 is already in Assembly at workshop based on Rev 3. Do NOT scrap or cut the main carcase. Trim 100mm from Module B end plinth filler. Saves RM 4,200 in material and avoids 5-day rework delay.
-                    </div>
-                  </div>
-                </div>
+              {isStoredFileUrl(currentRev.file_url) ? (
+                <iframe title={`Drawing ${drawing.drawing_number} ${currentRev.revision}`}
+                  src={currentRev.file_url} className="relative z-10 h-[600px] w-full rounded-lg bg-white"
+                  style={{ pointerEvents: isAddingMarkup ? 'none' : 'auto' }} />
               ) : (
-                /* REVISION 2 & 3: Approved NW Production Drawing (2 × 1200mm Split Modules) */
-                <div className="w-full max-w-3xl bg-slate-900/90 border-2 border-emerald-500/50 rounded-2xl p-6 sm:p-8 relative z-10 shadow-2xl">
-                  <div className="absolute -top-3.5 left-4 bg-emerald-600 text-white text-[10px] font-black px-3 py-0.5 rounded shadow">
-                    APPROVED NW PRODUCTION METHOD — MODULAR CARCASE
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs font-mono text-emerald-400 mb-3 font-bold">
-                    <span>Overall: 2400mm (Module A 1200mm + Module B 1200mm)</span>
-                    <span className="text-slate-400">Depth: 900mm | Height: 1050mm</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 relative">
-                    {/* MODULE A */}
-                    <div className="border border-sky-500/60 bg-slate-950/90 rounded-xl p-4">
-                      <div className="text-xs font-bold text-sky-400 mb-1 flex items-center justify-between">
-                        <span>MODULE A (1200mm)</span>
-                        <span className="text-[10px] px-1.5 py-0.5 bg-sky-950 text-sky-300 rounded font-semibold">
-                          Cashier & POS
-                        </span>
-                      </div>
-                      <div className="h-32 rounded-lg bg-slate-800/80 border border-slate-700 flex flex-col justify-between p-3">
-                        <div className="text-xs text-white font-bold">Corian Top (Glacier White)</div>
-                        <div className="border-t border-dashed border-sky-500/40 pt-1 text-[11px] text-sky-300">
-                          Pre-routed 50×75mm PVC Cable Raceway
-                        </div>
-                        <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                          <span>3 Lockable Drawers</span>
-                          <span>Hafele Heavy Runners</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* MODULE B */}
-                    <div className="border border-sky-500/60 bg-slate-950/90 rounded-xl p-4">
-                      <div className="text-xs font-bold text-sky-400 mb-1 flex items-center justify-between">
-                        <span>MODULE B (1200mm)</span>
-                        <span className="text-[10px] px-1.5 py-0.5 bg-sky-950 text-sky-300 rounded font-semibold">
-                          Bagging & Wrap
-                        </span>
-                      </div>
-                      <div className="h-32 rounded-lg bg-slate-800/80 border border-slate-700 flex flex-col justify-between p-3">
-                        <div className="text-xs text-white font-bold">Under-counter Storage Cavity</div>
-                        <div className="border-t border-dashed border-emerald-500/40 pt-1 text-[11px] text-emerald-300">
-                          Pre-drilled for 4 × M6 Worktop Connecting Bolts
-                        </div>
-                        <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                          <span>Adjustable Shelving</span>
-                          <span>Festool Domino Joints</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Joiner Center Pin */}
-                    <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 hidden sm:flex flex-col items-center pointer-events-none">
-                      <div className="w-6 h-6 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center font-black text-xs shadow-md">
-                        ⇄
-                      </div>
-                      <span className="text-[9px] bg-slate-950 px-1.5 py-0.5 rounded text-amber-300 border border-slate-800 mt-1 whitespace-nowrap font-bold">
-                        Concealed Domino Pins
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between text-xs text-slate-400 gap-2">
-                    <div>
-                      Material: <span className="text-white font-semibold">18mm E1 Marine Plywood</span> • Finish:{' '}
-                      <span className="text-white font-semibold">Wilsonart Natural Oak HPL</span>
-                    </div>
-                    <div className="text-emerald-400 font-bold flex items-center space-x-1">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Fits Pavilion Level 2 Service Hoist (Max segment 1200mm)</span>
-                    </div>
-                  </div>
-                </div>
+                <p className="relative z-10 text-sm text-slate-300">No stored document is attached to this revision. Engineering details must come from its registered file or reviewed production records.</p>
               )}
 
               {/* Interactive Markup Pins */}
@@ -902,7 +753,7 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, onRevisio
                       onChange={(e) => setSelectedWorkPackageId(e.target.value)}
                       className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-medium focus:outline-none focus:ring-1 focus:ring-amber-400"
                     >
-                      {workPackages.map((wp) => (
+                      {workPackages.filter((p) => p.project_id === drawing.project_id).map((wp) => (
                         <option key={wp.id} value={wp.id}>
                           {wp.category} — {wp.name}
                         </option>

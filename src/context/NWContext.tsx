@@ -862,7 +862,12 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     loadOrInitial('business_calendar', INITIAL_BUSINESS_CALENDAR)
   );
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string>('proj-1');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(() => {
+    try { return localStorage.getItem('nw_os_selected_project') || ''; } catch { return ''; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('nw_os_selected_project', selectedProjectId); } catch { /* unavailable cache */ }
+  }, [selectedProjectId]);
 
   // Persistence effects
   useEffect(() => saveStorage('currentUser', currentUser), [currentUser]);

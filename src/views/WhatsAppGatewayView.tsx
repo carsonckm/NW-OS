@@ -70,6 +70,7 @@ import {
 
 export const WhatsAppGatewayView: React.FC = () => {
   const {
+    coreDataSync,
     currentUser,
     projects,
     selectedProjectId,
@@ -178,6 +179,13 @@ export const WhatsAppGatewayView: React.FC = () => {
       setIsRunningAllTests(false);
     }
   };
+
+  if (coreDataSync.mode === 'database') return (
+    <div className="space-y-4 p-6">
+      <WhatsAppServerGateway />
+      <p className="rounded-xl border p-4 text-sm text-slate-600">Only server-registered contacts and provider outcomes are shown here. The local communication simulator is unavailable in the live workspace.</p>
+    </div>
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">

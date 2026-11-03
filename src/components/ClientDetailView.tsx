@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { RecordFiles } from './RecordFiles';
 import { useNW } from '../context/NWContext';
 import { Client, Project } from '../types';
 import {
@@ -46,28 +47,9 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
 }) => {
   const { projects, documents, auditLogs, setSelectedProjectId } = useNW();
   const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'documents' | 'activity'>('overview');
-  const [showAttachDocModal, setShowAttachDocModal] = useState(false);
-  const [newDocTitle, setNewDocTitle] = useState('');
-  const [newDocCategory, setNewDocCategory] = useState<'Contract' | 'Letter of Award' | 'Specification' | 'Invoice'>('Contract');
-  const [customDocs, setCustomDocs] = useState<Array<{ id: string; title: string; category: string; date: string; size: string }>>([
-    {
-      id: 'cd-1',
-      title: `${client.company_name} — Master Framework Agreement & Non-Disclosure.pdf`,
-      category: 'Contract',
-      date: client.created_at.split('T')[0],
-      size: '2.4 MB',
-    },
-    {
-      id: 'cd-2',
-      title: `${client.company_name} — Commercial Credit Term Authorization (30 Days).pdf`,
-      category: 'Letter of Award',
-      date: client.updated_at.split('T')[0],
-      size: '890 KB',
-    },
-  ]);
-
   // Projects belonging to this client
   const clientProjects = projects.filter((p) => p.client_id === client.id);
+  const clientDocuments = documents.filter((d) => clientProjects.some((p) => p.id === d.project_id));
   const totalContractValue = clientProjects.reduce((sum, p) => sum + (p.contract_value || 0), 0);
 
   // Client-related audit logs
@@ -79,24 +61,6 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   );
 
   const isIndividual = client.client_type === 'Individual / Homeowner';
-
-  const handleAddDocument = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newDocTitle.trim()) return;
-
-    setCustomDocs((prev) => [
-      {
-        id: 'cd-' + Date.now(),
-        title: newDocTitle.trim(),
-        category: newDocCategory,
-        date: new Date().toISOString().split('T')[0],
-        size: '1.2 MB',
-      },
-      ...prev,
-    ]);
-    setNewDocTitle('');
-    setShowAttachDocModal(false);
-  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-slate-800 animate-in fade-in duration-200">
@@ -205,7 +169,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
           {[
             { id: 'overview' as const, label: 'Client Information' },
             { id: 'projects' as const, label: `Projects (${clientProjects.length})` },
-            { id: 'documents' as const, label: `Documents (${customDocs.length})` },
+            { id: 'documents' as const, label: `Documents (${clientDocuments.length})` },
             { id: 'activity' as const, label: `Activity History (${clientLogs.length})` },
           ].map((tab) => (
             <button
@@ -450,124 +414,19 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
         </div>
       )}
 
-      {/* TAB CONTENT: Documents */}
       {activeTab === 'documents' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                Client Legal & Commercial Documents
-              </h3>
-              <p className="text-xs text-slate-500">
-                Master service agreements, letters of award, specifications, and signed NDA agreements.
-              </p>
-            </div>
-            <button
-              onClick={() => setShowAttachDocModal(true)}
-              className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center space-x-1.5 cursor-pointer border border-slate-200 shadow-2xs"
-            >
-              <FolderPlus className="w-3.5 h-3.5 text-slate-600" />
-              <span>Attach Document</span>
-            </button>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl divide-y divide-slate-100 shadow-xs">
-            {customDocs.map((doc) => (
-              <div
-                key={doc.id}
-                className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/60 transition-colors"
-              >
-                <div className="flex items-start space-x-3">
-                  <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
-                    <FileText className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">{doc.title}</h4>
-                    <div className="flex items-center space-x-3 text-[11px] text-slate-500 mt-0.5">
-                      <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-semibold">
-                        {doc.category}
-                      </span>
-                      <span>Uploaded: {doc.date}</span>
-                      <span>Size: {doc.size}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center space-x-2 shrink-0">
-                  <button
-                    onClick={() => alert(`Downloading "${doc.title}"...`)}
-                    className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-                    title="Download Document"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Modal for adding document */}
-          {showAttachDocModal && (
-            <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-              <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-5 text-slate-900 shadow-2xl">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
-                  <h4 className="text-sm font-bold text-slate-900">Attach Client Document</h4>
-                  <button
-                    onClick={() => setShowAttachDocModal(false)}
-                    className="text-slate-400 hover:text-slate-600 cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                <form onSubmit={handleAddDocument} className="space-y-3 text-xs">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">
-                      Document Title
-                    </label>
-                    <input
-                      type="text"
-                      value={newDocTitle}
-                      onChange={(e) => setNewDocTitle(e.target.value)}
-                      placeholder="e.g. Signed Letter of Award — Phase 2 Fitout.pdf"
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">
-                      Document Category
-                    </label>
-                    <select
-                      value={newDocCategory}
-                      onChange={(e) => setNewDocCategory(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                    >
-                      <option value="Contract">Contract / Framework Agreement</option>
-                      <option value="Letter of Award">Letter of Award (LOA)</option>
-                      <option value="Specification">Design Specification & Finishes</option>
-                      <option value="Invoice">Progress Claim / Invoice</option>
-                    </select>
-                  </div>
-                  <div className="pt-2 flex justify-end space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAttachDocModal(false)}
-                      className="px-3.5 py-1.5 text-slate-600 hover:bg-slate-100 rounded-xl border border-slate-300"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-4 py-1.5 bg-amber-500 hover:bg-amber-400 font-bold text-slate-950 rounded-xl shadow-2xs"
-                    >
-                      Attach
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
-        </div>
+        <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5">
+          <h3 className="font-bold">Client project documents</h3>
+          <p className="text-xs text-slate-500">Only registered documents from this client's projects are listed. Attach files to a project document from its project workspace.</p>
+          {clientDocuments.length === 0 && <p className="text-sm text-slate-500">No documents recorded for this client.</p>}
+          {clientDocuments.map((doc) => (
+            <article key={doc.id} className="border-t pt-3">
+              <h4 className="text-sm font-semibold">{doc.title}</h4>
+              <p className="text-xs text-slate-500">{doc.document_type} · {doc.status} · {doc.uploaded_at}</p>
+              <RecordFiles collection="documents" recordId={doc.id} canUpload={false} />
+            </article>
+          ))}
+        </section>
       )}
 
       {/* TAB CONTENT: Activity History */}
