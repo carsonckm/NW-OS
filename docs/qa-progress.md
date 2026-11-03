@@ -22,7 +22,7 @@ Implement and regression-test the saved QA backlog, merge only after complete CI
 |---|---|---|
 | Integrity follow-up | Completion QC gate, serial aggregate invoice validation, shared task assignment scope, settlement amount/evidence guards | Merged in PR #36; complete CI passed; Render dep-dbl06ijbc2fs738f1au0 live at 490a0d9 |
 | Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Merged in PR #37; complete normal/restricted-role CI and build passed |
-| Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Implemented; full CI pending |
+| Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Merged in PR #38 after complete CI passed; no high/critical audit findings |
 | Drawing project integrity | Reject approved drawing revisions belonging to a different project, for every role | Implemented; CI pending |
 | Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Pending |
 
@@ -45,3 +45,7 @@ Production browser smoke testing reached the sign-in screen; authenticated live 
 ## Production drawing project boundary
 
 Approval/current status alone did not bind both drawings to the production order's project. The final revision check now resolves their owning drawing records and refuses cross-project pairs. Regression coverage includes both mismatched halves, a valid pair, and Owner/Production Manager API rejection with no persisted order or changed item link. No legacy production records are rewritten.
+
+## Revision impact actions
+
+Removed the remaining hardcoded plinth-trim directive, fake variation/clarification success buttons and invented revision impact deltas. A live revision comparison now returns a preview without rewriting work items or clearing alerts; live AI errors surface as errors instead of falling back to sample cabinet dimensions. Tests verify failed live analysis/comparison does not invent data and successful comparison leaves work items/drawings and sync requests unchanged.
