@@ -46,6 +46,20 @@ jobs:
       - name: Dependency security audit (high and critical)
         run: npm run audit:security
 
+      # Preserve low/moderate advisory details without weakening the high/critical gate.
+      - name: Capture full dependency audit report
+        if: always()
+        run: npm audit --json > dependency-audit.json || true
+
+      - name: Upload dependency audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit
+          path: dependency-audit.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Typecheck
         run: npm run typecheck
 
