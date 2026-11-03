@@ -21,7 +21,8 @@
     "db:import-demo": "tsx scripts/db-import-demo.ts",
     "auth:create-user": "tsx scripts/auth-create-user.ts",
     "auth:recover-owner": "tsx scripts/auth-recover-owner.ts",
-    "auth:seed-dev": "tsx scripts/auth-seed-dev.ts"
+    "auth:seed-dev": "tsx scripts/auth-seed-dev.ts",
+    "audit:security": "npm audit --audit-level=high"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -34,7 +35,7 @@
     "pg": "^8.23.1",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "vite": "^6.2.3"
+    "vite": "^6.4.5"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",
@@ -52,8 +53,8 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
+    "vite": "^6.4.5",
     "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   }
 }
