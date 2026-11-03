@@ -78,6 +78,19 @@ describe('Delivery dispatch Factory QC gate', () => {
     })).resolves.toBeDefined();
   });
 
+  it('rejects dispatch when the latest QC result is Failed', async () => {
+    const { h, queries } = context({ result: 'Failed', data: checks });
+    await expect(deliveryHooks.beforeWrite!(h as any, undefined, delivery('Loading'))).rejects.toThrow(/passed Factory QC/);
+    expect(queries.some((sql) => sql.includes('ORDER BY created_at DESC'))).toBe(true);
+  });
+
+  it('rejects work-item-only dispatch when the latest QC result is Failed', async () => {
+    const { h } = context({ result: 'Failed', data: checks });
+    await expect(deliveryHooks.beforeWrite!(h as any, undefined, {
+      ...delivery('In Transit'), production_order_ids: [], work_item_ids: ['item-1'],
+    })).rejects.toThrow(/passed Factory QC/);
+  });
+
   it('rejects a failed checklist even if inspection result says Passed', async () => {
     const { h } = context({ result: 'Passed', data: { ...checks, grain_match_pass: false } });
     await expect(deliveryHooks.beforeWrite!(h as any, undefined, delivery('Loading'))).rejects.toThrow(/passed Factory QC/);
