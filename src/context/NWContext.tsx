@@ -212,7 +212,8 @@ import {
   INITIAL_MANAGEMENT_ALERTS,
 } from '../data/managementInitialData';
 import { canAccessProject, hasPermission } from '../utils/permissions';
-import { dataApi } from '../services/coreApi';
+import { api, dataApi } from '../services/coreApi';
+import { toUserProfile, type SessionUser } from '../services/authApi';
 import { useCoreDatabaseSync, type CommitResult, type CoreSyncState } from '../services/coreSync';
 
 /** A business operation saved as one unit: the saved record, or why it was not saved. */
@@ -688,7 +689,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
 
   // New modules: Users, Approvals, Purchasing & Financials
   const [availableUsers, setAvailableUsers] = useState<UserProfile[]>(() =>
-    loadOrInitial('availableUsers', DEMO_USERS)
+    authUser ? [authUser] : loadOrInitial('availableUsers', DEMO_USERS)
   );
   const [approvals, setApprovals] = useState<ApprovalItem[]>(() =>
     loadOrInitial('approvals', INITIAL_APPROVALS)
@@ -1013,6 +1014,20 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   useEffect(() => saveStorage('auditLogs', auditLogs), [auditLogs]);
   useEffect(() => saveStorage('qcRecords', qcRecords), [qcRecords]);
   useEffect(() => saveStorage('drawingDemoStep', drawingDemoStep), [drawingDemoStep]);
+
+  // In live mode the directory comes from the existing server permission boundary.
+  useEffect(() => {
+    if (!authUser && coreDataSync.mode !== 'database') return;
+    let cancelled = false;
+    // Never treat a local/demo directory as authenticated staff evidence.
+    setAvailableUsers(authUser ? [authUser] : []);
+    if (hasPermission(currentUser, 'users.view')) {
+      void api.get<SessionUser[]>('/users').then((users) => {
+        if (!cancelled) setAvailableUsers(users.filter((u) => u.is_active).map(toUserProfile));
+      }).catch(() => { /* Keep only the session identity when the directory is unavailable. */ });
+    }
+    return () => { cancelled = true; };
+  }, [authUser?.id, currentUser.id, currentUser.role, coreDataSync.mode]);
 
   // Project-level access isolation: filter projects visible to current user
   const userProjects = projects.filter((p) => canAccessProject(currentUser, p, workPackages));
