@@ -289,6 +289,20 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       expect(res.body.message).toMatch(/superseded/);
     });
 
+    it.each(['Owner / CEO', 'Production Manager'])('rejects another project\'s approved drawings even for %s', async (role) => {
+      const items = (await owner().get('/api/work-items').expect(200)).body as Row[];
+      const other = items.find((item) => item.project_id === 'proj-2')!;
+      expect(other).toBeTruthy();
+      const id = role === 'Owner / CEO' ? 'po-cross-owner' : 'po-cross-manager';
+      const rejected = await as[role].post('/api/production-orders').send(order({
+        id, project_id: other.project_id, work_package_id: other.work_package_id, work_item_id: other.id,
+      }));
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.message).toMatch(/drawing revisions must belong to the production order project/);
+      expect((await db.pool.query('SELECT id FROM production_orders WHERE id = $1', [id])).rows).toEqual([]);
+      expect((await owner().get(`/api/work-items/${other.id}`).expect(200)).body.production_order_id).toBe(other.production_order_id);
+    });
+
     it('rejects an order on a missing or unapproved production drawing', async () => {
       const res = await as['Production Manager'].post('/api/production-orders').send(order({ id: 'po-nonw', approved_nw_production_drawing_id: 'nwd-missing' }));
       expect(res.status).toBe(400);
