@@ -19,7 +19,15 @@ export function readCookie(req: Request, name: string): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0 && part.slice(0, i).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(i + 1).trim());
+      } catch {
+        // Invalid percent encoding is an unauthenticated request, not an unhandled
+        // rejection from this Express 4 async middleware.
+        return undefined;
+      }
+    }
   }
   return undefined;
 }

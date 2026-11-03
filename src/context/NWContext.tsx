@@ -1017,15 +1017,16 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   // Project-level access isolation: filter projects visible to current user
   const userProjects = projects.filter((p) => canAccessProject(currentUser, p, workPackages));
 
-  // Auto-align selected project if current user doesn't have access to the currently selected project
+  // Wait for the authoritative snapshot before rejecting a remembered project.
   useEffect(() => {
+    if (coreDataSync.mode === 'checking') return;
     if (userProjects.length > 0) {
       const hasAccess = userProjects.some((p) => p.id === selectedProjectId);
       if (!hasAccess) {
         setSelectedProjectId(userProjects[0].id);
       }
     }
-  }, [currentUser.id, currentUser.role, projects, userProjects]);
+  }, [currentUser.id, currentUser.role, projects, userProjects, selectedProjectId, coreDataSync.mode]);
 
   const addAuditLog = (
     action: string,

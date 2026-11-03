@@ -17,9 +17,12 @@ type Rec = Record<string, unknown>;
 let syncAnswers: { status: number; body: Rec }[];
 let syncBodies: { upserts: Record<string, Rec[]> }[];
 let ready = false;
+let selectedProject = "";
 
 function ModeProbe() {
-  ready = useNW().coreDataSync.mode === 'database';
+  const nw = useNW();
+  ready = nw.coreDataSync.mode === 'database';
+  selectedProject = nw.selectedProjectId;
   return null;
 }
 
@@ -184,4 +187,16 @@ describe('Production order form', () => {
     expect(screen.getByText(/an approved NW production drawing on the work item/)).toBeTruthy();
     expect((screen.getByRole('button', { name: /Issue Production Order/ }) as HTMLButtonElement).disabled).toBe(true);
   });
+});
+
+
+it('restores the selected project only after the authoritative snapshot loads', async () => {
+  localStorage.setItem('nw_os_selected_project', 'remembered-project');
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/data/snapshot') return new Response(JSON.stringify({ clients: INITIAL_CLIENTS, projects: [{ ...INITIAL_PROJECTS[0], id: 'remembered-project' }], workPackages: [], workItems: [] }), { status: 200 });
+    return originalFetch(url, init);
+  }));
+  await mount(<div />);
+  expect(selectedProject).toBe('remembered-project');
 });

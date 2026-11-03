@@ -22,7 +22,7 @@ Implement and regression-test the saved QA backlog, merge only after complete CI
 |---|---|---|
 | Integrity follow-up | Completion QC gate, serial aggregate invoice validation, shared task assignment scope, settlement amount/evidence guards | Merged in PR #36; complete CI passed; Render dep-dbl06ijbc2fs738f1au0 live at 490a0d9 |
 | Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Implemented; regression/CI validation in progress |
-| Security/dependency review | Current dependency advisories, private API/service-worker handling and remaining trust boundaries | Pending |
+| Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Implemented; full CI pending |
 | Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Pending |
 
 ## Recovery
@@ -32,3 +32,11 @@ No production repairs are authorized in this session. The earlier two-record rep
 ## Remaining integration limits
 
 CNC is a manual job/reference register. Machine telemetry, program byte upload/verification and machine dispatch require a separately specified machine/provider integration; newly created references cannot be approved. Real WhatsApp and AI provider tests require configured providers; production currently reports no AI and no scheduler. Browser acceptance with existing signed-in roles remains separate from CI's disposable-database role tests. No production data repair has been attempted.
+
+## Security audit follow-up
+
+The refreshed dependency audit reduced the findings from 17 (including one high and two critical) to 10 (two low, eight moderate, zero high/critical). Remaining findings are in the Workbox/PWA build toolchain; the audit recommends a plugin downgrade, whose compatibility has not been established. They remain open rather than being suppressed. CI now rejects high/critical audit findings. Vitest was updated to 5.1 and compatible Vite/dependency patches were refreshed; the existing test and build pipeline must pass before merge.
+
+Malformed percent-encoded session cookies now produce unauthenticated requests instead of escaping the Express 4 async middleware. Cookie regressions exercise the actual HTTP middleware. Remembered project selection now waits for the server snapshot before applying access-based fallback; a delayed-snapshot regression protects that behavior.
+
+Production browser smoke testing reached the sign-in screen; authenticated live verification needs the user's secure sign-in. The agent has not requested or read credentials.
