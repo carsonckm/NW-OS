@@ -6,6 +6,9 @@ import type { ModuleHooks } from '../types';
 export const paymentHooks: ModuleHooks = {
   async beforeWrite(h, existing, incoming) {
     if (h.mode === 'import') return incoming;
+    if (!Number.isFinite(Number(incoming.amount)) || Number(incoming.amount) <= 0) {
+      throw new ValidationError('Payment amount must be a finite positive number');
+    }
     if (existing?.status === 'Reconciled') {
       const locked = ['project_id', 'type', 'amount', 'claim_id', 'status', 'reference_no', 'date', 'party_name', 'notes'];
       for (const field of locked) {

@@ -100,6 +100,17 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 4 cost control: PO -> goods received 
     expect(res.body.message).toMatch(/Exceeds PO/);
   });
 
+  it('serializes concurrent invoices against the same received PO balance', async () => {
+    await owner().post('/api/purchase-orders').send({ id: 'po-concurrent-match', project_id: 'proj-2', po_number: 'QA-CONCURRENT', status: 'Issued', items: [{ id: 'line-c', quantity: 10, unit_price: 10 }] }).expect(201);
+    await site().post('/api/goods-received').send({ id: 'grn-concurrent-match', po_id: 'po-concurrent-match', project_id: 'proj-2', items: [{ po_item_id: 'line-c', received_qty: 10 }] }).expect(201);
+    const responses = await Promise.all(['a', 'b'].map((suffix) => accountant().post('/api/invoices').send({
+      id: `inv-concurrent-${suffix}`, invoice_number: `QA-${suffix}`, invoice_type: 'Supplier Invoice',
+      project_id: 'proj-2', po_id: 'po-concurrent-match', status: 'Pending Approval', amount_before_tax: 80, tax_amount: 0, paid_amount: 0,
+    })));
+    expect(responses.map((r) => r.status)).toEqual([201, 201]);
+    expect(responses.map((r) => r.body.match_status).sort()).toEqual(['Exceeds PO', 'Matched']);
+  });
+
   it('keeps browser-sent totals out of the figures', async () => {
     const baseline = (await owner().get('/api/commercial-baselines/proj-2').expect(200)).body;
     await owner().post('/api/data/sync').send({ upserts: { commercialBaselines: [{ ...baseline, actual_cost: 1, committed_cost: 1, forecast_gross_profit: 1e9 }] } }).expect(200);

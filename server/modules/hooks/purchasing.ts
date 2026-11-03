@@ -304,7 +304,8 @@ export const invoiceHooks: ModuleHooks = {
     }
     if (next.invoice_type === 'Supplier Invoice') {
       if (!next.po_id) throw new ValidationError('A supplier invoice must reference its purchase order');
-      const po = (await h.db.query('SELECT project_id, data FROM purchase_orders WHERE id = $1', [next.po_id])).rows[0];
+      // Serialize the aggregate check with other invoices/receipts on this PO.
+      const po = (await h.db.query('SELECT project_id, data FROM purchase_orders WHERE id = $1 FOR UPDATE', [next.po_id])).rows[0];
       if (!po) throw new ValidationError(`Purchase order ${String(next.po_id)} does not exist`);
       if (po.project_id !== next.project_id) throw new ValidationError('The invoice project must be the purchase order project');
       next.po_reference = po.data.po_number;

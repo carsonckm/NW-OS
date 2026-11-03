@@ -340,6 +340,14 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
         expect(done.status).toBe(400);
         expect(done.body.message).toMatch(/Resume/);
         await hold('Production Manager', 'po-hold', 'Assembly').expect(200);
+        const noQc = await hold('Production Manager', 'po-hold', 'Completed');
+        expect(noQc.status).toBe(400);
+        expect(noQc.body.message).toMatch(/Factory QC/);
+        await as['Production Manager'].post('/api/factory-qc').send({
+          id: 'qc-complete-hold', production_order_id: 'po-hold', result: 'Passed',
+          dimensional_tolerance_pass: true, visual_inspection_pass: true,
+          hardware_smoothness_pass: true, edge_banding_integrity_pass: true, grain_match_pass: true,
+        }).expect(201);
         await hold('Production Manager', 'po-hold', 'Completed').expect(200);
         const held = await hold('Production Manager', 'po-hold', 'On Hold');
         expect(held.status).toBe(400);

@@ -1,4 +1,5 @@
-import { ForbiddenError } from '../../auth/access';
+import { AccessContext, ForbiddenError } from '../../auth/access';
+import type { AuthUser } from '../../auth/store';
 import { writeAudit } from '../../audit';
 import { ValidationError } from '../../core/repository';
 import type { ModuleHooks, Row } from '../types';
@@ -73,19 +74,13 @@ export const taskHooks: ModuleHooks = {
 
     // Assignment: an active user who can see the task's project.
     if (values.assigned_user_id && values.assigned_user_id !== existing?.assigned_user_id) {
-      const u = (await h.db.query('SELECT id, name, role, is_active FROM users WHERE id = $1', [values.assigned_user_id])).rows[0];
+      const u = (await h.db.query('SELECT * FROM users WHERE id = $1', [values.assigned_user_id])).rows[0];
       if (!u || !u.is_active) throw new ValidationError('Assign the task to an active user');
       if (values.project_id) {
-        const scoped = (await h.db.query(
-          `SELECT 1 FROM projects p WHERE p.id = $2 AND (
-             $3 IN ('Owner / CEO', 'Admin', 'Purchasing', 'Accountant')
-             OR p.project_manager_id = $1 OR p.site_supervisor_id = $1
-             OR EXISTS (SELECT 1 FROM project_assignments a WHERE a.user_id = $1 AND a.project_id = p.id)
-             OR ($3 = 'Production Manager' AND NOT EXISTS (SELECT 1 FROM project_assignments a WHERE a.user_id = $1))
-             OR ($3 = 'Contractor' AND EXISTS (SELECT 1 FROM users c JOIN work_packages w ON w.contractor_id = c.contractor_id WHERE c.id = $1 AND w.project_id = p.id)))`,
-          [u.id, values.project_id, u.role]
-        )).rowCount;
-        if (!scoped) throw new ValidationError(`${u.name} does not work on this project`);
+        const assignee = await AccessContext.load(h.db, u as AuthUser);
+        if (assignee.suspended || !assignee.canSeeProject(values.project_id)) {
+          throw new ValidationError(`${u.name} does not work on this project`);
+        }
       }
       values.assigned_user_name = u.name;
       values.assigned_role = u.role;

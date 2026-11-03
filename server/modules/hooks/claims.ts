@@ -1,3 +1,4 @@
+import { ForbiddenError } from '../../auth/access';
 import { ValidationError } from '../../core/repository';
 import type { ModuleHooks } from '../types';
 
@@ -8,6 +9,20 @@ import type { ModuleHooks } from '../types';
 export const financialClaimHooks: ModuleHooks = {
   async beforeWrite(h, existing, incoming) {
     if (h.mode === 'import') return incoming;
+    if (existing?.status === 'Paid') {
+      for (const field of ['status', 'project_id', 'claim_number', 'cumulative_claimed', 'retention_amount', 'net_claim_amount', 'certified_amount']) {
+        if (JSON.stringify(existing[field] ?? null) !== JSON.stringify(incoming[field] ?? null)) {
+          throw new ForbiddenError(`A paid claim's ${field} cannot change; record a correction separately`);
+        }
+      }
+    }
+    if (incoming.status === 'Paid' && existing?.status === 'Certified') {
+      for (const field of ['project_id', 'claim_number', 'net_claim_amount', 'certified_amount']) {
+        if (JSON.stringify(existing[field] ?? null) !== JSON.stringify(incoming[field] ?? null)) {
+          throw new ValidationError(`Settle the certified claim without changing ${field}`);
+        }
+      }
+    }
     if (incoming.status === 'Paid' && existing?.status !== 'Paid') {
       if (!existing || existing.status !== 'Certified') throw new ValidationError('Claim must be Certified');
       const due = Number(existing.certified_amount ?? existing.net_claim_amount);
