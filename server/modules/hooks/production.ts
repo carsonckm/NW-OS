@@ -53,6 +53,11 @@ export async function checkOrderRevisions(db: PoolClient, order: Row): Promise<R
   if (nw.approval_status !== 'Approved' && !nw.approved_for_production) {
     return { ...result, reason: `NW production drawing ${nw.revision} is not approved for production` };
   }
+  const drawingIds = [...new Set([client.drawing_id, nw.drawing_id])];
+  const owners = await db.query('SELECT id, project_id FROM drawings WHERE id = ANY($1)', [drawingIds]);
+  if (owners.rows.length !== drawingIds.length || owners.rows.some((d) => d.project_id !== order.project_id)) {
+    return { ...result, reason: 'client and NW production drawing revisions must belong to the production order project' };
+  }
   if (nw.linked_client_revision_id && nw.linked_client_revision_id !== client.id) {
     return { ...result, reason: `NW production drawing ${nw.revision} was made from a different client revision` };
   }

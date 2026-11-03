@@ -1,6 +1,6 @@
 # NW OS QA remediation progress
 
-Updated 3 November 2026. Baseline: bfe3806 (PR #35).
+Updated 4 November 2026. Baseline: bfe3806 (PR #35).
 
 ## Scope
 
@@ -21,8 +21,9 @@ Implement and regression-test the saved QA backlog, merge only after complete CI
 | Batch | Scope | State |
 |---|---|---|
 | Integrity follow-up | Completion QC gate, serial aggregate invoice validation, shared task assignment scope, settlement amount/evidence guards | Merged in PR #36; complete CI passed; Render dep-dbl06ijbc2fs738f1au0 live at 490a0d9 |
-| Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Implemented; regression/CI validation in progress |
-| Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Implemented; full CI pending |
+| Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Merged in PR #37; complete normal/restricted-role CI and build passed |
+| Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Merged in PR #38 after complete CI passed; no high/critical audit findings |
+| Drawing project integrity | Reject approved drawing revisions belonging to a different project, for every role | Implemented; CI pending |
 | Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Pending |
 
 ## Recovery
@@ -40,3 +41,11 @@ The refreshed dependency audit reduced the findings from 17 (including one high 
 Malformed percent-encoded session cookies now produce unauthenticated requests instead of escaping the Express 4 async middleware. Cookie regressions exercise the actual HTTP middleware. Remembered project selection now waits for the server snapshot before applying access-based fallback; a delayed-snapshot regression protects that behavior.
 
 Production browser smoke testing reached the sign-in screen; authenticated live verification needs the user's secure sign-in. The agent has not requested or read credentials.
+
+## Production drawing project boundary
+
+Approval/current status alone did not bind both drawings to the production order's project. The final revision check now resolves their owning drawing records and refuses cross-project pairs. Regression coverage includes both mismatched halves, a valid pair, and Owner/Production Manager API rejection with no persisted order or changed item link. No legacy production records are rewritten.
+
+## Revision impact actions
+
+Removed the remaining hardcoded plinth-trim directive, fake variation/clarification success buttons and invented revision impact deltas. A live revision comparison now returns a preview without rewriting work items or clearing alerts; live AI errors surface as errors instead of falling back to sample cabinet dimensions. Tests verify failed live analysis/comparison does not invent data and successful comparison leaves work items/drawings and sync requests unchanged.

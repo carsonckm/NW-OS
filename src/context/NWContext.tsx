@@ -1995,6 +1995,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       addAuditLog('Ran AI Drawing Analysis', 'DrawingRevision', revision?.revision || revisionId, '', 'AI DRAFT Generated');
       return analysis;
     } catch (err) {
+      if (coreDataSync.mode === 'database') throw err;
       console.warn('AI analysis API error, falling back to structured deterministic extraction:', err);
       const isRev4 = revision?.revision?.includes('4') || revision?.title?.includes('2300');
       const fallbackAnalysis: AIDrawingAnalysis = {
@@ -2208,6 +2209,8 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       }
 
       const comparison: RevisionComparison = await response.json();
+      // A live comparison is a read-only preview, not an instruction to rewrite work.
+      if (coreDataSync.mode === 'database') return comparison;
 
       // Save comparison to the newer revision
       setDrawings((prev) =>
@@ -2278,6 +2281,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
 
       return comparison;
     } catch (err) {
+      if (coreDataSync.mode === 'database') throw err;
       console.warn('Compare API error, applying deterministic domain diff:', err);
       // Fallback deterministic comparison
       const isDimensionChange = true;

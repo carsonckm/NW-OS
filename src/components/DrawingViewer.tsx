@@ -117,7 +117,7 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, initialRe
   );
   const [isComparing, setIsComparing] = useState(false);
   const [activeComparison, setActiveComparison] = useState<RevisionComparison | null>(null);
-  const [appliedDirective, setAppliedDirective] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
 
   const currentRev =
     drawing.revisions.find((r) => r.id === selectedRevisionId) ||
@@ -212,26 +212,15 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, initialRe
 
   const handleRunComparison = async () => {
     setIsComparing(true);
+    setComparisonError(null);
     try {
       const comp = await compareDrawingRevisions(drawing.id, compareFromRevId, compareToRevId);
       setActiveComparison(comp);
     } catch (err) {
-      console.error('Comparison error:', err);
+      setComparisonError(err instanceof Error ? err.message : 'Comparison unavailable');
     } finally {
       setIsComparing(false);
     }
-  };
-
-  const handleApplyPlinthDirective = () => {
-    // Locate Work Item CAR-003 and apply practical workshop directive
-    const carItem = workItems.find((w) => w.item_code === 'CAR-003');
-    if (carItem) {
-      updateWorkItem(carItem.id, {
-        notes: `${carItem.notes || ''}\n[ENGINEERING DIRECTIVE APPLIED]: Rev 4 site length reduced to 2300mm. Approved workshop method: Trim 100mm off Module B end scribe plinth. Carcase core preserved. Avoids RM 4,200 scrap.`,
-        revision_impact_alert: undefined,
-      });
-    }
-    setAppliedDirective(true);
   };
 
   return (
@@ -904,125 +893,23 @@ export const DrawingViewer: React.FC<DrawingViewerProps> = ({ drawing, initialRe
             </div>
           </div>
 
-          {/* CRITICAL WARNING BANNER: PRODUCTION IMPACT POSSIBLE */}
-          <div className="p-5 rounded-2xl bg-rose-950/50 border-2 border-rose-500/70 space-y-4">
-            <div className="flex items-start space-x-3">
-              <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 mt-0.5">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2">
-                  <span className="px-2.5 py-0.5 rounded bg-rose-500 text-white text-[11px] font-black uppercase tracking-wider">
-                    ⚠️ PRODUCTION IMPACT POSSIBLE
-                  </span>
-                  <span className="text-xs font-mono font-bold text-rose-300">
-                    CAR-003 is already at Factory Assembly Stage!
-                  </span>
-                </div>
-                <p className="text-xs text-rose-200 leading-relaxed pt-1">
-                  Item <strong>CAR-003 (Checkout Counter #03)</strong> was fabricated and assembled based on <strong>Rev 3 (2400mm)</strong>. 
-                  Incoming <strong>Rev 4</strong> reduces overall length to <strong>2300mm (-100mm)</strong> due to mall structural column encasement.
-                </p>
-              </div>
+          {comparisonError && <p role="alert" className="text-sm text-rose-300">{comparisonError}</p>}
+          <p className="text-xs text-slate-400">Comparison is advisory. No engineering directive is applied and no linked work item is changed.</p>
+          {activeComparison ? (
+            <div className="space-y-3 rounded-xl border border-slate-700 p-4">
+              <h4 className="font-bold">{activeComparison.from_revision} → {activeComparison.to_revision}</h4>
+              <p className="text-sm">{activeComparison.summary}</p>
+              {(['dimension_changes', 'material_changes', 'finish_changes', 'quantity_changes', 'location_changes', 'detail_changes'] as const).map((key) => (
+                <section key={key}><h5 className="text-xs font-bold">{key.replaceAll('_', ' ')}</h5>
+                  <ul className="list-disc pl-4 text-xs">{(activeComparison[key] || []).map((change, index) => <li key={index}>{change}</li>)}</ul>
+                </section>
+              ))}
             </div>
-
-            {/* Affected Work Item Detail Card */}
-            <div className="bg-slate-900/90 border border-rose-500/40 rounded-xl p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs border-b border-slate-800 pb-2">
-                <div>
-                  <span className="font-mono font-bold text-amber-400">CAR-003</span>
-                  <span className="text-white font-bold ml-2">Checkout Counter #03 (2 × 1200mm Split Modules)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-slate-400">Current Production Status:</span>
-                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold font-mono">
-                    In Progress (Assembly)
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs space-y-2">
-                <div className="text-slate-300">
-                  <strong className="text-amber-400">Workshop Intelligence Action:</strong> Do NOT scrap or recut the plywood carcass. Module A (Cashier station, 1200mm) remains untouched. 
-                  Apply field adjustment to Module B: <strong>Trim 100mm off outer plinth filler</strong> to absorb site variance.
-                </div>
-                <div className="flex items-center justify-between text-[11px] text-emerald-400 font-mono">
-                  <span>Estimated Cost Saved: <strong>RM 4,200</strong></span>
-                  <span>Fabrication Delay Avoided: <strong>5 Days</strong></span>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-                {appliedDirective ? (
-                  <div className="px-3.5 py-1.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center space-x-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>Plinth Trim Directive Applied to CAR-003</span>
-                  </div>
-                ) : (
-                  <button
-                    onClick={handleApplyPlinthDirective}
-                    className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow transition-all flex items-center space-x-1.5 cursor-pointer"
-                  >
-                    <Hammer className="w-4 h-4" />
-                    <span>Apply Plinth Trim Engineering Directive</span>
-                  </button>
-                )}
-
-                <button
-                  onClick={() => alert('Variation Order VO-004 created for Mall Column Encasement adjustment.')}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 cursor-pointer"
-                >
-                  Create Variation Order
-                </button>
-
-                <button
-                  onClick={() => alert('Clarification requested with Resident Architect & Mall Landlord.')}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 cursor-pointer"
-                >
-                  Request Site Clarification
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Revision Diff Breakdown */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-3">
-                Detected Dimensional & Geometric Changes
-              </h4>
-              <ul className="space-y-2 text-xs text-slate-300">
-                <li className="flex items-start space-x-2">
-                  <span className="text-rose-400 font-bold">Δ</span>
-                  <span>
-                    Counter length reduced from <strong>2400mm</strong> to <strong>2300mm</strong> (-100mm).
-                  </span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-rose-400 font-bold">Δ</span>
-                  <span>
-                    Wall clearance plinth offset modified to align with Column C3 encasement.
-                  </span>
-                </li>
-              </ul>
-            </div>
-
-            <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-3">
-                Material & Hardware Deltas
-              </h4>
-              <ul className="space-y-2 text-xs text-slate-300">
-                <li className="flex items-start space-x-2">
-                  <span className="text-emerald-400 font-bold">✓</span>
-                  <span>Core carcass remains 18mm E1 Marine Plywood.</span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-emerald-400 font-bold">✓</span>
-                  <span>Wilsonart Natural Oak HPL finish unchanged.</span>
-                </li>
-              </ul>
-            </div>
+          ) : <p className="text-sm text-slate-400">Choose two revisions and run the comparison to see recorded differences.</p>}
+          <div className="space-y-2">
+            {workItems.filter((w) => w.project_id === drawing.project_id && (w.drawing_id === drawing.id || w.client_drawing_id === drawing.id)).map((w) => (
+              <p key={w.id} className="text-xs">{w.item_code}: {w.description} · {w.production_status}</p>
+            ))}
           </div>
         </div>
       )}

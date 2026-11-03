@@ -18,11 +18,13 @@ let syncAnswers: { status: number; body: Rec }[];
 let syncBodies: { upserts: Record<string, Rec[]> }[];
 let ready = false;
 let selectedProject = "";
+let latestNW: ReturnType<typeof useNW>;
 
 function ModeProbe() {
   const nw = useNW();
   ready = nw.coreDataSync.mode === 'database';
   selectedProject = nw.selectedProjectId;
+  latestNW = nw;
   return null;
 }
 
@@ -199,4 +201,20 @@ it('restores the selected project only after the authoritative snapshot loads', 
   }));
   await mount(<div />);
   expect(selectedProject).toBe('remembered-project');
+});
+
+
+it('never invents engineering data after live AI errors, or changes work items on comparison', async () => {
+  await mount(<div />);
+  const before = JSON.stringify({ items: latestNW.workItems, drawings: latestNW.drawings });
+  await expect(latestNW.analyzeDrawingWithAI('d', 'r')).rejects.toThrow(/404/);
+  await expect(latestNW.compareDrawingRevisions('d', 'a', 'b')).rejects.toThrow(/404/);
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/ai/compare-drawings') return new Response(JSON.stringify({ from_revision: 'A', to_revision: 'B', affected_work_items: [{ item_code: INITIAL_WORK_ITEMS[0].item_code, action_needed: 'Review' }], impact_check: { has_production_impact: true, requires_site_action: true } }), { status: 200 });
+    return originalFetch(url, init);
+  }));
+  await act(async () => { await latestNW.compareDrawingRevisions('d', 'a', 'b'); });
+  expect(JSON.stringify({ items: latestNW.workItems, drawings: latestNW.drawings })).toBe(before);
+  expect(syncBodies).toEqual([]);
 });

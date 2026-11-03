@@ -40,7 +40,7 @@ export const ContractorDashboard: React.FC = () => {
   );
 
   const companyName = contractors.find((c) => c.id === currentUser.contractor_id)?.company_name || currentUser.name;
-  const activeFocusItem = myItems.find((w) => w.item_code === 'CAR-003') || myItems[0];
+  const activeFocusItem = myItems[0];
 
   // Multilingual translations for Contractor
   const t = {

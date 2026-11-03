@@ -92,6 +92,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
 }) => {
   const {
     currentUser,
+    availableUsers,
     projects,
     userProjects,
     clients,
@@ -423,7 +424,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           productionStage: item.production_status,
           statusText: item.revision_impact_alert.level || 'PRODUCTION IMPACT POSSIBLE',
           statusLevel: 'POSSIBLE',
-          suggestedAction: 'Execute 100mm plinth scribing on Module B per NW Standard #001 instead of scrapping cut panels.',
+          suggestedAction: item.revision_impact_alert.suggested_action || 'Review the exact revisions and obtain an authorized production method before changing the item.',
         });
       }
     });
@@ -717,14 +718,14 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
               <span className="flex items-center space-x-1.5">
                 <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <span>
-                  PM: <strong className="text-slate-700">Marcus Lee</strong>
+                  PM: <strong className="text-slate-700">{availableUsers.find((u) => u.id === project.project_manager_id)?.name || 'Not recorded'}</strong>
                 </span>
               </span>
               <span className="text-slate-300">•</span>
               <span className="flex items-center space-x-1.5">
                 <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <span>
-                  Supervisor: <strong className="text-slate-700">Suresh Kumar</strong>
+                  Supervisor: <strong className="text-slate-700">{availableUsers.find((u) => u.id === project.site_supervisor_id)?.name || 'Not recorded'}</strong>
                 </span>
               </span>
             </div>
@@ -1660,7 +1661,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                                   escalateIssue(
                                     issue.id,
                                     'Owner',
-                                    'Escalated by PM Marcus Lee: Requires commercial variation authorization or drawing override from Dato Nicholas.'
+                                    `Escalated by ${currentUser.name}: ${issue.action_required || issue.title}`
                                   )
                                 }
                                 className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition-colors cursor-pointer"

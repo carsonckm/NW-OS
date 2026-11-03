@@ -37,6 +37,10 @@ describe('truthful record views', () => {
     const view = render(<DrawingViewer drawing={drawing} initialRevisionId="b" />);
     expect(screen.getByTitle('Drawing QA-D B').getAttribute('src')).toBe('/api/files/b');
     expect(screen.queryByText(/APPROVED NW PRODUCTION METHOD/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Revision Impact & Work Item Check' }));
+    expect(screen.queryByRole('button', { name: /Apply Plinth/ })).toBeNull();
+    expect(screen.queryByText(/RM 4,200/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Drawing & Markups/ }));
     view.rerender(<DrawingViewer drawing={drawing} initialRevisionId="a" />);
     expect(screen.getByTitle('Drawing QA-D A').getAttribute('src')).toBe('/api/files/a');
   });
