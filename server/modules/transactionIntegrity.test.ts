@@ -173,15 +173,15 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('QA batch 1: pro
   it('legacy deliveries: unchanged invalid references allow unrelated edits and receiving; new or changed references are checked', async () => {
     // An existing delivery that already carries another project's item (as legacy data might);
     // nothing repairs it.
-    await sync(owner(), { deliveryRecords: [delivery('del-ti-legacy', ['item-ti-1'])] }).expect(200);
-    await db.owner.query(`UPDATE deliveries SET data = jsonb_set(data, '{work_item_ids}', '["item-ti-1","item-x"]') WHERE id = 'del-ti-legacy'`);
+    await sync(owner(), { deliveryRecords: [delivery('del-ti-legacy', ['item-ti-3'])] }).expect(200);
+    await db.owner.query(`UPDATE deliveries SET data = jsonb_set(data, '{work_item_ids}', '["item-ti-3","item-x"]') WHERE id = 'del-ti-legacy'`);
     const legacy = async () => (await owner().get('/api/deliveries/del-ti-legacy').expect(200)).body as Row;
 
     await sync(owner(), { deliveryRecords: [{ ...(await legacy()), notes: 'unrelated edit' }] }).expect(200);
     await sync(as['Project Manager'], { deliveryRecords: [{ ...(await legacy()), status: 'In Transit' }] }).expect(200);
     const receipt = { id: 'rcpt-ti-legacy', delivery_id: 'del-ti-legacy', project_id: 'proj-1', received_at: '2026-11-20T10:00:00Z', condition_status: 'All In Order', packages_expected: 1, packages_received: 1, damaged_quantity: 0, missing_quantity: 0, photos: [], receiver_signature: 'sig' };
     await as['Site Supervisor'].patch('/api/deliveries/del-ti-legacy').send({ status: 'Received / Confirmed', site_receipt: receipt }).expect(200);
-    expect((await legacy()).work_item_ids).toEqual(['item-ti-1', 'item-x']); // left as it was
+    expect((await legacy()).work_item_ids).toEqual(['item-ti-3', 'item-x']); // left as it was
     expect((await db.owner.query(`SELECT count(*)::int AS n FROM delivery_receipts WHERE id = 'rcpt-ti-legacy'`)).rows[0].n).toBe(1);
 
     // Newly added references are checked: another project's item, a missing or other-project order, a foreign package.
@@ -199,10 +199,10 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_DATABASE_ADMIN_URL)('QA batch 1: pro
     const crossOrderItem = await sync(owner(), { deliveryRecords: [{ ...cur, work_item_ids: [...cur.work_item_ids, 'item-x'] }] });
     expect(crossOrderItem.status).toBe(200); // already on it: not "added"
     // Removing the legacy item is a plain edit.
-    await sync(owner(), { deliveryRecords: [{ ...cur, work_item_ids: ['item-ti-1'] }] }).expect(200);
-    expect((await legacy()).work_item_ids).toEqual(['item-ti-1']);
+    await sync(owner(), { deliveryRecords: [{ ...cur, work_item_ids: ['item-ti-3'] }] }).expect(200);
+    expect((await legacy()).work_item_ids).toEqual(['item-ti-3']);
     // And once removed, putting it back is a new reference: refused.
-    expect((await sync(owner(), { deliveryRecords: [{ ...(await legacy()), work_item_ids: ['item-ti-1', 'item-x'] }] })).status).toBe(400);
+    expect((await sync(owner(), { deliveryRecords: [{ ...(await legacy()), work_item_ids: ['item-ti-3', 'item-x'] }] })).status).toBe(400);
   });
 
   it('a sync precondition (expect) writes only if the record is still as last read; otherwise 409 and nothing is written', async () => {
