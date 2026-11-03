@@ -10,6 +10,7 @@ function context(qc: { result: string; data: Record<string, boolean> } | null) {
     ctx: { user: { role: 'Project Manager' }, can: () => true },
     db: { query: async (sql: string) => {
       queries.push(sql);
+      if (sql.includes('FROM work_items')) return { rows: [{ id: 'item-1', project_id: 'proj-1' }] };
       if (sql.includes('FROM production_orders')) return { rows: [{ id: 'po-1', project_id: 'proj-1' }] };
       if (sql.includes('FROM factory_qc_inspections')) return { rows: qc ? [qc] : [] };
       return { rows: [] };
