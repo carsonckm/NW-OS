@@ -67,3 +67,13 @@ PR #46 upgrades Express 4 to 5 with matching types. Its CI failed on scalar rout
 Next queue: evaluate PR #48 (icon library major upgrade) and #49 (Node type version alignment), then controlled local/mobile/offline acceptance and remaining build-chain advisories. Real staff/account/delegation choices, provider credentials, physical CNC and actual device/load acceptance retain their recorded gates.
 
 The first database CI run found a further Express 4 inline-regexp path for exception lifecycle actions; no merge occurred. It is replaced with five explicit allowlisted routes. A new local regression mounts every authenticated router without a database connection, so router registration failures are caught even when PostgreSQL tests are unavailable. The twelve routing tests and type checking pass; full CI is rerunning.
+
+## Dependency queue checkpoint after PR #46
+
+PR #46 merged at c7e7ee6e25291f1413907e53d8b2da1eb8176928 after complete CI: 955/955 tests across 64 files in each normal/restricted PostgreSQL run, plus audit/typecheck/role bootstrap/build. Render dep-dbliogvavr4c73cu55u0 is being verified. The failed first CI attempt was fixed before merge; no failure was bypassed.
+
+PR #48 is refreshed against that merged Express 5 state, resolving only the icon-library package/lock conflict and retaining both upgrades. Its complete CI must pass on the combined state before merge. Dependabot now keeps @types/node major updates aligned with the Node 22 Docker/CI runtime. PR #49 was closed as deferred: Node 26 declarations would expose APIs the deployed Node 22 runtime may not implement; no runtime/production setting was changed.
+
+A new compatible-fix audit dry-run still reports two low/eight moderate Workbox/PWA build-chain advisories, zero high/critical. The proposed forced plugin downgrade remains outside a validated compatible fix; findings are retained in the full CI audit artifact.
+
+Next concrete QA fix: bounded authentication/API waits and truthful unconfirmed-save feedback. Local mocked-network tests cover stalled headers/body, normal cleanup, 400/401 behavior, AI processing budget, and a timed-out committed write confirmed on retry without a duplicate. No production records used.
