@@ -89,3 +89,17 @@ Local validation: 46 focused network/sync/banner regressions passed; complete su
 Audit experiment: installing vite-plugin-pwa 1.1.0 in an isolated checkout retained workbox-build 7.4.1 and left nine low/moderate findings. No production downgrade was applied; the current ten findings remain documented and the high/critical CI gate remains enabled.
 
 Recovery checkpoint: PR #46 and its main CI/deployment are verified; PR #48 is merged after complete CI; PR #49 is closed/deferred for Node runtime alignment. The next PR contains the request-deadline/save-feedback changes only, with no schema or production data changes. Merge only after its complete normal/restricted PostgreSQL CI passes.
+
+## PR #51 verified and coordinated toolchain batch
+
+PR #51 merged at 4207b0c349b4ff0724239f3807007dbdca6cbcaa after complete CI: 969 tests across 66 files passed in each database-role run (job 126594982391). Its tested tree already included the PR #50 artifact uploader update; the merge candidate tree matched the tested tree. PR #50 separately passed its full 955-test dual-role pipeline before merge.
+
+Render dep-dblj1n49v7es73d7bpb0 is live at 4207b0c. Root and readiness return 200; database ok, scheduler off and AI unconfigured; unknown API returns JSON 404. Served asset index-BUnlN5hn.js contains both deadline and unconfirmed-response messages, and the deployed worker references that asset and keeps API navigations excluded.
+
+Dependabot then queued PRs #52–56: TypeScript 7.0.2, Vite 8.3.5, dotenv 18.0.9, jsdom 30.1.3 and React plugin 6.1.2. PR #52's new strict defaults failed type checking; #56 required Vite 8. The reviewed batch combines these compatible versions, explicitly preserves the repository's existing non-strict compiler policy, adds Vite asset declarations for checked CSS imports and updates config directory access for Vite 8. Node runtime/types remain 22. A fresh npm-generated lock resolves the Babel peer graph without force/legacy-peer-deps flags.
+
+Batch local validation: normal dependency installation, 199 tests passed / 770 database tests skipped, typecheck and production build passed; 25 focused routing/network/banner tests passed after the config updates. Current audit remains two low/eight moderate and zero high/critical. Full normal/restricted CI remains required before merge. PR #52 will contain the consolidated batch; #53–56 are superseded only after the combined batch passes and merges. No production business data, schema, accounts or sensitive settings changed.
+
+## Final dependency inventory for the coordinated batch
+
+The first coordinated candidate passed its full CI. A final dependency inventory also identified React plugin 6.2.1, vite-plugin-pwa 2.0.0 and @types/supertest 7.2.1. These are included in the final candidate, preserving Node types 22.20.5 for the Node 22 runtime. Fresh normal npm installation resolves the optional Babel peers; no peer/dependency protection is bypassed. Typecheck and production build pass. The generated PWA worker still references the built app and excludes private API navigations. Workbox remains 7.4.1, and the audit remains two low/eight moderate, zero high/critical. The complete database-role CI must rerun for this expanded dependency tree before merge. No production business data/settings changed.
