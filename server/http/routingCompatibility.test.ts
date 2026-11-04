@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mountSecureApi } from '../app';
 import { mountProductionWeb } from './static';
+import type { Pool } from '../db/pool';
 
 describe('production routing with Express 5', () => {
   let dist: string;
@@ -20,6 +21,13 @@ describe('production routing with Express 5', () => {
     mountProductionWeb(app, dist);
   });
   afterAll(async () => { if (dist) await rm(dist, { recursive: true, force: true }); });
+
+  it('registers every authenticated router without requiring a database connection', () => {
+    const configured = express();
+    // Mounting must not query the pool or start the scheduler in tests.
+    const pool = { query: () => { throw new Error('Unexpected database access during route registration'); } } as unknown as Pool;
+    expect(() => mountSecureApi(configured, { pool, dataSource: 'database' })).not.toThrow();
+  });
 
   it.each(['/', '/projects/qa/details'])('serves the app at %s without an invalid wildcard route', async (url) => {
     const response = await request(app).get(url).expect(200).expect('Content-Type', /text\/html/);

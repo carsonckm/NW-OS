@@ -246,10 +246,12 @@ export function createApprovalRoutingRouter({ pool, store }: { pool: Pool; store
     wrap(async (req, res) => res.json(await snoozeException(pool, req.access!, actorOf(req), req.body)))
   );
   // Lifecycle actions (Batch 9): acknowledge, wait, resolve, dismiss, reopen. Body { id, reason?, expected_state? }.
-  router.post(
-    '/owner/exceptions/:action(acknowledge|wait|resolve|dismiss|reopen)',
-    wrap(async (req, res) => res.json(await transitionException(pool, req.access!, actorOf(req), String(req.params.action), req.body)))
-  );
+  for (const action of ['acknowledge', 'wait', 'resolve', 'dismiss', 'reopen'] as const) {
+    router.post(
+      `/owner/exceptions/${action}`,
+      wrap(async (req, res) => res.json(await transitionException(pool, req.access!, actorOf(req), action, req.body)))
+    );
+  }
   router.delete(
     '/owner/exceptions/snooze/:id',
     wrap(async (req, res) => res.json(await unsnoozeException(pool, req.access!, actorOf(req), String(req.params.id))))
