@@ -41,6 +41,7 @@ import { hasPermission } from './utils/permissions';
 import { LoginScreen } from './components/LoginScreen';
 import { SyncErrorBanner } from './components/ui/SyncErrorBanner';
 import { AppUpdateNotice } from './components/AppUpdateNotice';
+import { WorkspaceConnectionGate } from './components/WorkspaceConnectionGate';
 import { NotificationCenter } from './views/notifications/NotificationCenter';
 import { NAVIGATE_EVENT, type NavigateDetail } from './services/navigation';
 import { AuthoritySettingsView } from './views/AuthoritySettingsView';
@@ -55,6 +56,7 @@ import { Sparkles, ShieldCheck, Wifi } from 'lucide-react';
 
 const NWAppContent: React.FC = () => {
   const { currentUser, coreDataSync, setSelectedProjectId } = useNW();
+  const workspaceReady = coreDataSync.mode !== 'database' || Boolean(coreDataSync.lastSyncedAt);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
   // Screens can open another tab (and a project) without prop drilling.
@@ -103,12 +105,13 @@ const NWAppContent: React.FC = () => {
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onOpenAssistant={() => setShowAIAssistant(true)}
+        onOpenAssistant={() => { if (workspaceReady) setShowAIAssistant(true); }}
       />
       <SyncErrorBanner />
 
       {/* Main View Router */}
       <main className="flex-1 pb-16">
+        <WorkspaceConnectionGate>
         {activeTab === 'dashboard' && renderDashboard()}
         {activeTab === 'production' && <ProductionView />}
         {activeTab === 'delivery' && <DeliveryView />}
@@ -142,10 +145,11 @@ const NWAppContent: React.FC = () => {
         {activeTab === 'notifications' && <NotificationCenter />}
         {activeTab === 'calendar' && coreDataSync.mode === 'database' && <CalendarView />}
         {activeTab === 'audit-logs' && <AuditArchitectureView />}
+        </WorkspaceConnectionGate>
       </main>
 
       {/* Floating AI Intelligence Button (live: only for users with the assistant permission) */}
-      <div className={`fixed bottom-5 right-5 z-40 ${coreDataSync.mode === 'database' && !hasPermission(currentUser, 'ai.assistant') ? 'hidden' : ''}`}>
+      {workspaceReady && <div className={`fixed bottom-5 right-5 z-40 ${coreDataSync.mode === 'database' && !hasPermission(currentUser, 'ai.assistant') ? 'hidden' : ''}`}>
         <button
           onClick={() => setShowAIAssistant(true)}
           className="group flex items-center space-x-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 px-4 py-3 rounded-full shadow-xl transition-all duration-200 hover:scale-105 active:scale-95 focus:outline-none"
@@ -153,11 +157,11 @@ const NWAppContent: React.FC = () => {
           <Sparkles className="w-5 h-5 animate-pulse text-slate-950" />
           <span className="text-xs font-black tracking-wide pr-1">Ask NW OS</span>
         </button>
-      </div>
+      </div>}
 
       {/* AI Assistant Drawer */}
       <AIAssistantDrawer
-        isOpen={showAIAssistant}
+        isOpen={workspaceReady && showAIAssistant}
         onClose={() => setShowAIAssistant(false)}
       />
 
@@ -172,9 +176,9 @@ const NWAppContent: React.FC = () => {
           </div>
 
           <div className="flex items-center space-x-4">
-            <span className="flex items-center space-x-1 text-emerald-600 font-medium">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-              <span>Offline-Ready (PWA)</span>
+            <span className="flex items-center space-x-1 text-slate-500 font-medium">
+              <span className="w-2 h-2 rounded-full bg-slate-400" />
+              <span>{coreDataSync.mode === 'local' ? 'Local demo' : 'Live data needs a connection'}</span>
             </span>
             <span>•</span>
             <span className="text-slate-600 font-medium">Manage By Exception</span>
@@ -238,7 +242,7 @@ export default function App() {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
 
-  if (auth.phase === 'checking') return <div className="min-h-screen bg-slate-50" />;
+  if (auth.phase === 'checking') return <div role="status" className="min-h-screen bg-slate-50 p-8 text-center text-slate-600">Connecting to NW OS…</div>;
   if (auth.phase === 'signed-out') return <LoginScreen onSignedIn={signedIn} notice={auth.notice} />;
 
   if (auth.phase === 'signed-in') {

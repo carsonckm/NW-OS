@@ -213,7 +213,8 @@ import {
 } from '../data/managementInitialData';
 import { canAccessProject, hasPermission } from '../utils/permissions';
 import { api, dataApi } from '../services/coreApi';
-import { toUserProfile, type SessionUser } from '../services/authApi';
+import { canUseDatabaseCache, toUserProfile, type SessionUser } from '../services/authApi';
+import { SYNCED_COLLECTIONS } from '../services/syncedCollections';
 import { useCoreDatabaseSync, type CommitResult, type CoreSyncState } from '../services/coreSync';
 
 /** A business operation saved as one unit: the saved record, or why it was not saved. */
@@ -232,7 +233,7 @@ export interface QuickDeliveryDetails {
   package_count: number;
   special_instructions?: string;
 }
-import { clearCoreCache } from '../services/authApi';
+import { clearCoreCache, preserveLocalCoreData } from '../services/authApi';
 
 interface NWContextType {
   currentUser: UserProfile;
@@ -600,8 +601,9 @@ interface NWContextType {
 const NWContext = createContext<NWContextType | undefined>(undefined);
 
 const STORAGE_PREFIX = 'nw_os_data_v1_';
+const DATABASE_RECORD_STORAGE_KEYS = new Set([...SYNCED_COLLECTIONS.map((c) => c.storageKey), 'auditLogs']);
 
-function loadOrInitial<T>(key: string, initial: T): T {
+function readStoredOrInitial<T>(key: string, initial: T): T {
   try {
     const saved = localStorage.getItem(STORAGE_PREFIX + key);
     if (saved) {
@@ -613,7 +615,7 @@ function loadOrInitial<T>(key: string, initial: T): T {
   return initial;
 }
 
-function saveStorage<T>(key: string, data: T) {
+function persistStorage<T>(key: string, data: T) {
   try {
     localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(data));
   } catch (err) {
@@ -635,6 +637,18 @@ interface NWProviderProps {
 }
 
 export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canImportCoreData = true, onSignOut }) => {
+  const loadOrInitial = <T,>(key: string, initial: T): T => {
+    if (!authUser) return readStoredOrInitial(key, initial);
+    if (!Array.isArray(initial)) return initial;
+    if (!DATABASE_RECORD_STORAGE_KEYS.has(key) || !canUseDatabaseCache(authUser.id)) return [] as T;
+    const cached = readStoredOrInitial<unknown>(key, []);
+    return Array.isArray(cached) && cached.every((row) => row && typeof row === 'object' && !Array.isArray(row)) ? cached as T : [] as T;
+  };
+  const saveStorage = <T,>(key: string, data: T) => {
+    // Keep unverified browser data intact until hydration preserves/replaces it.
+    const databaseKey = DATABASE_RECORD_STORAGE_KEYS.has(key) || key === 'currentUser' || key === 'availableUsers';
+    if (!authUser || (databaseKey && canUseDatabaseCache(authUser.id))) persistStorage(key, data);
+  };
   const [storedUser, setStoredUser] = useState<UserProfile>(() =>
     authUser ?? loadOrInitial('currentUser', DEMO_USERS[0])
   );
@@ -965,6 +979,7 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     []
   );
   const coreDataSync = useCoreDatabaseSync(syncedData, syncedSetters, {
+    requireDatabase: Boolean(authUser),
     canImport: canImportCoreData,
     canRead: (collection) =>
       collection === 'commercialBaselines' ? hasPermission(currentUser, 'commercial.view') : collection === 'knowledge' ? hasPermission(currentUser, 'knowledge.view') : true,
@@ -1002,7 +1017,10 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
 
   const signOut = () => {
     // In database mode the cached core data belongs to this user's view; drop it.
-    if (coreDataSync.mode === 'database') clearCoreCache();
+    if (coreDataSync.mode === 'database') {
+      preserveLocalCoreData();
+      clearCoreCache();
+    }
     onSignOut?.();
   };
   useEffect(() => saveStorage('drawings', drawings), [drawings]);
@@ -1034,14 +1052,14 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
 
   // Wait for the authoritative snapshot before rejecting a remembered project.
   useEffect(() => {
-    if (coreDataSync.mode === 'checking') return;
+    if (coreDataSync.mode === 'checking' || (authUser && !coreDataSync.lastSyncedAt)) return;
     if (userProjects.length > 0) {
       const hasAccess = userProjects.some((p) => p.id === selectedProjectId);
       if (!hasAccess) {
         setSelectedProjectId(userProjects[0].id);
       }
     }
-  }, [currentUser.id, currentUser.role, projects, userProjects, selectedProjectId, coreDataSync.mode]);
+  }, [currentUser.id, currentUser.role, projects, userProjects, selectedProjectId, coreDataSync.mode, coreDataSync.lastSyncedAt, authUser?.id]);
 
   const addAuditLog = (
     action: string,

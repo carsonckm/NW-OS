@@ -212,16 +212,18 @@ function patchSnapshot(snapshot: SyncData, c: string, id: string, record?: Rec):
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export interface CoreSyncOptions {
+  /** A signed-in workspace must never fall back to local-only saving or demo mode. */
+  requireDatabase?: boolean;
   /** Whether this user may import local data into an empty database (settings.manage). */
   canImport?: boolean;
   /** Whether this user may read a server-derived collection (e.g. baselines need commercial.view). */
   canRead?: (collection: string) => boolean;
 }
 
-export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImport = true, canRead }: CoreSyncOptions = {}) {
+export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImport = true, canRead, requireDatabase = false }: CoreSyncOptions = {}) {
   const canReadRef = useRef(canRead);
   canReadRef.current = canRead;
-  const [state, setState] = useState<CoreSyncState>({ mode: 'checking', status: 'idle' });
+  const [state, setState] = useState<CoreSyncState>({ mode: requireDatabase ? 'database' : 'checking', status: requireDatabase ? 'syncing' : 'idle' });
   const latest = useRef(data);
   latest.current = data;
   const saved = useRef<SyncData | null>(null);
@@ -255,7 +257,7 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
       const check = await dataApi.importData(local, { dryRun: true });
       if (!check.ok) {
         setState({
-          mode: 'local',
+          mode: requireDatabase ? 'database' : 'local',
           status: 'error',
           message: `Database is empty and local data could not be imported: ${check.problems.slice(0, 3).join('; ')}`,
         });
@@ -271,7 +273,7 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
     apply(snap);
     markCoreCacheFromDatabase();
     setState({ mode: 'database', status: 'synced', lastSyncedAt: new Date().toISOString() });
-  }, [apply, canImport]);
+  }, [apply, canImport, requireDatabase]);
 
   /**
    * Writes the batch. If the server refuses it, the batch is split only into groups of changes
@@ -367,18 +369,19 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
         const status = await coreApi.status();
         if (cancelled) return;
         if (status.dataSource !== 'database') {
+          if (requireDatabase) throw new Error('The database workspace is not ready. Reconnect before saving.');
           setState({ mode: 'local', status: 'idle' });
           return;
         }
         await hydrate();
       } catch (err) {
-        if (!cancelled) setState({ mode: 'local', status: 'error', message: `Database unavailable: ${errorText(err)}` });
+        if (!cancelled) setState({ mode: requireDatabase ? 'database' : 'local', status: 'error', message: `Database unavailable: ${errorText(err)}` });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [hydrate]);
+  }, [hydrate, requireDatabase]);
 
   // Any change to a synced collection, from any action, is written after a short debounce.
   const watched = SYNCED_COLLECTIONS.map((c) => data[c.key]);
@@ -429,8 +432,12 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
   );
 
   const reloadFromDatabase = useCallback(async () => {
+    setState((s) => ({ ...s, status: 'syncing', message: undefined }));
     try {
-      apply(await dataApi.snapshot());
+      const snapshot = await dataApi.snapshot();
+      preserveLocalCoreData();
+      apply(snapshot);
+      markCoreCacheFromDatabase();
       setState({ mode: 'database', status: 'synced', lastSyncedAt: new Date().toISOString() });
     } catch (err) {
       setState((s) => ({ ...s, status: 'error', message: `Reload failed: ${errorText(err)}` }));
@@ -457,6 +464,9 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
   const commit = useCallback(
     async (op: { upserts: Record<string, Rec[]>; refresh?: Record<string, string[]>; localOnly?: Record<string, Rec[]> }): Promise<CommitResult> => {
       const entries = Object.entries(op.upserts).filter(([, rows]) => rows.length);
+      if (requireDatabase && (!saved.current || state.mode !== 'database')) {
+        return { ok: false, uncertain: false, message: 'Connect to the database workspace before saving. No save was attempted.' };
+      }
       if (state.mode !== 'database') {
         for (const [c, rows] of [...entries, ...Object.entries(op.localOnly ?? {})]) applyRows(c, rows);
         return { ok: true };
@@ -545,7 +555,7 @@ export function useCoreDatabaseSync(data: SyncData, setters: Setters, { canImpor
       setState((s) => ({ ...s, status: 'synced', message: undefined, lastSyncedAt: new Date().toISOString() }));
       return { ok: true };
     },
-    [state.mode, applyRows, flush]
+    [state.mode, requireDatabase, applyRows, flush]
   );
 
   // After a reload, settle what earlier attempts left unconfirmed: a record the server holds was

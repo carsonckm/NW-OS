@@ -111,3 +111,15 @@ PR #52's final candidate passed 969 tests twice and all gates before merge at 75
 The post-merge main run (job 126609911309) then timed out in approvalMonitor.test.ts's beforeAll at the default 10 seconds while constructing its database world. It ran 943 tests successfully and skipped that suite's 26 tests after setup failed. This is not a green pipeline and was not dismissed or bypassed.
 
 The fixture-hook budget is now 60 seconds to cover migrations, user seeding, password work and sign-ins on shared runners. Test-case execution limits, assertions and database privilege checks are unchanged; no tests are skipped or retried automatically. Full normal/restricted CI is required before merging this test-harness correction. No application runtime or production records/settings change.
+
+## Next unresolved issue: authenticated offline startup
+
+Resumed from verified main e1c2a76d1f20bf7223ad368d959fbdf40e417879 (PR #57). Existing PRs, production creation tests and saved database consistency checks were not repeated. GitHub had no open issues/PRs at resumption. The remaining offline acceptance review produced a new synthetic reproduction: four of five initial regressions failed because a signed-in connection failure fell back to local/demo mode, displayed sample/unverified rows and could return success for a local-only commit before a database snapshot.
+
+Authenticated contexts now require a database snapshot before committing. Initial loading and connection errors keep database mode, with a connection gate withholding workflow/assistant controls until hydration. Retry reads the server snapshot. The footer states that live data needs a connection; explicit unauthenticated demo behavior is retained.
+
+Only the same user's verified database cache is considered for authenticated row initialization. Unverified, foreign, malformed and local-only collections are not presented as live records. Unverified browser data is kept intact and preserved before replacement/sign-out; local-only stores are not overwritten by authenticated startup. Remembered project selection waits for authoritative hydration.
+
+Validation: 16 new mocked-network/context/UI regressions cover failed/late hydration, premature save refusal, confirmed saves after connection, cache ownership/shape, source preservation, reconnect, sign-out and workflow gating. Complete local suite: 215 passed / 770 PostgreSQL tests reserved for CI; typecheck and production build pass. This is controlled local offline evidence, not real-device offline certification. No production records, settings, accounts, provider messages or machine operations were changed or exercised.
+
+Recovery: fix/authenticated-offline-mode contains this new issue's fix. Complete normal/restricted PostgreSQL CI, merge after success, and verify the merged main pipeline and new Render deployment. Do not force a production connection failure to test the gate. Previously recorded provider/CNC, operational-role and real-device/load gates remain open.

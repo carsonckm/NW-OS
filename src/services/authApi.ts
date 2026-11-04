@@ -97,6 +97,13 @@ const CORE_CACHE_KEYS = [...SYNCED_COLLECTIONS.map((c) => c.storageKey), 'curren
 const CACHE_OWNER_KEY = 'nw_os_core_cache_owner';
 // Set once the cached core data has come from the database (cleared with it).
 const CACHE_FROM_DATABASE_KEY = 'nw_os_core_cache_from_database';
+
+/** Only this signed-in user's previously confirmed database rows are a live cache. */
+export function canUseDatabaseCache(userId: string): boolean {
+  try {
+    return localStorage.getItem(CACHE_OWNER_KEY) === userId && localStorage.getItem(CACHE_FROM_DATABASE_KEY) === '1';
+  } catch { return false; }
+}
 // Copies of data the browser held before it first loaded from the database. Kept until the user
 // removes them: neither sign-out nor another user's sign-in deletes them.
 export const PRESERVED_LOCAL_PREFIX = 'nw_os_local_preserved_';
