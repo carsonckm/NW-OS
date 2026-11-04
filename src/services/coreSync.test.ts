@@ -7,6 +7,7 @@ import type { CoreData, SyncData } from './coreApi';
 const asSync = (d: CoreData) => d as unknown as SyncData;
 import { dependencyGroups, diffCoreData, operationId, settleOperation, useCoreDatabaseSync } from './coreSync';
 import { clearCoreCache, PRESERVED_LOCAL_PREFIX } from './authApi';
+import { REQUEST_TIMEOUT_MS } from './requestDeadline';
 
 const demo = (): CoreData => ({
   clients: structuredClone(INITIAL_CLIENTS),
@@ -330,6 +331,28 @@ describe('useCoreDatabaseSync', () => {
       });
       expect(second).toEqual({ ok: true });
       expect(syncCalls()).toHaveLength(1); // the retry found the saved order and sent nothing
+    });
+
+    it('treats a real browser deadline as unknown and confirms an already saved retry without another write', async () => {
+      const { hook } = await mount();
+      const previousFetch = globalThis.fetch;
+      let writes = 0;
+      vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+        if (url === '/api/data/sync') { writes += 1; return new Promise<Response>(() => {}); }
+        return previousFetch(url, init);
+      }));
+      routes['/api/production-orders/po-c1'] = () => ({ body: order });
+      vi.useFakeTimers();
+      try {
+        let pending!: ReturnType<typeof hook.result.current.commit>;
+        act(() => { pending = hook.result.current.commit({ upserts: { productionOrders: [order] } }); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS); });
+        expect(await pending).toMatchObject({ ok: false, uncertain: true });
+        let retried: unknown;
+        await act(async () => { retried = await hook.result.current.commit({ upserts: { productionOrders: [order] } }); });
+        expect(retried).toEqual({ ok: true });
+        expect(writes).toBe(1);
+      } finally { vi.useRealTimers(); }
     });
 
     it('after an unconfirmed attempt that was not saved, sends it again (same id)', async () => {

@@ -3,9 +3,8 @@ import { useNW } from '../../context/NWContext';
 import { FormError } from './FormError';
 
 /**
- * Background saves (older screens write through the sync) that the server refused: shown at
- * the top of the page with the server's reason, not only in the footer. The screen already
- * shows the database's state again.
+ * Surface connection/save problems without claiming that an unconfirmed write rolled back.
+ * Explicit server refusals already include their own not-saved explanation.
  */
 export const SyncErrorBanner: React.FC = () => {
   const { coreDataSync } = useNW();
@@ -15,7 +14,7 @@ export const SyncErrorBanner: React.FC = () => {
   if (!message || dismissed === message) return null;
   return (
     <div className="mx-auto mt-3 w-full max-w-7xl px-4 sm:px-6 lg:px-8" data-testid="sync-error-banner">
-      <FormError error={`Not saved — ${message}`} onDismiss={() => setDismissed(message)} />
+      <FormError error={message} onDismiss={() => setDismissed(message)} />
     </div>
   );
 };

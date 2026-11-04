@@ -70,10 +70,32 @@ The first database CI run found a further Express 4 inline-regexp path for excep
 
 ## Dependency queue checkpoint after PR #46
 
-PR #46 merged at c7e7ee6e25291f1413907e53d8b2da1eb8176928 after complete CI: 955/955 tests across 64 files in each normal/restricted PostgreSQL run, plus audit/typecheck/role bootstrap/build. Render dep-dbliogvavr4c73cu55u0 is being verified. The failed first CI attempt was fixed before merge; no failure was bypassed.
+PR #46 merged at c7e7ee6e25291f1413907e53d8b2da1eb8176928 after complete CI: 955/955 tests across 64 files in each normal/restricted PostgreSQL run, plus audit/typecheck/role bootstrap/build. Render dep-dbliogvavr4c73cu55u0 is live. Main CI passed; live root/deep links/readiness/liveness return 200, private snapshot returns 401, unknown API returns JSON 404. No error-level application logs returned in the inspected post-deployment window. The failed first CI attempt was fixed before merge; no failure was bypassed.
 
-PR #48 is refreshed against that merged Express 5 state, resolving only the icon-library package/lock conflict and retaining both upgrades. Its complete CI must pass on the combined state before merge. Dependabot now keeps @types/node major updates aligned with the Node 22 Docker/CI runtime. PR #49 was closed as deferred: Node 26 declarations would expose APIs the deployed Node 22 runtime may not implement; no runtime/production setting was changed.
+PR #48 merged at 29a8cf3613cc8f91f00e9831baf6932ddd5d4623 after its combined-state CI passed every step. The icon-library package/lock conflict retained both upgrades. Render verification is pending for this new commit. Dependabot now keeps @types/node major updates aligned with the Node 22 Docker/CI runtime. PR #49 was closed as deferred: Node 26 declarations would expose APIs the deployed Node 22 runtime may not implement; no runtime/production setting was changed.
 
 A new compatible-fix audit dry-run still reports two low/eight moderate Workbox/PWA build-chain advisories, zero high/critical. The proposed forced plugin downgrade remains outside a validated compatible fix; findings are retained in the full CI audit artifact.
 
 Next concrete QA fix: bounded authentication/API waits and truthful unconfirmed-save feedback. Local mocked-network tests cover stalled headers/body, normal cleanup, 400/401 behavior, AI processing budget, and a timed-out committed write confirmed on retry without a duplicate. No production records used.
+
+## Stalled requests and unconfirmed save feedback
+
+Source review and mocked network tests reproduced unbounded waits in authentication and core/module API calls. Requests now have a 60-second deadline (120 seconds for AI), including response-body parsing. The browser aborts the transport when the deadline expires; it does not retry or assert that a server-side write rolled back. Explicit commit recovery retains the same operation identity and checks the stored row before retrying. A regression simulates a timed-out committed order, then confirms it without a second write.
+
+Successful HTTP responses with unreadable JSON now fail as unconfirmed rather than producing optimistic success. Legitimate 204, explicit 400 refusals and session-ending 401 events retain their behavior. The error banner displays the supplied outcome instead of prefixing every connection error with “Not saved.”
+
+Local validation: 46 focused network/sync/banner regressions passed; complete suite 199 passed with 770 PostgreSQL tests skipped locally, plus typecheck/build. Full CI remains required before merge. All test data is synthetic; no production writes, account changes or provider sends.
+
+Audit experiment: installing vite-plugin-pwa 1.1.0 in an isolated checkout retained workbox-build 7.4.1 and left nine low/moderate findings. No production downgrade was applied; the current ten findings remain documented and the high/critical CI gate remains enabled.
+
+Recovery checkpoint: PR #46 and its main CI/deployment are verified; PR #48 is merged after complete CI; PR #49 is closed/deferred for Node runtime alignment. The next PR contains the request-deadline/save-feedback changes only, with no schema or production data changes. Merge only after its complete normal/restricted PostgreSQL CI passes.
+
+## PR #51 verified and coordinated toolchain batch
+
+PR #51 merged at 4207b0c349b4ff0724239f3807007dbdca6cbcaa after complete CI: 969 tests across 66 files passed in each database-role run (job 126594982391). Its tested tree already included the PR #50 artifact uploader update; the merge candidate tree matched the tested tree. PR #50 separately passed its full 955-test dual-role pipeline before merge.
+
+Render dep-dblj1n49v7es73d7bpb0 is live at 4207b0c. Root and readiness return 200; database ok, scheduler off and AI unconfigured; unknown API returns JSON 404. Served asset index-BUnlN5hn.js contains both deadline and unconfirmed-response messages, and the deployed worker references that asset and keeps API navigations excluded.
+
+Dependabot then queued PRs #52–56: TypeScript 7.0.2, Vite 8.3.5, dotenv 18.0.9, jsdom 30.1.3 and React plugin 6.1.2. PR #52's new strict defaults failed type checking; #56 required Vite 8. The reviewed batch combines these compatible versions, explicitly preserves the repository's existing non-strict compiler policy, adds Vite asset declarations for checked CSS imports and updates config directory access for Vite 8. Node runtime/types remain 22. A fresh npm-generated lock resolves the Babel peer graph without force/legacy-peer-deps flags.
+
+Batch local validation: normal dependency installation, 199 tests passed / 770 database tests skipped, typecheck and production build passed; 25 focused routing/network/banner tests passed after the config updates. Current audit remains two low/eight moderate and zero high/critical. Full normal/restricted CI remains required before merge. PR #52 will contain the consolidated batch; #53–56 are superseded only after the combined batch passes and merges. No production business data, schema, accounts or sensitive settings changed.
