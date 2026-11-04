@@ -13,6 +13,8 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.{ts,tsx}', 'server/**/*.test.ts'],
     environment: 'node',
+    // Database fixtures migrate, seed users and sign in; shared CI runners need headroom.
+    hookTimeout: 60_000,
     restoreMocks: true,
   },
 });
