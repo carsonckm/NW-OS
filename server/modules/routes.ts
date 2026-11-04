@@ -26,8 +26,9 @@ import { AI_PROPOSAL_TYPE, raiseProposal, validateProposal } from './assistantAc
 import { DataService } from './service';
 import { BROWSER_IMPORT_DISABLED, browserImportAllowed } from './browserImport';
 
+// These handlers use named single-segment parameters; wildcard guards are separate middleware.
 const wrap =
-  (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
+  (fn: (req: Request<Record<string, string>>, res: Response) => Promise<unknown>) => (req: Request<Record<string, string>>, res: Response, next: NextFunction) =>
     fn(req, res).catch(next);
 
 const actorOf = (req: Request): AuditActor => ({
@@ -58,7 +59,7 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
   };
 
   const paths = [
-    '/data/*',
+    '/data/{*path}',
     '/audit-logs',
     '/projects/:id/contract-summary',
     '/projects/:id/profitability',
@@ -67,12 +68,12 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/exceptions',
     '/risk',
     '/briefing',
-    '/owner/*',
-    '/assistant/*',
+    '/owner/{*path}',
+    '/assistant/{*path}',
     '/calendar',
     '/recurring-problems',
-    '/recurring-problems/*',
-    ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/*`]),
+    '/recurring-problems/{*path}',
+    ...MODULES.flatMap((m) => [`/${m.path}`, `/${m.path}/{*path}`]),
   ];
   router.use(paths, requireSchema, csrfGuard, attachUser(store), requireUser, loadAccess(pool));
 

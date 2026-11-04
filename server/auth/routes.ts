@@ -25,8 +25,9 @@ async function sessionPayload(store: AuthStore, user: AuthUser) {
   return { ...pub, permissions: [...permissionsFor(user.role)] };
 }
 
+// These handlers use named single-segment parameters; wildcard guards are separate middleware.
 const wrap =
-  (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
+  (fn: (req: Request<Record<string, string>>, res: Response) => Promise<unknown>) => (req: Request<Record<string, string>>, res: Response, next: NextFunction) =>
     fn(req, res).catch(next);
 
 /** /api/auth: login, logout, current session. */

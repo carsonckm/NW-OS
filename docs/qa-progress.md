@@ -24,7 +24,7 @@ Implement and regression-test the saved QA backlog, merge only after complete CI
 | Truthful operational UI | Uploaded document viewer, real client documents, real milestones/dates, neutral form defaults, exact revision navigation, scoped dashboards, honest CNC/automation display; enquiry becomes Quoted only on submission | Merged in PR #37; complete normal/restricted-role CI and build passed |
 | Security/dependency review | Updated vulnerable dependencies, malformed-cookie refusal, remembered workspace hydration and high/critical CI audit gate | Merged in PR #38 after complete CI passed; no high/critical audit findings |
 | Drawing project integrity | Reject approved drawing revisions belonging to a different project, for every role | Merged in PR #39; 937 tests pass with both database roles; Render dep-dbl0iuss728c7399kicg live at da52fde |
-| Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | Read-only browser acceptance completed for QA PDF, client documents, project milestones, CNC, automation and WhatsApp; final directory/update follow-up pending CI |
+| Acceptance and deployment | Complete CI, isolated core-chain/workflow/role coverage, production read-only health and deployed-commit verification | PR #40 merged after 943 tests passed with both database roles; read-only browser acceptance and Render verified |
 
 ## Recovery
 
@@ -54,6 +54,16 @@ Removed the remaining hardcoded plinth-trim directive, fake variation/clarificat
 
 Authenticated browser acceptance exposed two remaining problems: a signed-in tab stayed on an older asset bundle until reload, and project headers resolved stored staff IDs against cached demo users. The follow-up replaces authenticated directory data with active identities from the existing permission-checked `/api/users` endpoint, fails closed to the session identity if unavailable, and clears this cache on sign-out. Missing historical staff IDs display “Staff record unavailable”; no assignment is rewritten. Action queues no longer invent named approvers or same-day deadlines.
 
-A replacement service worker now offers an explicit reload notice, disabled during core synchronization, without automatically discarding open forms. Six targeted regressions pass, along with type checking. Full normal/restricted PostgreSQL CI and production deployment verification remain pending for this follow-up.
+A replacement service worker now offers an explicit reload notice, disabled during core synchronization, without automatically discarding open forms. Six targeted regressions pass, along with type checking. Full normal/restricted PostgreSQL CI passed (943 tests each), followed by main CI and Render deployment verification at 0dc9e8f.
 
-Recovery checkpoint: PRs #36–39 merged, main and deployed commit da52fde23ec62695fa9caf3fade8b7ecbce6f8d1; all CI checks passed on PR #39 and its merged main. Do not repeat prior synthetic creation tests. Remaining external acceptance includes physical CNC integration, configured AI/WhatsApp, real multi-role browser sessions, mobile/offline conflict and load testing; these are not certified by the disposable-database suite.
+Historical recovery checkpoint: PRs #36–40 merged and deployed at 0dc9e8f; all PR/main CI checks passed. Do not repeat prior synthetic creation tests. Remaining external acceptance includes physical CNC integration, configured AI/WhatsApp, real multi-role browser sessions, mobile/offline conflict and load testing; these are not certified by the disposable-database suite.
+
+## 4 November dependency continuation
+
+Latest main at resumption: 1f6a46c27f832a6d5e724719d7eb1b6577a5e0de. PRs #41–45 and #47 are already merged: dependency maintenance, current CI actions/esbuild/motion and complete audit artifacts. Do not recreate these updates.
+
+PR #46 upgrades Express 4 to 5 with matching types. Its CI failed on scalar route parameters widened to string-or-array. Read-only migration review also found unnamed wildcards that would throw during router registration and production startup. Named single-segment handlers now declare their parameter shape; wildcard guard routes and the production SPA fallback use named Express 5 syntax. Unknown API URLs return JSON 404 rather than an HTML app shell. Twelve HTTP regressions exercise production root/deep links/assets, API fallback boundaries, unconfigured core refusals and health. Typecheck, 17 focused routing/error/cookie tests and production build passed locally; complete normal/restricted PostgreSQL CI pending. No database schema or production record changes.
+
+Next queue: evaluate PR #48 (icon library major upgrade) and #49 (Node type version alignment), then controlled local/mobile/offline acceptance and remaining build-chain advisories. Real staff/account/delegation choices, provider credentials, physical CNC and actual device/load acceptance retain their recorded gates.
+
+The first database CI run found a further Express 4 inline-regexp path for exception lifecycle actions; no merge occurred. It is replaced with five explicit allowlisted routes. A new local regression mounts every authenticated router without a database connection, so router registration failures are caught even when PostgreSQL tests are unavailable. The twelve routing tests and type checking pass; full CI is rerunning.
