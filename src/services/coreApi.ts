@@ -4,6 +4,7 @@
  */
 import type { Client, Project, WorkItem, WorkPackage } from '../types';
 import { UNAUTHORIZED_EVENT } from './authApi';
+import { AI_REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS, withRequestDeadline } from './requestDeadline';
 
 export interface CoreData {
   clients: Client[];
@@ -51,17 +52,23 @@ export class CoreApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-  });
-  if (res.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-  if (res.status === 204) return undefined as T;
-  const body = await res.json().catch(() => undefined);
-  if (!res.ok) {
-    throw new CoreApiError(res.status, body?.error || 'http_error', body?.message || `HTTP ${res.status}`, body);
-  }
-  return body as T;
+  return withRequestDeadline(async (signal) => {
+    const res = await fetch(`/api${path}`, {
+      ...init,
+      signal,
+      headers: { 'Content-Type': 'application/json', ...init?.headers },
+    });
+    if (res.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (res.status === 204) return undefined as T;
+    const body = await res.json().catch(() => {
+      if (res.ok) throw new Error('The server returned an unreadable response. The request outcome is unconfirmed.');
+      return undefined;
+    });
+    if (!res.ok) {
+      throw new CoreApiError(res.status, body?.error || 'http_error', body?.message || `HTTP ${res.status}`, body);
+    }
+    return body as T;
+  }, path.startsWith('/ai/') ? AI_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });

@@ -70,10 +70,20 @@ The first database CI run found a further Express 4 inline-regexp path for excep
 
 ## Dependency queue checkpoint after PR #46
 
-PR #46 merged at c7e7ee6e25291f1413907e53d8b2da1eb8176928 after complete CI: 955/955 tests across 64 files in each normal/restricted PostgreSQL run, plus audit/typecheck/role bootstrap/build. Render dep-dbliogvavr4c73cu55u0 is being verified. The failed first CI attempt was fixed before merge; no failure was bypassed.
+PR #46 merged at c7e7ee6e25291f1413907e53d8b2da1eb8176928 after complete CI: 955/955 tests across 64 files in each normal/restricted PostgreSQL run, plus audit/typecheck/role bootstrap/build. Render dep-dbliogvavr4c73cu55u0 is live. Main CI passed; live root/deep links/readiness/liveness return 200, private snapshot returns 401, unknown API returns JSON 404. No error-level application logs returned in the inspected post-deployment window. The failed first CI attempt was fixed before merge; no failure was bypassed.
 
 PR #48 is refreshed against that merged Express 5 state, resolving only the icon-library package/lock conflict and retaining both upgrades. Its complete CI must pass on the combined state before merge. Dependabot now keeps @types/node major updates aligned with the Node 22 Docker/CI runtime. PR #49 was closed as deferred: Node 26 declarations would expose APIs the deployed Node 22 runtime may not implement; no runtime/production setting was changed.
 
 A new compatible-fix audit dry-run still reports two low/eight moderate Workbox/PWA build-chain advisories, zero high/critical. The proposed forced plugin downgrade remains outside a validated compatible fix; findings are retained in the full CI audit artifact.
 
 Next concrete QA fix: bounded authentication/API waits and truthful unconfirmed-save feedback. Local mocked-network tests cover stalled headers/body, normal cleanup, 400/401 behavior, AI processing budget, and a timed-out committed write confirmed on retry without a duplicate. No production records used.
+
+## Stalled requests and unconfirmed save feedback
+
+Source review and mocked network tests reproduced unbounded waits in authentication and core/module API calls. Requests now have a 60-second deadline (120 seconds for AI), including response-body parsing. The browser aborts the transport when the deadline expires; it does not retry or assert that a server-side write rolled back. Explicit commit recovery retains the same operation identity and checks the stored row before retrying. A regression simulates a timed-out committed order, then confirms it without a second write.
+
+Successful HTTP responses with unreadable JSON now fail as unconfirmed rather than producing optimistic success. Legitimate 204, explicit 400 refusals and session-ending 401 events retain their behavior. The error banner displays the supplied outcome instead of prefixing every connection error with “Not saved.”
+
+Local validation: 46 focused network/sync/banner regressions passed; complete suite 199 passed with 770 PostgreSQL tests skipped locally, plus typecheck/build. Full CI remains required before merge. All test data is synthetic; no production writes, account changes or provider sends.
+
+Audit experiment: installing vite-plugin-pwa 1.1.0 in an isolated checkout retained workbox-build 7.4.1 and left nine low/moderate findings. No production downgrade was applied; the current ten findings remain documented and the high/critical CI gate remains enabled.

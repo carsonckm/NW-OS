@@ -4,6 +4,7 @@
  */
 import type { PermissionKey, UserProfile, UserRole } from '../types';
 import { SYNCED_COLLECTIONS } from './syncedCollections';
+import { withRequestDeadline } from './requestDeadline';
 
 export interface SessionUser {
   id: string;
@@ -30,37 +31,44 @@ export interface SessionInfo {
 /** Fired when any API call answers 401, so the app can return to the sign-in screen. */
 export const UNAUTHORIZED_EVENT = 'nwos:unauthorized';
 
-async function post(path: string, body?: unknown) {
+async function post(path: string, body?: unknown, signal?: AbortSignal) {
   return fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
 }
 
 export const authApi = {
   async session(): Promise<SessionInfo> {
-    const res = await fetch('/api/auth/session');
-    if (!res.ok) throw new Error(`Session check failed (HTTP ${res.status})`);
-    return res.json();
+    return withRequestDeadline(async (signal) => {
+      const res = await fetch('/api/auth/session', { signal });
+      if (!res.ok) throw new Error(`Session check failed (HTTP ${res.status})`);
+      return res.json();
+    });
   },
 
   async login(email: string, password: string): Promise<SessionUser> {
-    const res = await post('/api/auth/login', { email, password });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || 'Sign-in failed');
-    return body.user;
+    return withRequestDeadline(async (signal) => {
+      const res = await post('/api/auth/login', { email, password }, signal);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || 'Sign-in failed');
+      return body.user;
+    });
   },
 
   /** Sets a new password with an activation / reset code (no session needed). */
   async activate(email: string, code: string, password: string): Promise<void> {
-    const res = await post('/api/auth/activate', { email, code, password });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || 'The code could not be used');
+    return withRequestDeadline(async (signal) => {
+      const res = await post('/api/auth/activate', { email, code, password }, signal);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || 'The code could not be used');
+    });
   },
 
   async logout() {
-    await post('/api/auth/logout').catch(() => undefined);
+    await withRequestDeadline((signal) => post('/api/auth/logout', undefined, signal)).catch(() => undefined);
   },
 };
 
