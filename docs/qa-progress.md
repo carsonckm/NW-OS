@@ -103,3 +103,11 @@ Batch local validation: normal dependency installation, 199 tests passed / 770 d
 ## Final dependency inventory for the coordinated batch
 
 The first coordinated candidate passed its full CI. A final dependency inventory also identified React plugin 6.2.1, vite-plugin-pwa 2.0.0 and @types/supertest 7.2.1. These are included in the final candidate, preserving Node types 22.20.5 for the Node 22 runtime. Fresh normal npm installation resolves the optional Babel peers; no peer/dependency protection is bypassed. Typecheck and production build pass. The generated PWA worker still references the built app and excludes private API navigations. Workbox remains 7.4.1, and the audit remains two low/eight moderate, zero high/critical. The complete database-role CI must rerun for this expanded dependency tree before merge. No production business data/settings changed.
+
+## Post-merge CI fixture setup reliability
+
+PR #52's final candidate passed 969 tests twice and all gates before merge at 75c24a9ab895fc9cd96f1a8f444745390b3ea27d. Render dep-dbljbqtbedkc73adm4n0 became live. Public root/deep links/readiness/liveness returned 200, private snapshot/file requests 401 JSON, unknown API 404 JSON. Asset index-B2l-xExk.js contains the timeout/unconfirmed-response changes; the worker references that asset and retains the exact private API exclusion. PRs #53–56 were closed as superseded; #49 remains deferred for Node runtime alignment.
+
+The post-merge main run (job 126609911309) then timed out in approvalMonitor.test.ts's beforeAll at the default 10 seconds while constructing its database world. It ran 943 tests successfully and skipped that suite's 26 tests after setup failed. This is not a green pipeline and was not dismissed or bypassed.
+
+The fixture-hook budget is now 60 seconds to cover migrations, user seeding, password work and sign-ins on shared runners. Test-case execution limits, assertions and database privilege checks are unchanged; no tests are skipped or retried automatically. Full normal/restricted CI is required before merging this test-harness correction. No application runtime or production records/settings change.
