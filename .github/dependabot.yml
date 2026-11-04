@@ -6,6 +6,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # Keep declarations aligned with the Node 22 Docker/CI runtime.
+    # Revisit this policy together with a tested runtime major upgrade.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
     groups:
       npm-minor-patch:
         update-types:
