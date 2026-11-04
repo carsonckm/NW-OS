@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import { mountProductionWeb } from './server/http/static';
 import dotenv from 'dotenv';
 import { readDatabaseSettings } from './server/db/config';
 import { createPool } from './server/db/pool';
@@ -61,10 +62,7 @@ async function setupServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    mountProductionWeb(app, distPath);
   }
 
   app.listen(PORT, '0.0.0.0', () => {

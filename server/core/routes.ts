@@ -20,8 +20,9 @@ interface CoreRouterOptions {
   dataSource: CoreDataSource;
 }
 
+// These handlers use named single-segment parameters; wildcard guards are separate middleware.
 const wrap =
-  (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
+  (fn: (req: Request<Record<string, string>>, res: Response) => Promise<unknown>) => (req: Request<Record<string, string>>, res: Response, next: NextFunction) =>
     fn(req, res).catch(next);
 
 const RESOURCES: { path: string; collection: CoreCollection; filters: string[] }[] = [
@@ -39,7 +40,7 @@ const RESOURCES: { path: string; collection: CoreCollection; filters: string[] }
  */
 export function createCoreRouter({ pool, store, dataSource }: CoreRouterOptions) {
   const router = express.Router();
-  const corePaths = ['/core/*', ...RESOURCES.flatMap(({ path }) => [`/${path}`, `/${path}/*`])];
+  const corePaths = ['/core/{*path}', ...RESOURCES.flatMap(({ path }) => [`/${path}`, `/${path}/{*path}`])];
 
   if (!pool || !store) {
     router.get('/core/status', (_req, res) =>

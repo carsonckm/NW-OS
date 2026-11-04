@@ -77,8 +77,9 @@ import {
 const KINDS: ResourceKind[] = ['drawing_revision', 'drawing', 'variation', 'purchase_order', 'invoice', 'approval'];
 const ACTIONS: DecisionAction[] = ['approve', 'reject', 'request_changes'];
 
+// These handlers use named single-segment parameters; wildcard guards are separate middleware.
 const wrap =
-  (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
+  (fn: (req: Request<Record<string, string>>, res: Response) => Promise<unknown>) => (req: Request<Record<string, string>>, res: Response, next: NextFunction) =>
     fn(req, res).catch(next);
 const actorOf = (req: Request): AuditActor => ({ id: req.auth!.user.id, name: req.auth!.user.name, role: req.auth!.user.role, ip: req.ip });
 const needView = (ctx: AccessContext) => {

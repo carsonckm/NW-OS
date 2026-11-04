@@ -13,8 +13,9 @@ import { RULES, RULE_BY_KEY } from '../automation/rules';
 import { NullProvider, handleInbound, normalizePhone } from './whatsapp';
 import { DataService } from './service';
 
+// These handlers use named single-segment parameters; wildcard guards are separate middleware.
 const wrap =
-  (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
+  (fn: (req: Request<Record<string, string>>, res: Response) => Promise<unknown>) => (req: Request<Record<string, string>>, res: Response, next: NextFunction) =>
     fn(req, res).catch(next);
 
 const actorOf = (req: Request): AuditActor => ({ id: req.auth!.user.id, name: req.auth!.user.name, role: req.auth!.user.role, ip: req.ip });
