@@ -308,7 +308,7 @@ interface NWContextType {
   ) => void;
   activateInstallation: (workItemId: string) => void;
   completeInstallation: (workItemId: string) => void;
-  createIssue: (issue: Partial<Issue>) => Promise<Issue>;
+  createIssue: (issue: Partial<Issue>, confirmedId?: string) => Promise<Issue>;
   resolveIssue: (issueId: string, resolutionNotes: string, actionType?: string) => void;
   escalateIssue: (issueId: string, targetLevel: 'PM' | 'Owner', reason: string) => void;
   approveVariation: (variationId: string, approvedByClient?: boolean) => void;
@@ -1631,8 +1631,8 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
   };
 
   // Issue reporting & escalation
-  const createIssue = async (issueData: Partial<Issue>): Promise<Issue> => {
-    const id = 'issue-' + Date.now();
+  const createIssue = async (issueData: Partial<Issue>, confirmedId?: string): Promise<Issue> => {
+    const id = confirmedId ?? 'issue-' + Date.now();
     const newIssue: Issue = {
       id,
       project_id: issueData.project_id || selectedProjectId,
@@ -1650,6 +1650,12 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+
+    if (confirmedId && coreDataSync.mode === 'database') {
+      const result = await coreDataSync.commit({ upserts: { issues: [{ ...newIssue }] } });
+      if (result.ok === false) throw new Error(result.message);
+      return newIssue;
+    }
 
     setIssues((prev) => [newIssue, ...prev]);
 
