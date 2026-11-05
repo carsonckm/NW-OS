@@ -334,7 +334,19 @@ export type LifecycleState = 'assigned' | 'reminded' | 'due_soon' | 'overdue' | 
 /** Routes that stay with their assignee while that person may still decide: re-evaluation never undoes an escalation or the Owner's assignment. */
 const STICKY: RouteReason[] = ['escalated_overdue', 'owner_assigned'];
 
-export async function openRoute(db: Db, kind: RoutedKind, id: string): Promise<RouteRow | undefined> {
+// A row lock cannot protect a decision that has no open route yet. Take the same
+// transaction lock before looking up, replacing or closing any route for this decision.
+export async function lockRoutingDecision(db: PoolClient, kind: RoutedKind, id: string, skipLocked = false): Promise<boolean> {
+  const lock = skipLocked ? 'pg_try_advisory_xact_lock' : 'pg_advisory_xact_lock';
+  const { rows } = await db.query(
+    `SELECT ${lock}(hashtextextended('nwos:approval-routing:' || current_schema() || ':' || $1 || ':' || $2, 0)) AS acquired`,
+    [kind, id]
+  );
+  return !skipLocked || rows[0].acquired === true;
+}
+
+export async function openRoute(db: PoolClient, kind: RoutedKind, id: string): Promise<RouteRow | undefined> {
+  await lockRoutingDecision(db, kind, id);
   return (await db.query(`SELECT * FROM approval_routes WHERE resource_kind = $1 AND resource_id = $2 AND status = 'open' FOR UPDATE`, [kind, id])).rows[0];
 }
 
@@ -364,8 +376,8 @@ export async function syncRoute(
   id: string,
   opts: { cache?: ContextCache; why?: string; completedBy?: string | null; reason?: RouteReason; now?: Date } = {}
 ) {
-  const state = await decisionState(db, kind, id);
   const open = await openRoute(db, kind, id);
+  const state = await decisionState(db, kind, id);
   if (!state || !state.pending) {
     if (open) {
       await db.query(`UPDATE approval_routes SET status = $2, completion_result = $3, completed_at = now(), completed_by = $4 WHERE id = $1`, [
@@ -531,13 +543,20 @@ export async function reevaluateRoutes(db: PoolClient, actor: AuditActor, filter
   ).rows.filter((r) => !pending.some((p) => p.kind === r.resource_kind && p.id === r.resource_id));
   let rerouted = 0;
   let created = 0;
-  for (const p of pending) {
+  const decisions = [
+    ...pending.map(({ kind, id }) => ({ kind, id, stale: false })),
+    ...stale.map(({ resource_kind, resource_id }) => ({ kind: resource_kind as RoutedKind, id: resource_id as string, stale: true })),
+  ].sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+  for (const p of decisions) {
+    if (p.stale) {
+      await syncRoute(db, actor, p.kind, p.id, { cache, why });
+      continue;
+    }
     const before = await openRoute(db, p.kind, p.id);
     if (filter.decisionType && before && before.decision_type !== filter.decisionType) continue;
     const after = await syncRoute(db, actor, p.kind, p.id, { cache, why });
     if (!before && after) created++;
     else if (before && after && before.id !== after.id) rerouted++;
   }
-  for (const s of stale) await syncRoute(db, actor, s.resource_kind, s.resource_id, { cache, why });
   return { checked: pending.length, rerouted, created, closed: stale.length };
 }
