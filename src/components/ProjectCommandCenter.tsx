@@ -545,7 +545,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-slate-800">
       {/* Top Navigation & Portfolio Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
-        <div className="flex items-center space-x-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           {onBackToPortfolio && (
             <button
               onClick={onBackToPortfolio}
@@ -557,7 +557,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
           )}
 
           {/* Quick Project Switcher Dropdown */}
-          <div className="flex items-center space-x-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span className="text-xs text-slate-400 font-bold uppercase tracking-wider hidden sm:inline">
               Active Project:
             </span>
@@ -566,7 +566,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
               onChange={(e) => {
                 setSelectedProjectId(e.target.value);
               }}
-              className="bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs max-w-[280px] truncate"
+              className="bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs min-w-0 max-w-[280px] w-full truncate"
             >
               {(userProjects.length > 0 ? userProjects : projects).map((p) => (
                 <option key={p.id} value={p.id}>
@@ -1556,8 +1556,8 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                 Hierarchical resolution: Site Supervisor → PM → Owner. AI routes issues but never takes restricted decisions.
               </p>
             </div>
-            <div className="flex items-center space-x-2">
-              <div className="flex items-center space-x-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1">
                 {(['ALL', 'Critical', 'High', 'Medium', 'Low'] as const).map((pr) => (
                   <button
                     key={pr}
@@ -1578,7 +1578,7 @@ export const ProjectCommandCenter: React.FC<ProjectCommandCenterProps> = ({
                   setIssueTargetWorkItemId(undefined);
                   setIssueModalOpen(true);
                 }}
-                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-2xs flex items-center space-x-1.5 cursor-pointer ml-2"
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-2xs flex items-center space-x-1.5 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>+ Report Issue</span>
