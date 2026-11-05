@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
 import { Issue, IssueCategory, EscalationLevel } from '../types';
 import { useRecords } from '../services/records';
+import { operationId, settleOperation } from '../services/coreSync';
 import { FormError } from './ui/FormError';
 import { IssueTasksPanel, openTasksOf } from './IssueTasks';
 import { RecordFiles } from './RecordFiles';
@@ -48,6 +49,8 @@ export const IssueModal: React.FC<IssueModalProps> = ({
   } = useNW();
   const records = useRecords();
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [rawText, setRawText] = useState(existingIssue?.description || '');
   const [title, setTitle] = useState(existingIssue?.title || '');
@@ -110,24 +113,46 @@ export const IssueModal: React.FC<IssueModalProps> = ({
     }
   };
 
+  const issueOperation = `issue-report:${currentUser.id}:${selectedProjectId}`;
+
+  const close = () => {
+    if (isSubmitting) return;
+    if (!existingIssue && records.live) settleOperation(issueOperation);
+    setSubmitError(null);
+    onClose();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await createIssue({
-      project_id: selectedProjectId,
-      work_item_id: selectedItemId,
-      title: title.trim() || 'Site Issue',
-      category,
-      priority,
-      status: escalationLevel === 'Owner' ? 'Decision Required' : 'Reported',
-      reported_by: currentUser.name,
-      reported_by_role: currentUser.role,
-      assigned_to: escalationLevel === 'Owner' ? 'Dato’ Nicholas Wong (Owner / CEO)' : 'Marcus Lee (PM)',
-      escalation_level: escalationLevel,
-      action_required: actionRequired,
-      description: rawText.trim(),
-    });
-
-    onClose();
+    if (isSubmitting) return;
+    setSubmitError(null);
+    setIsSubmitting(true);
+    try {
+      // Keep one ID across retries so a lost response cannot create a second issue.
+      const id = records.live ? operationId(issueOperation, 'issue') : undefined;
+      await createIssue({
+        project_id: selectedProjectId,
+        work_item_id: selectedItemId,
+        title: title.trim() || 'Site Issue',
+        category,
+        priority,
+        status: escalationLevel === 'Owner' ? 'Decision Required' : 'Reported',
+        reported_by: currentUser.name,
+        reported_by_role: currentUser.role,
+        assigned_to: escalationLevel === 'Owner' ? 'Dato’ Nicholas Wong (Owner / CEO)' : 'Marcus Lee (PM)',
+        escalation_level: escalationLevel,
+        action_required: actionRequired,
+        description: rawText.trim(),
+      }, id);
+      if (id) settleOperation(issueOperation);
+      setTitle('');
+      setRawText('');
+      onClose();
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Could not confirm the issue report. Try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleResolve = async () => {
@@ -171,7 +196,9 @@ export const IssueModal: React.FC<IssueModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={close}
+            disabled={isSubmitting}
+            aria-label="Close issue dialog"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer transition-colors"
           >
             <X className="w-4 h-4" />
@@ -409,20 +436,23 @@ export const IssueModal: React.FC<IssueModalProps> = ({
               />
             </div>
 
+            <FormError error={submitError} />
             <div className="flex justify-end space-x-2 pt-3 border-t border-slate-200">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={close}
+                disabled={isSubmitting}
                 className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl border border-slate-300 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
+                disabled={isSubmitting}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center space-x-1.5 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>Submit Issue</span>
+                <span>{isSubmitting ? 'Submitting…' : 'Submit Issue'}</span>
               </button>
             </div>
           </form>
