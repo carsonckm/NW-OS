@@ -95,21 +95,21 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 text-slate-900 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto px-2 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo and Brand */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={() => setActiveTab('dashboard')}
-              className="flex items-center space-x-2.5 text-left focus:outline-none group"
+              className="flex items-center gap-1.5 sm:gap-2.5 text-left focus:outline-none group"
             >
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center font-black tracking-wider text-slate-950 shadow-xs group-hover:scale-105 transition-transform">
+              <div className="w-8 h-8 shrink-0 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center font-black tracking-wider text-slate-950 shadow-xs group-hover:scale-105 transition-transform">
                 NW
               </div>
               <div>
                 <div className="flex items-center space-x-1.5">
-                  <span className="font-black text-lg text-slate-900 tracking-tight">NW OS</span>
-                  <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                  <span className="font-black whitespace-nowrap text-sm sm:text-lg text-slate-900 tracking-tight">NW OS</span>
+                  <span className="hidden sm:inline text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
                     Phase 1
                   </span>
                 </div>
@@ -119,7 +119,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
 
             {/* Project Quick Selector (Hidden for Contractor and Client who have designated project) */}
             {currentUser.role !== 'Contractor' && currentUser.role !== 'Client' && (
-              <div className="hidden md:flex items-center pl-4 border-l border-slate-200">
+              <div className="hidden lg:flex items-center pl-4 border-l border-slate-200">
                 <Building2 className="w-4 h-4 text-slate-500 mr-2" />
                 <select
                   aria-label="Active Project"
@@ -138,11 +138,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
           </div>
 
           {/* Right Action Controls */}
-          <div className="flex items-center space-x-2 sm:space-x-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
             {/* AI Assistant Button */}
             <button
               onClick={onOpenAssistant}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-semibold transition-colors shadow-2xs"
+              className="flex items-center space-x-1.5 px-2 sm:px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-semibold transition-colors shadow-2xs"
               title="Open NW OS Intelligence Copilot"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
@@ -218,7 +218,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
               </button>
 
               {showNotifDropdown && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
+                <div className="fixed inset-x-2 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
                   <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-100">
                     <div className="flex items-center space-x-2">
                       <span className="font-bold text-xs text-slate-900">Alerts & Exceptions</span>
@@ -295,7 +295,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
             <div className="relative">
               <button
                 onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                className={`flex items-center space-x-2 pl-2 pr-2.5 py-1.5 rounded-lg border bg-slate-100 hover:bg-slate-200/80 transition-all ${
+                aria-label="Account menu"
+                aria-expanded={showRoleDropdown}
+                className={`flex items-center gap-1.5 px-1.5 sm:gap-2 sm:pl-2 sm:pr-2.5 py-1.5 rounded-lg border bg-slate-100 hover:bg-slate-200/80 transition-all ${
                   roleColors[currentUser.role]?.border || 'border-slate-300'
                 }`}
               >
@@ -327,7 +329,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
               </button>
 
               {showRoleDropdown && authMode && (
-                <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
+                <div className="fixed inset-x-2 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
                   <div className="px-3.5 py-2 border-b border-slate-100">
                     <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Signed in as</div>
                     <div className="text-xs font-bold text-slate-900 mt-1 truncate">{currentUser.name}</div>
@@ -356,7 +358,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAssistant, activeTab, setA
               )}
 
               {showRoleDropdown && !authMode && (
-                <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
+                <div className="fixed inset-x-2 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-72 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50">
                   <div className="px-3.5 py-2 border-b border-slate-100">
                     <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
                       Switch Role (RBAC Simulation)
