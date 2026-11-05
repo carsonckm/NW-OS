@@ -143,10 +143,10 @@ export async function ownerAssign(pool: Pool, ctx: AccessContext, actor: AuditAc
   if (!reason) throw new ValidationError('A reason is required');
   const kind = b.kind as RoutedKind;
   return withTransaction(pool, async (db) => {
+    const open = await openRoute(db, kind, b.id);
     const state = await decisionState(db, kind, b.id);
     if (!state || (state.projectId && !ctx.canSeeProject(state.projectId))) throw notFound(`Approval ${b.id}`);
     if (!state.pending) throw new ValidationError('This approval is no longer pending');
-    const open = await openRoute(db, kind, b.id);
     const user = (await db.query('SELECT * FROM users WHERE id = $1', [b.user_id])).rows[0] as AuthUser | undefined;
     if (!user || !user.is_active || ['Client', 'Contractor'].includes(user.role)) throw new ValidationError('Assign to an active NW staff member');
     const r = await resolveApprovalAuthority(db, await AccessContext.load(db, user), { resource: { kind: kind as ResourceKind, id: b.id } });

@@ -30,6 +30,7 @@ import {
   decisionState,
   fallbackOwner,
   insertRoute,
+  lockRoutingDecision,
   syncRoute,
   unroutedDecisions,
   type ContextCache,
@@ -76,8 +77,10 @@ export function stageFor(pct: number, p: Pick<SlaPolicy, 'reminder_pct' | 'due_s
 }
 
 /** Checks one open route; returns the route as it now stands (undefined if no longer open). */
-async function checkRoute(db: PoolClient, routeId: number, now: Date, policies: Map<string, SlaPolicy>, cal: BusinessCalendar, cache: ContextCache): Promise<RouteRow | undefined> {
-  let route = (await db.query(`SELECT * FROM approval_routes WHERE id = $1 AND status = 'open' FOR UPDATE SKIP LOCKED`, [routeId])).rows[0] as RouteRow | undefined;
+async function checkRoute(db: PoolClient, candidate: Pick<RouteRow, 'id' | 'resource_kind' | 'resource_id'>, now: Date, policies: Map<string, SlaPolicy>, cal: BusinessCalendar, cache: ContextCache): Promise<RouteRow | undefined> {
+  // Match the routing writers' lock order. A busy decision can wait for the next pass.
+  if (!(await lockRoutingDecision(db, candidate.resource_kind, candidate.resource_id, true))) return undefined;
+  let route = (await db.query(`SELECT * FROM approval_routes WHERE id = $1 AND status = 'open' FOR UPDATE SKIP LOCKED`, [candidate.id])).rows[0] as RouteRow | undefined;
   if (!route) return undefined; // decided meanwhile, or being written by someone right now
   const kind = route.resource_kind as RoutedKind;
   const id = route.resource_id;
@@ -215,15 +218,17 @@ export async function monitorPendingApprovals(pool: Pool, now: Date, config: Rec
     }
   }
 
-  const ids = (await pool.query(`SELECT id FROM approval_routes WHERE status = 'open' ORDER BY last_checked_at NULLS FIRST, id LIMIT $1`, [batch])).rows.map((r) => Number(r.id));
+  const candidates = (await pool.query<Pick<RouteRow, 'id' | 'resource_kind' | 'resource_id'>>(
+    `SELECT id, resource_kind, resource_id FROM approval_routes WHERE status = 'open' ORDER BY last_checked_at NULLS FIRST, id LIMIT $1`, [batch]
+  )).rows;
   const checked: RouteRow[] = [];
-  for (const id of ids) {
+  for (const candidate of candidates) {
     try {
-      const r = await withTransaction(pool, (db) => checkRoute(db, id, now, policies, cal, cache));
+      const r = await withTransaction(pool, (db) => checkRoute(db, candidate, now, policies, cal, cache));
       if (r) checked.push(r);
     } catch (err) {
       // The transaction rolled back: the route stays as it was (assigned, never orphaned).
-      fail(`approval route ${id} could not be checked`, err);
+      fail(`approval route ${candidate.id} could not be checked`, err);
     }
   }
 
