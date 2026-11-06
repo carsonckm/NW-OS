@@ -93,3 +93,8 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Isolated launch rehearsal
+        run: npm test -- server/test/launchReadiness.test.ts
+        env:
+          NWOS_LAUNCH_CONTAINER: ${{ job.services.postgres.id }}
