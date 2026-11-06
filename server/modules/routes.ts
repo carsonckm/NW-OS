@@ -162,15 +162,27 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     '/approvals/:id/decision',
     wrap(async (req, res) => {
       const def = service.module('approvals');
-      const { decision, comments } = req.body ?? {};
+      const { decision, comments, override_reason } = req.body ?? {};
       if (!['Approved', 'Rejected', 'Changes Requested'].includes(decision)) {
         throw new ValidationError('decision must be Approved, Rejected or Changes Requested');
       }
       const result = await service.transact(req.access!, actorOf(req), async (h) => {
         const approval = await findRecord(h.db, def, req.params.id, true);
         if (!approval || !h.ctx.canSeeProject(approval.project_id)) throw new ForbiddenError('Approval not found or not accessible');
+        if (override_reason !== undefined && (typeof override_reason !== 'string' || h.ctx.user.role !== 'Owner / CEO')) {
+          throw new ForbiddenError('Only the Owner may supply an override reason');
+        }
+        const notes = comments ?? approval.comments;
+        const reason = override_reason ?? approval.override_reason;
+        // A retry after a lost response must not write another audit entry or change the notes.
+        if (approval.decision === decision) {
+          const editPermissions = ['approvals.request', 'approvals.decide', 'variations.client_approve'] as const;
+          if (approval.decision_by_id === h.ctx.user.id && notes === approval.comments &&
+              reason === approval.override_reason && editPermissions.some(permission => h.ctx.can(permission))) return approval;
+          throw new ForbiddenError('This decision has already been recorded. Refresh the approval to review it.');
+        }
         // The approvals hook checks who may decide (server-side) and records it.
-        await service.writeInTransaction(h, def, approval, { ...approval, decision, comments: comments ?? approval.comments });
+        await service.writeInTransaction(h, def, approval, { ...approval, decision, comments: notes, override_reason: reason });
         return findRecord(h.db, def, req.params.id);
       });
       res.json(result);

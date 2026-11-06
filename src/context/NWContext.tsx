@@ -212,7 +212,7 @@ import {
   INITIAL_MANAGEMENT_ALERTS,
 } from '../data/managementInitialData';
 import { canAccessProject, hasPermission } from '../utils/permissions';
-import { api, dataApi } from '../services/coreApi';
+import { api, CoreApiError, dataApi } from '../services/coreApi';
 import { canUseDatabaseCache, toUserProfile, type SessionUser } from '../services/authApi';
 import { SYNCED_COLLECTIONS } from '../services/syncedCollections';
 import { useCoreDatabaseSync, type CommitResult, type CoreSyncState } from '../services/coreSync';
@@ -266,7 +266,7 @@ interface NWContextType {
   // Approvals & Governance (Section 15)
   approvals: ApprovalItem[];
   createApproval: (item: Omit<ApprovalItem, 'id' | 'approval_number' | 'created_at' | 'updated_at'>) => ApprovalItem;
-  decideApproval: (id: string, decision: ApprovalDecision, comments?: string, isOverride?: boolean, overrideReason?: string) => void;
+  decideApproval: (id: string, decision: ApprovalDecision, comments?: string, isOverride?: boolean, overrideReason?: string) => Promise<void>;
 
   // Purchasing & Material Procurement (Section 6)
   suppliers: Supplier[];
@@ -1195,13 +1195,28 @@ export const NWProvider: React.FC<NWProviderProps> = ({ children, authUser, canI
     return newApproval;
   };
 
-  const decideApproval = (
+  const decideApproval = async (
     id: string,
     decision: ApprovalDecision,
     comments?: string,
     isOverride?: boolean,
     overrideReason?: string
   ) => {
+    if (coreDataSync.mode === 'database') {
+      try {
+        const saved = await api.post<ApprovalItem>(`/approvals/${encodeURIComponent(id)}/decision`, {
+          decision,
+          comments,
+          ...(isOverride ? { override_reason: overrideReason } : {}),
+        });
+        coreDataSync.applyRows('approvals', [{ ...saved }]);
+      } catch (error) {
+        if (error instanceof CoreApiError && error.status < 500) throw error;
+        throw new Error('The server did not confirm the approval decision. Check your connection and try again.');
+      }
+      return;
+    }
+
     let affectedItem: ApprovalItem | undefined;
     setApprovals((prev) =>
       prev.map((appr) => {

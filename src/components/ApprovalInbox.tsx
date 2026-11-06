@@ -32,7 +32,7 @@ const LIFE_TONE: Record<string, 'bad' | 'warn' | 'neutral' | 'info' | 'good'> = 
 const hours = (h: number) => (h >= 48 ? `${Math.floor(h / 24)} days` : `${h}h`);
 
 export const ApprovalInbox: React.FC = () => {
-  const { currentUser, coreDataSync } = useNW();
+  const { currentUser, coreDataSync, approvals } = useNW();
   const isOwner = currentUser.role === 'Owner / CEO';
   const [items, setItems] = useState<Row[] | null>(null);
   const [unrouted, setUnrouted] = useState<Row[]>([]);
@@ -50,7 +50,7 @@ export const ApprovalInbox: React.FC = () => {
   }, []);
   useEffect(() => {
     if (coreDataSync.mode === 'database') void load();
-  }, [coreDataSync.mode, coreDataSync.lastSyncedAt, load]);
+  }, [coreDataSync.mode, coreDataSync.lastSyncedAt, approvals, load]);
   if (coreDataSync.mode !== 'database') return null;
 
   return (
