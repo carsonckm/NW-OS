@@ -7,6 +7,9 @@
 
 import React, { useState } from 'react';
 import { useNW } from '../context/NWContext';
+import { api, CoreApiError } from '../services/coreApi';
+import { operationId, settleOperation } from '../services/coreSync';
+import { FormError } from '../components/ui/FormError';
 import { WorkItem, ProductionStatus } from '../types';
 import {
   Wrench,
@@ -33,17 +36,21 @@ export const ProductionStaffDashboard: React.FC = () => {
     addWorkItemPhoto,
     createIssue,
     qcRecords,
+    coreDataSync,
   } = useNW();
 
   const [searchCode, setSearchCode] = useState('');
-  const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string>();
+  const live = coreDataSync.mode === 'database';
 
   // Photo upload simulation
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [photoDesc, setPhotoDesc] = useState('');
 
   // Report problem modal
-  const [showIssueModal, setShowIssueModal] = useState(false);
+  const [issueItem, setIssueItem] = useState<WorkItem | null>(null);
+  const [issueError, setIssueError] = useState<string | null>(null);
+  const [reporting, setReporting] = useState(false);
   const [issueTitle, setIssueTitle] = useState('');
   const [issueDesc, setIssueDesc] = useState('');
 
@@ -63,7 +70,7 @@ export const ProductionStaffDashboard: React.FC = () => {
     return true;
   });
 
-  const activeWorkItem = selectedItem || assignedItems[0] || workItems[0];
+  const activeWorkItem = assignedItems.find(item => item.id === selectedItemId) ?? assignedItems[0];
   // Latest QC result for the active item (WorkItem itself carries no QC status field)
   const activeQCResult = activeWorkItem
     ? qcRecords
@@ -86,7 +93,7 @@ export const ProductionStaffDashboard: React.FC = () => {
 
   const handleUploadPhoto = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeWorkItem) return;
+    if (!activeWorkItem || live) return;
 
     addWorkItemPhoto(activeWorkItem.id, {
       url: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80',
@@ -98,24 +105,51 @@ export const ProductionStaffDashboard: React.FC = () => {
     setPhotoDesc('');
   };
 
-  const handleReportProblem = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeWorkItem || !issueTitle.trim()) return;
+  const reportKey = issueItem ? `factory-issue:${currentUser.id}:${issueItem.id}` : undefined;
 
-    await createIssue({
-      project_id: activeWorkItem.project_id,
-      title: issueTitle,
-      description: issueDesc,
-      work_item_id: activeWorkItem.id,
-      category: 'Production',
-      priority: 'Medium',
-      status: 'Reported',
-      action_required: 'Factory supervisor assistance required',
-    });
-
-    setShowIssueModal(false);
+  const closeReport = () => {
+    if (reporting) return;
+    if (live && reportKey) settleOperation(reportKey);
+    setIssueItem(null);
     setIssueTitle('');
     setIssueDesc('');
+    setIssueError(null);
+  };
+
+  const handleReportProblem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!issueItem || !reportKey || reporting || !issueTitle.trim()) return;
+
+    setReporting(true);
+    setIssueError(null);
+    try {
+      const id = live ? operationId(reportKey, 'issue') : undefined;
+      const issue = {
+        project_id: issueItem.project_id,
+        title: issueTitle.trim(),
+        description: issueDesc,
+        work_item_id: issueItem.id,
+        category: 'Production' as const,
+        priority: 'Medium' as const,
+        status: 'Reported' as const,
+        action_required: 'Factory supervisor assistance required',
+      };
+      if (id) {
+        await api.post('/issues/factory-report', { id, work_item_id: issue.work_item_id, title: issue.title, description: issue.description });
+        settleOperation(reportKey);
+      } else {
+        await createIssue(issue);
+      }
+      setIssueItem(null);
+      setIssueTitle('');
+      setIssueDesc('');
+    } catch (error) {
+      setIssueError(error instanceof CoreApiError && error.status < 500
+        ? error.message
+        : 'The server did not confirm the workshop report. Check your connection and retry.');
+    } finally {
+      setReporting(false);
+    }
   };
 
   return (
@@ -163,7 +197,7 @@ export const ProductionStaffDashboard: React.FC = () => {
               return (
                 <div
                   key={item.id}
-                  onClick={() => setSelectedItem(item)}
+                  onClick={() => setSelectedItemId(item.id)}
                   className={`p-4 rounded-2xl border cursor-pointer transition-all ${
                     isSelected
                       ? 'bg-amber-50 border-amber-400 shadow-xs ring-1 ring-amber-400'
@@ -207,13 +241,15 @@ export const ProductionStaffDashboard: React.FC = () => {
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => setShowPhotoModal(true)}
+                    disabled={live}
+                    title={live ? 'Photo capture is not available in the live factory terminal' : undefined}
                     className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold border border-slate-200 transition-colors"
                   >
                     <Camera className="w-3.5 h-3.5 text-slate-600" />
-                    <span>Upload Photo</span>
+                    <span>{live ? 'Photo capture unavailable' : 'Demo Photo'}</span>
                   </button>
                   <button
-                    onClick={() => setShowIssueModal(true)}
+                    onClick={() => setIssueItem(activeWorkItem)}
                     className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-bold border border-rose-200 transition-colors"
                   >
                     <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
@@ -238,7 +274,7 @@ export const ProductionStaffDashboard: React.FC = () => {
                 <div className="space-y-2">
                   <div>
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Drawing Reference</span>
-                    <span className="font-mono font-bold text-slate-800">{activeWorkItem.drawing_revision || 'DWG-001 (Rev B)'}</span>
+                    <span className="font-mono font-bold text-slate-800">{activeWorkItem.drawing_revision || 'No drawing revision recorded'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">QC Inspection Status</span>
@@ -299,7 +335,7 @@ export const ProductionStaffDashboard: React.FC = () => {
       </div>
 
       {/* Upload Photo Modal */}
-      {showPhotoModal && (
+      {showPhotoModal && !live && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 text-slate-900 shadow-2xl space-y-4">
             <div className="flex items-start justify-between border-b border-slate-100 pb-3">
@@ -348,7 +384,7 @@ export const ProductionStaffDashboard: React.FC = () => {
       )}
 
       {/* Report Problem Modal */}
-      {showIssueModal && (
+      {issueItem && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 text-slate-900 shadow-2xl space-y-4">
             <div className="flex items-start justify-between border-b border-slate-100 pb-3">
@@ -356,11 +392,12 @@ export const ProductionStaffDashboard: React.FC = () => {
                 <AlertTriangle className="w-4 h-4 text-rose-600" />
                 <span>Report Workshop Problem</span>
               </h3>
-              <button onClick={() => setShowIssueModal(false)} className="text-slate-400 hover:text-slate-600">
+              <button aria-label="Close report" onClick={closeReport} disabled={reporting} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            <p className="text-xs text-slate-600">Work item {issueItem.item_code}</p>
             <form onSubmit={handleReportProblem} className="space-y-3 text-xs">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Problem Title *</label>
@@ -369,6 +406,7 @@ export const ProductionStaffDashboard: React.FC = () => {
                   required
                   placeholder="e.g. Veneer grain mismatch or board tear-out"
                   value={issueTitle}
+                  disabled={reporting}
                   onChange={(e) => setIssueTitle(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
@@ -381,24 +419,27 @@ export const ProductionStaffDashboard: React.FC = () => {
                   required
                   placeholder="Describe what occurred, piece part number, and what needs fixing..."
                   value={issueDesc}
+                  disabled={reporting}
                   onChange={(e) => setIssueDesc(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
               </div>
 
+              <FormError error={issueError} />
               <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowIssueModal(false)}
+                  onClick={closeReport} disabled={reporting}
                   className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
+                  disabled={reporting}
                   className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs"
                 >
-                  Report to Supervisor
+                  {reporting ? 'Reporting…' : 'Report to Supervisor'}
                 </button>
               </div>
             </form>
