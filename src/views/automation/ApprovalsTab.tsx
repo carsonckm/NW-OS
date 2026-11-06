@@ -14,6 +14,7 @@ import {
   Layers,
   FileText,
 } from 'lucide-react';
+import { FormError } from '../../components/ui/FormError';
 import { useNW } from '../../context/NWContext';
 import { ApprovalItem, ApprovalDecision } from '../../types';
 
@@ -21,6 +22,8 @@ export const ApprovalsTab: React.FC = () => {
   const { approvals, decideApproval, currentUser } = useNW();
 
   const [selectedApprovalId, setSelectedApprovalId] = useState<string>(approvals[0]?.id || '');
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState(false);
   const [decisionNotes, setDecisionNotes] = useState('');
   const [decisionFeedback, setDecisionFeedback] = useState<string | null>(null);
 
@@ -35,18 +38,27 @@ export const ApprovalsTab: React.FC = () => {
   const isRequesterSelf = selectedApproval?.requested_by_id === currentUser.id;
   const canDecide = !isRequesterSelf || currentUser.role === 'Owner / CEO';
 
-  const handleDecision = (decision: ApprovalDecision) => {
-    if (!selectedApproval) return;
+  const handleDecision = async (decision: ApprovalDecision) => {
+    if (!selectedApproval || deciding) return;
 
     if (!canDecide) {
       setDecisionFeedback('❌ Security Violation (Rule 26): You cannot approve your own submission.');
       return;
     }
 
-    decideApproval(selectedApproval.id, decision, decisionNotes || `Decision recorded by ${currentUser.name}`);
-    setDecisionFeedback(`✓ Approval ${selectedApproval.approval_number} marked as "${decision}".`);
-    setDecisionNotes('');
-    setTimeout(() => setDecisionFeedback(null), 4000);
+    setDeciding(true);
+    setDecisionError(null);
+    setDecisionFeedback(null);
+    try {
+      await decideApproval(selectedApproval.id, decision, decisionNotes || `Decision recorded by ${currentUser.name}`);
+      setDecisionFeedback(`✓ Approval ${selectedApproval.approval_number} marked as "${decision}".`);
+      setDecisionNotes('');
+      setTimeout(() => setDecisionFeedback(null), 4000);
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : 'Could not confirm the approval decision.');
+    } finally {
+      setDeciding(false);
+    }
   };
 
   return (
@@ -255,10 +267,11 @@ export const ApprovalsTab: React.FC = () => {
                     className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
                   />
 
-                  <div className="flex items-center space-x-2">
+                  <FormError error={decisionError} />
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleDecision('Approved')}
-                      disabled={!canDecide}
+                      disabled={!canDecide || deciding}
                       className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
@@ -267,7 +280,7 @@ export const ApprovalsTab: React.FC = () => {
 
                     <button
                       onClick={() => handleDecision('Changes Requested')}
-                      disabled={!canDecide}
+                      disabled={!canDecide || deciding}
                       className="px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
@@ -276,7 +289,7 @@ export const ApprovalsTab: React.FC = () => {
 
                     <button
                       onClick={() => handleDecision('Rejected')}
-                      disabled={!canDecide}
+                      disabled={!canDecide || deciding}
                       className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer"
                     >
                       <XCircle className="w-3.5 h-3.5" />

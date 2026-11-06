@@ -18,6 +18,7 @@ import {
 import { AuthorityNote } from '../components/AuthorityNote';
 import { ApprovalInbox } from '../components/ApprovalInbox';
 import { authorityItem, useAuthority } from '../services/authority';
+import { FormError } from '../components/ui/FormError';
 import { DecisionTrace } from '../components/DecisionTrace';
 import {
   CheckCircle2,
@@ -62,6 +63,8 @@ export const ApprovalsView: React.FC = () => {
   const [selectedApproval, setSelectedApproval] = useState<ApprovalItem | null>(null);
 
   // Decision Modal State
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState(false);
   const [decisionModalOpen, setDecisionModalOpen] = useState(false);
   const [pendingDecision, setPendingDecision] = useState<ApprovalDecision>('Approved');
   const [decisionComments, setDecisionComments] = useState('');
@@ -117,6 +120,7 @@ export const ApprovalsView: React.FC = () => {
   const pendingCount = approvals.filter((a) => a.decision === 'Pending').length;
 
   const handleOpenDecision = (item: ApprovalItem, decision: ApprovalDecision, override: boolean = false) => {
+    setDecisionError(null);
     setSelectedApproval(item);
     setPendingDecision(decision);
     setIsOverrideMode(override);
@@ -125,19 +129,19 @@ export const ApprovalsView: React.FC = () => {
     setDecisionModalOpen(true);
   };
 
-  const handleConfirmDecision = () => {
-    if (!selectedApproval) return;
-
-    decideApproval(
-      selectedApproval.id,
-      pendingDecision,
-      decisionComments,
-      isOverrideMode,
-      overrideReason
-    );
-
-    setDecisionModalOpen(false);
-    setSelectedApproval(null);
+  const handleConfirmDecision = async () => {
+    if (!selectedApproval || deciding) return;
+    setDecisionError(null);
+    setDeciding(true);
+    try {
+      await decideApproval(selectedApproval.id, pendingDecision, decisionComments, isOverrideMode, overrideReason);
+      setDecisionModalOpen(false);
+      setSelectedApproval(null);
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : 'Could not confirm the approval decision.');
+    } finally {
+      setDeciding(false);
+    }
   };
 
   const handleCreateRequest = (e: React.FormEvent) => {
@@ -544,6 +548,7 @@ export const ApprovalsView: React.FC = () => {
               </div>
               <button
                 onClick={() => setDecisionModalOpen(false)}
+                disabled={deciding}
                 className="text-slate-400 hover:text-slate-600 p-1"
               >
                 <X className="w-5 h-5" />
@@ -582,16 +587,18 @@ export const ApprovalsView: React.FC = () => {
               />
             </div>
 
+            <FormError error={decisionError} />
             <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
               <button
                 onClick={() => setDecisionModalOpen(false)}
+                disabled={deciding}
                 className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmDecision}
-                disabled={isOverrideMode && !overrideReason.trim()}
+                disabled={deciding || (isOverrideMode && !overrideReason.trim())}
                 className={`px-4 py-2 text-xs font-bold text-white rounded-xl shadow-xs ${
                   pendingDecision === 'Approved'
                     ? isOverrideMode
@@ -602,7 +609,7 @@ export const ApprovalsView: React.FC = () => {
                     : 'bg-amber-600 hover:bg-amber-700'
                 }`}
               >
-                Confirm {pendingDecision}
+                {deciding ? 'Confirming…' : `Confirm ${pendingDecision}`}
               </button>
             </div>
           </div>

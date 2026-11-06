@@ -593,6 +593,19 @@ describe.skipIf(!TEST_DATABASE_URL)('Phase 3 modules', () => {
       const audit = (await db.pool.query(`SELECT action, actor_id FROM audit_logs WHERE entity_id = 'apr-new' AND action LIKE 'approval.%'`)).rows;
       expect(audit).toEqual([{ action: 'approval.approve', actor_id: 'user-owner' }]);
     });
+
+    it('confirms the same decision retry without another write and rejects changed notes or a different actor', async () => {
+      const path = '/api/approvals/apr-new/decision';
+      const countAudit = async () => (await db.pool.query(
+        "SELECT count(*)::int AS n FROM audit_logs WHERE entity_id = 'apr-new'"
+      )).rows[0].n;
+      const before = await countAudit();
+      const result = await owner().post(path).send({ decision: 'Approved', comments: 'OK' }).expect(200);
+      expect(result.body).toMatchObject({ decision: 'Approved', comments: 'OK', decision_by_id: 'user-owner' });
+      await owner().post(path).send({ decision: 'Approved', comments: 'Changed' }).expect(403);
+      await as['Project Manager'].post(path).send({ decision: 'Approved', comments: 'OK' }).expect(403);
+      expect(await countAudit()).toBe(before);
+    });
   });
 
   // --------------------------------------------------------------- commercial
