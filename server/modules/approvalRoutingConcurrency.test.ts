@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AccessContext } from '../auth/access';
+import type { AuthUser } from '../auth/store';
 import { TEST_DATABASE_URL, type TestDb } from '../test/db';
 import { setupDemoWorld } from '../test/demoWorld';
 import { reevaluateRoutes, syncRoute } from './approvalRouting';
@@ -14,6 +16,39 @@ describe.skipIf(!TEST_DATABASE_URL)('concurrent approval routing', () => {
 
   afterAll(async () => {
     await db?.close();
+  });
+
+  it('loads project permissions on a transaction client that refuses overlapping queries', async () => {
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const user = (await client.query<AuthUser>('SELECT * FROM users WHERE id = $1', ['user-pm'])).rows[0];
+      let active: Promise<unknown> | undefined;
+      const strictClient = new Proxy(client, {
+        get(target, key, receiver) {
+          if (key !== 'query') return Reflect.get(target, key, receiver);
+          return async (sql: string, params?: unknown[]) => {
+            if (active) {
+              await active;
+              throw new Error('Overlapping query on transaction client');
+            }
+            const query = target.query(sql, params);
+            active = query;
+            try {
+              return await query;
+            } finally {
+              active = undefined;
+            }
+          };
+        },
+      });
+      const access = await AccessContext.load(strictClient, user);
+      expect(access.canSeeProject('proj-1')).toBe(true);
+      expect(access.canSeeProject('proj-x')).toBe(false);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
   });
 
   it('concurrent passes create one route, audit entry and notification for imported apr-1', async () => {
