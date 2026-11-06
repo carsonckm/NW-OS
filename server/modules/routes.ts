@@ -104,6 +104,41 @@ export function createModuleRouter({ pool, store }: { pool: Pool; store: AuthSto
     wrap(async (_req, res) => res.json({ databaseEmpty: await service.isEmpty(), importAllowed: browserImportAllowed() }))
   );
 
+  router.post(
+    '/issues/factory-report',
+    wrap(async (req, res) => {
+      const { id, work_item_id, title, description } = req.body ?? {};
+      if (typeof id !== 'string' || !/^issue-[a-z0-9-]{1,90}$/i.test(id) ||
+          typeof work_item_id !== 'string' || typeof title !== 'string' || !title.trim() ||
+          title.length > 250 || typeof description !== 'string' || !description.trim() || description.length > 5000) {
+        throw new ValidationError('A report ID, work item, title and details are required');
+      }
+      const ctx = req.access!;
+      ctx.require('issues.create');
+      await service.transact(ctx, actorOf(req), async (h) => {
+        const item = (await h.db.query('SELECT id, project_id, contractor_id, work_package_id FROM work_items WHERE id = $1', [work_item_id])).rows[0];
+        if (!item || !ctx.canView('workItems', item)) throw new ForbiddenError('Work item not found or not accessible');
+        await h.db.query("SELECT pg_advisory_xact_lock(hashtextextended('nwos:factory-report:' || current_schema() || ':' || $1, 0))", [id]);
+        const prior = (await h.db.query('SELECT created_by, project_id, work_item_id, data FROM issues WHERE id = $1', [id])).rows[0];
+        if (prior) {
+          if (prior.created_by !== ctx.user.id || prior.project_id !== item.project_id || prior.work_item_id !== item.id ||
+              prior.data?.title !== title.trim() || prior.data?.description !== description.trim()) {
+            throw new ForbiddenError('This report ID is already in use. Verify the original report before trying again.');
+          }
+          return;
+        }
+        await service.writeInTransaction(h, service.module('issues'), undefined, {
+          id, project_id: item.project_id, work_item_id: item.id,
+          title: title.trim(), description: description.trim(), category: 'Production',
+          priority: 'Medium', status: 'Reported',
+          reported_by: ctx.user.name, reported_by_role: ctx.user.role,
+          action_required: 'Factory supervisor assistance required',
+        });
+      });
+      res.json({ id });
+    })
+  );
+
   // ---------------- domain actions ----------------
   // New client drawing revision: never overwrites, starts as Draft and is never approved on upload.
   router.post(
