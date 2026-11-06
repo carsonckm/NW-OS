@@ -72,16 +72,14 @@ export async function profitability(pool: Pool, ctx: AccessContext, projectId: s
 /** Profitability without an access check (callers check access themselves). */
 export async function computeProfitability(pool: Db, projectId: string) {
   const contract = await computeContract(pool, projectId);
-  const [baseline, quotation, pos, ledger] = await Promise.all([
-    pool.query('SELECT original_budget_direct_cost FROM commercial_baselines WHERE project_id = $1', [projectId]),
-    pool.query(
-      `SELECT total_estimated_cost FROM commercial_quotations WHERE project_id = $1 AND status = 'Accepted'
-       ORDER BY updated_at DESC LIMIT 1`,
-      [projectId]
-    ),
-    pool.query(`SELECT data->>'po_number' AS po_number, total_amount, status FROM purchase_orders WHERE project_id = $1`, [projectId]),
-    pool.query(`SELECT data->>'po_reference' AS po_reference, amount, status FROM project_cost_ledger WHERE project_id = $1`, [projectId]),
-  ]);
+  const baseline = await pool.query('SELECT original_budget_direct_cost FROM commercial_baselines WHERE project_id = $1', [projectId]);
+  const quotation = await pool.query(
+    `SELECT total_estimated_cost FROM commercial_quotations WHERE project_id = $1 AND status = 'Accepted'
+     ORDER BY updated_at DESC LIMIT 1`,
+    [projectId]
+  );
+  const pos = await pool.query(`SELECT data->>'po_number' AS po_number, total_amount, status FROM purchase_orders WHERE project_id = $1`, [projectId]);
+  const ledger = await pool.query(`SELECT data->>'po_reference' AS po_reference, amount, status FROM project_cost_ledger WHERE project_id = $1`, [projectId]);
 
   const estimated = money(baseline.rows[0]?.original_budget_direct_cost ?? quotation.rows[0]?.total_estimated_cost ?? 0);
   const committedPos = pos.rows.filter((p) => COMMITTED_PO_STATES.includes(p.status));
@@ -161,28 +159,31 @@ export const baselineHooks: ModuleHooks = {
   },
 
   async hydrate(db, records) {
-    return Promise.all(
-      records.map(async (b) => {
-        const projectId = String(b.project_id);
-        const exists = (await db.query('SELECT 1 FROM projects WHERE id = $1', [projectId])).rowCount;
-        if (!exists) return b;
-        const p = await computeProfitability(db, projectId);
-        return {
-          ...b,
-          approved_variations_total: p.approved_variations_total,
-          current_contract_value: p.current_contract_value,
-          unapproved_potential_variations_total: p.pending_variations_total,
-          estimated_final_revenue: p.estimated_final_revenue,
-          committed_cost: p.committed_cost,
-          actual_cost: p.actual_cost,
-          forecast_final_cost: p.forecast_final_cost,
-          cost_variance: p.cost_variance,
-          cost_variance_status: p.cost_variance_status,
-          current_gross_profit: p.current_gross_profit,
-          forecast_gross_profit: p.project_gross_profit,
-          forecast_gross_margin_percent: p.project_gross_margin_percent,
-        } as Row;
-      })
-    );
+    const hydrated: Row[] = [];
+    for (const b of records) {
+      const projectId = String(b.project_id);
+      const exists = (await db.query('SELECT 1 FROM projects WHERE id = $1', [projectId])).rowCount;
+      if (!exists) {
+        hydrated.push(b);
+        continue;
+      }
+      const p = await computeProfitability(db, projectId);
+      hydrated.push({
+        ...b,
+        approved_variations_total: p.approved_variations_total,
+        current_contract_value: p.current_contract_value,
+        unapproved_potential_variations_total: p.pending_variations_total,
+        estimated_final_revenue: p.estimated_final_revenue,
+        committed_cost: p.committed_cost,
+        actual_cost: p.actual_cost,
+        forecast_final_cost: p.forecast_final_cost,
+        cost_variance: p.cost_variance,
+        cost_variance_status: p.cost_variance_status,
+        current_gross_profit: p.current_gross_profit,
+        forecast_gross_profit: p.project_gross_profit,
+        forecast_gross_margin_percent: p.project_gross_margin_percent,
+      } as Row);
+    }
+    return hydrated;
   },
 };

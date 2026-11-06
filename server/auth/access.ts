@@ -105,12 +105,11 @@ export class AccessContext {
   suspended = false;
 
   static async load(db: Pool | PoolClient, user: AuthUser, opts: AccessOptions = {}): Promise<AccessContext> {
-    const [projects, packages, items, assignments] = await Promise.all([
-      db.query('SELECT id, client_id, project_manager_id, site_supervisor_id FROM projects'),
-      db.query('SELECT id, project_id, contractor_id FROM work_packages'),
-      db.query('SELECT id, project_id, work_package_id, contractor_id FROM work_items'),
-      db.query('SELECT project_id FROM project_assignments WHERE user_id = $1', [user.id]),
-    ]);
+    // Approval routing can call this inside a transaction on a single client.
+    const projects = await db.query('SELECT id, client_id, project_manager_id, site_supervisor_id FROM projects');
+    const packages = await db.query('SELECT id, project_id, contractor_id FROM work_packages');
+    const items = await db.query('SELECT id, project_id, work_package_id, contractor_id FROM work_items');
+    const assignments = await db.query('SELECT project_id FROM project_assignments WHERE user_id = $1', [user.id]);
     const assigned = new Set<string>(assignments.rows.map((r) => r.project_id));
     const projectClient = new Map<string, string>(projects.rows.map((p) => [p.id, p.client_id]));
     const packageContractor = new Map<string, string>(packages.rows.map((w) => [w.id, w.contractor_id]));

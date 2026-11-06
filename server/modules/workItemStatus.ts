@@ -54,19 +54,24 @@ function deliveryOf(status: string): string {
 
 /** The statuses this item should have, given its records (`base` = the stored or incoming item). */
 export async function deriveWorkItem(db: Db, itemId: string, base: Row): Promise<Row> {
-  const [order, delivery, job, qc] = await Promise.all([
-    db.query(`SELECT status FROM production_orders WHERE work_item_id = $1 ORDER BY (status = 'Cancelled'), updated_at DESC, id DESC LIMIT 1`, [itemId]),
-    db.query(
-      `SELECT d.status, d.delivery_date, d.data->>'delivery_time' AS delivery_time, r.receipt_id, r.condition_status, r.damaged_quantity, r.missing_quantity FROM delivery_items i JOIN deliveries d ON d.id = i.delivery_id
-       LEFT JOIN LATERAL (SELECT id AS receipt_id, condition_status, damaged_quantity, missing_quantity FROM delivery_receipts WHERE delivery_id = d.id ORDER BY received_at DESC LIMIT 1) r ON true
-       WHERE i.work_item_id = $1 AND d.status <> 'Cancelled' ORDER BY d.updated_at DESC, d.id DESC LIMIT 1`,
-      [itemId]
-    ),
-    db.query(`SELECT status FROM installation_jobs WHERE work_item_id = $1 ORDER BY (status = 'Cancelled'), updated_at DESC, id DESC LIMIT 1`, [itemId]),
-    db.query(`SELECT result FROM site_qc_inspections WHERE work_item_id = $1 ORDER BY coalesce(inspected_at, '') DESC, created_at DESC, id DESC LIMIT 1`, [
-      itemId,
-    ]),
-  ]);
+  const order = await db.query(
+    `SELECT status FROM production_orders WHERE work_item_id = $1 ORDER BY (status = 'Cancelled'), updated_at DESC, id DESC LIMIT 1`,
+    [itemId]
+  );
+  const delivery = await db.query(
+    `SELECT d.status, d.delivery_date, d.data->>'delivery_time' AS delivery_time, r.receipt_id, r.condition_status, r.damaged_quantity, r.missing_quantity FROM delivery_items i JOIN deliveries d ON d.id = i.delivery_id
+     LEFT JOIN LATERAL (SELECT id AS receipt_id, condition_status, damaged_quantity, missing_quantity FROM delivery_receipts WHERE delivery_id = d.id ORDER BY received_at DESC LIMIT 1) r ON true
+     WHERE i.work_item_id = $1 AND d.status <> 'Cancelled' ORDER BY d.updated_at DESC, d.id DESC LIMIT 1`,
+    [itemId]
+  );
+  const job = await db.query(
+    `SELECT status FROM installation_jobs WHERE work_item_id = $1 ORDER BY (status = 'Cancelled'), updated_at DESC, id DESC LIMIT 1`,
+    [itemId]
+  );
+  const qc = await db.query(
+    `SELECT result FROM site_qc_inspections WHERE work_item_id = $1 ORDER BY coalesce(inspected_at, '') DESC, created_at DESC, id DESC LIMIT 1`,
+    [itemId]
+  );
   const out: Row = {};
   const production = order.rows[0]?.status ?? base.production_status;
   if (order.rows[0]) out.production_status = order.rows[0].status;
