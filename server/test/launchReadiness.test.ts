@@ -42,6 +42,8 @@ it.skipIf(!container)('rehearses sustained concurrent use, disconnect recovery a
     const started = performance.now();
     const deadline = started + 180_000;
     const writes: number[] = [];
+    let requestCount = 0;
+    let retryCount = 0;
     const reportIds: string[] = [];
     const reportItem = (await world.db.pool.query("SELECT id FROM work_items WHERE project_id = 'proj-1' LIMIT 1")).rows[0].id;
     const users = await Promise.allSettled(USERS.map(async (user) => {
@@ -50,13 +52,18 @@ it.skipIf(!container)('rehearses sustained concurrent use, disconnect recovery a
       while (performance.now() < deadline) {
         const before = performance.now();
         iteration++;
+        requestCount++;
         if (['Owner / CEO', 'Production Staff'].includes(user.role) && iteration % 5 === 0) {
           const id = 'issue-' + randomUUID();
           const report = { id, work_item_id: reportItem, title: 'Synthetic pilot load issue', description: 'Disposable load and recovery fixture' };
           await agent.post('/api/issues/factory-report').send(report).timeout(5000).expect(200);
           writes.push(performance.now() - before);
           reportIds.push(id);
-          if (iteration % 20 === 0) await agent.post('/api/issues/factory-report').send(report).timeout(5000).expect(200);
+          if (iteration % 20 === 0) {
+            requestCount++;
+            retryCount++;
+            await agent.post('/api/issues/factory-report').send(report).timeout(5000).expect(200);
+          }
         } else if (user.role === 'Owner / CEO' && iteration % 10 === 1) {
           await agent.get('/api/data/snapshot').timeout(5000).expect(200);
         } else {
@@ -78,7 +85,7 @@ it.skipIf(!container)('rehearses sustained concurrent use, disconnect recovery a
     expect(reports.rows[0].n).toBe(reportIds.length);
     const audits = await world.db.pool.query("SELECT count(*)::int AS n FROM audit_logs WHERE entity_type = 'issues' AND action = 'create' AND entity_id = ANY($1)", [reportIds]);
     expect(audits.rows[0].n).toBe(reportIds.length);
-    console.log(JSON.stringify({ rehearsal: 'load', writes: writes.length, writeP95Ms: Math.round(writeP95), users: USERS.length, requests: latencies.length, elapsedMs: Math.round(performance.now() - started), p95Ms: Math.round(p95) }));
+    console.log(JSON.stringify({ rehearsal: 'load', writes: writes.length, writeP95Ms: Math.round(writeP95), users: USERS.length, requests: requestCount, operations: latencies.length, retries: retryCount, errors: 0, elapsedMs: Math.round(performance.now() - started), p95Ms: Math.round(p95) }));
     expect(latencies.length).toBeGreaterThan(300);
     expect(p95).toBeLessThan(2000);
 
