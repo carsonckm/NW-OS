@@ -28,3 +28,22 @@ Keep real projects on the existing operating process until the owner signs off t
 - PR #64 passed 989 ordinary tests in each role run and the isolated launch rehearsal. Ten signed-in synthetic users completed 8,619 mostly session/snapshot requests in 90 seconds at 7 ms p95. A terminated database connection rolled back its uncommitted change. Readiness degraded when the pool was closed and recovered with a fresh pool. The synthetic logical dump and restore took 591 ms, with count, sign-in and runtime grant checks. This does not establish the capacity of Render or a write-heavy workload.
 - The factory terminal change is tracked in [PR #65](https://github.com/carsonckm/NW-OS/pull/65). It removes simulated evidence in live mode, stops unmatched searches from targeting another item, and confirms issue retries by the original scoped submitter without granting issue list access.
 - Owner authorization is required for database provisioning/cutover, restricted runtime credentials, ingress and backup policy changes, named production onboarding and provider enablement. Physical participation is needed for staff handsets and cameras, real factory printer/scanner and CNC dry-run acceptance, and the first supervised project.
+
+
+## First-project pilot for NW Concept Sdn Bhd
+
+The current assessment is NO-GO for business reliance until the production infrastructure gates above are evidenced. A supervised pilot can become CONDITIONAL GO after those gates and the device walkthrough pass. The Owner records the decision and the release SHA.
+
+Choose one small project at one site, with one work package and roughly 5–10 work items. Name Carson as decision owner, an Admin for reconciliation, one project lead, one site lead and one subcontractor lead. Assign a backup decision owner. One person may perform several duties, using their own account and an approved role. Keep finance, sensitive documents and physical machine control limited to the people responsible for them.
+
+| Stage | Action | Evidence and exit |
+|---|---|---|
+| Preparation | Approve database durability, backup/restore, runtime role, ingress, monitoring and named accounts. Record the opening project register and last verified recovery point. | Owner signs the launch gates with dates, evidence and recovery targets. |
+| Synthetic rehearsal | Staff use their actual phones and factory terminal to find assigned work, view the current approved revision, submit an issue and recover from a dropped connection. Test the real scanner/printer and operator-approved dry run separately. | Staff and project lead confirm assigned access and one saved result per retry. Outstanding camera/provider features stay outside the pilot workflow. |
+| First day | Enter the approved quotation/award and the bounded work package. Reconcile drawings, approvals, quantities and responsibility against the signed source records before release to production. | Project lead signs the opening baseline. The existing approved operating record is retained during the pilot. |
+| Days 2–5 | Use NW OS for that package. Check production, QC, receipts and issues at each shift. Admin reconciles the saved records and audit history at close of day. | Daily checklist names mismatches, unresolved issues, backup timestamp and reconciliation signatory. Keep a written correction log. |
+| Review | Reconcile all work items and decisions with the source records and staff. Review performance, unresolved save outcomes, support incidents and recovery readiness. | Expand only after five working days with zero unexplained missing/duplicate records, zero access incidents, complete daily reconciliation, verified backups and staff sign-off. |
+
+Stop new entries on an unauthorized disclosure, unexplained missing/duplicate business record, unavailable recovery point, or a save that remains unconfirmed after server verification. The project lead records the incident and switches the pilot to the existing approved operating process. The Owner and technical operator decide whether to reconcile, roll back the application, or restore into a new database. Preserve the failed state and reconcile the affected interval before resuming.
+
+For this pilot, the Owner must approve recovery targets rather than accept the illustrative targets above by default. Record a support contact and a decision window for urgent site issues. The pilot lead owns staff training and the daily reconciliation. A successful pilot is the gate for broad staff onboarding.
